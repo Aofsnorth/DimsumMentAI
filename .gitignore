@@ -1,4 +1,4 @@
 server
 .claude
 .vscode
-import
+import.worktrees/
