@@ -1,37 +1,4 @@
-# Binaries
-*.exe
-*.exe~
-*.dll
-*.so
-*.dylib
-bot.exe
-
-# Go workspace
-*.test
-*.out
-cover.out
-
-# Minecraft Bedrock Server Folder
-# Mengabaikan seluruh folder server karena isinya ribuan file aset vanilla.
-# Jika ingin track folder tertentu, bisa gunakan " !server/folder_kamu "
-server/
-
-# Minecraft Assets
-imports/
-
-# IDE/Editor (VS Code, JetBrains, etc.)
-.idea/
-.vscode/
-*.swp
-*.swo
-*~
-.DS_Store
-
-# Miscellaneous backups and logs
-*.log
-*.bak
-*.tmp
-tmp/
-temp/
-
+server
 .claude
+.vscode
+import
