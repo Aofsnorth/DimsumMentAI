@@ -26,8 +26,11 @@ func Load(path string) (*Config, error) {
 }
 
 func validate(cfg *Config) error {
-	if cfg.Server.Address == "" {
-		return fmt.Errorf("server.address is required")
+	if cfg.Server.Host == "" {
+		return fmt.Errorf("server.host is required")
+	}
+	if cfg.Server.Port <= 0 {
+		return fmt.Errorf("server.port must be > 0")
 	}
 	if cfg.Bot.Name == "" {
 		return fmt.Errorf("bot.name is required")
@@ -35,14 +38,16 @@ func validate(cfg *Config) error {
 	if cfg.Skin.ImagePath == "" {
 		return fmt.Errorf("skin.image_path is required")
 	}
-	if cfg.Skin.GeometryPath == "" {
-		return fmt.Errorf("skin.geometry_path is required")
-	}
-	if cfg.Skin.GeometryName == "" {
-		return fmt.Errorf("skin.geometry_name is required")
-	}
 	if cfg.Skin.ArmSize != "slim" && cfg.Skin.ArmSize != "wide" {
 		return fmt.Errorf("skin.arm_size must be 'slim' or 'wide'")
+	}
+	if cfg.AI.Provider == "nvidia" {
+		if cfg.AI.ApiKey == "" && os.Getenv("NVIDIA_API_KEY") == "" {
+			return fmt.Errorf("ai.api_key or NVIDIA_API_KEY environment variable is required when provider is 'nvidia'")
+		}
+		if cfg.AI.Model == "" {
+			return fmt.Errorf("ai.model is required when provider is 'nvidia'")
+		}
 	}
 	return nil
 }

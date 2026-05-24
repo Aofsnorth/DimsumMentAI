@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"log/slog"
+	"strings"
 
 	"bedrock-ai/internal/event"
 
@@ -24,16 +25,54 @@ func (h *ChatHandler) Handle(_ context.Context, pk packet.Packet) error {
 		return nil
 	}
 
-	h.logger.Info("chat",
-		slog.String("source", p.SourceName),
-		slog.String("message", p.Message),
+	sourceName := p.SourceName
+	message := p.Message
+
+	// Strip color codes for routing checks
+	cleanSource := StripColorCodes(sourceName)
+	cleanMessage := StripColorCodes(message)
+
+	// Geyser compatibility fallback: extract name if sourceName is empty
+	if cleanSource == "" && cleanMessage != "" {
+		if strings.Contains(cleanMessage, ":") {
+			parts := strings.SplitN(cleanMessage, ":", 2)
+			cleanSource = strings.TrimSpace(parts[0])
+			cleanMessage = strings.TrimSpace(parts[1])
+		} else if strings.HasPrefix(cleanMessage, "<") && strings.Contains(cleanMessage, ">") {
+			endIdx := strings.Index(cleanMessage, ">")
+			cleanSource = strings.TrimSpace(cleanMessage[1:endIdx])
+			cleanMessage = strings.TrimSpace(cleanMessage[endIdx+1:])
+		}
+	}
+
+	h.logger.Info("chat packet received",
+		slog.String("source", cleanSource),
+		slog.String("message", cleanMessage),
+		slog.Int("type", int(p.TextType)),
 	)
 
+	// Publish ChatEvent with cleaned names/messages
 	h.bus.Publish(event.ChatEvent{
-		Message:    p.Message,
-		SourceName: p.SourceName,
+		Message:    cleanMessage,
+		SourceName: cleanSource,
 		TextType:   p.TextType,
 	})
 
 	return nil
+}
+
+// StripColorCodes removes Minecraft § formatting codes from a string
+func StripColorCodes(s string) string {
+	var res strings.Builder
+	runes := []rune(s)
+	for i := 0; i < len(runes); i++ {
+		if runes[i] == '§' {
+			if i+1 < len(runes) {
+				i++ // skip color character
+				continue
+			}
+		}
+		res.WriteRune(runes[i])
+	}
+	return res.String()
 }

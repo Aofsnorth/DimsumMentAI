@@ -11,3 +11,6 @@ server/
 
 # Worktrees
 import.worktrees/
+
+# Credentials/Tokens
+configs/token.json

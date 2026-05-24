@@ -1,0 +1,3909 @@
+{
+  "name": "starterhouse",
+  "structureType": "house",
+  "sizeCategory": "small",
+  "dimensions": {
+    "x": 19,
+    "y": 8,
+    "z": 14
+  },
+  "blocks": [
+    {
+      "x": 0,
+      "y": 0,
+      "z": 0,
+      "type": "light_gray_concrete",
+      "metadata": 0,
+      "state": "minecraft:light_gray_concrete[]"
+    },
+    {
+      "x": 1,
+      "y": 0,
+      "z": 0,
+      "type": "light_gray_concrete",
+      "metadata": 0,
+      "state": "minecraft:light_gray_concrete[]"
+    },
+    {
+      "x": 2,
+      "y": 0,
+      "z": 0,
+      "type": "light_gray_concrete",
+      "metadata": 0,
+      "state": "minecraft:light_gray_concrete[]"
+    },
+    {
+      "x": 3,
+      "y": 0,
+      "z": 0,
+      "type": "light_gray_concrete",
+      "metadata": 0,
+      "state": "minecraft:light_gray_concrete[]"
+    },
+    {
+      "x": 4,
+      "y": 0,
+      "z": 0,
+      "type": "light_gray_concrete",
+      "metadata": 0,
+      "state": "minecraft:light_gray_concrete[]"
+    },
+    {
+      "x": 5,
+      "y": 0,
+      "z": 0,
+      "type": "light_gray_concrete",
+      "metadata": 0,
+      "state": "minecraft:light_gray_concrete[]"
+    },
+    {
+      "x": 6,
+      "y": 0,
+      "z": 0,
+      "type": "light_gray_concrete",
+      "metadata": 0,
+      "state": "minecraft:light_gray_concrete[]"
+    },
+    {
+      "x": 7,
+      "y": 0,
+      "z": 0,
+      "type": "light_gray_concrete",
+      "metadata": 0,
+      "state": "minecraft:light_gray_concrete[]"
+    },
+    {
+      "x": 8,
+      "y": 0,
+      "z": 0,
+      "type": "light_gray_concrete",
+      "metadata": 0,
+      "state": "minecraft:light_gray_concrete[]"
+    },
+    {
+      "x": 9,
+      "y": 0,
+      "z": 0,
+      "type": "light_gray_concrete",
+      "metadata": 0,
+      "state": "minecraft:light_gray_concrete[]"
+    },
+    {
+      "x": 10,
+      "y": 0,
+      "z": 0,
+      "type": "light_gray_concrete",
+      "metadata": 0,
+      "state": "minecraft:light_gray_concrete[]"
+    },
+    {
+      "x": 11,
+      "y": 0,
+      "z": 0,
+      "type": "light_gray_concrete",
+      "metadata": 0,
+      "state": "minecraft:light_gray_concrete[]"
+    },
+    {
+      "x": 12,
+      "y": 0,
+      "z": 0,
+      "type": "dirt",
+      "metadata": 0,
+      "state": "minecraft:dirt[]"
+    },
+    {
+      "x": 13,
+      "y": 0,
+      "z": 0,
+      "type": "dirt",
+      "metadata": 0,
+      "state": "minecraft:dirt[]"
+    },
+    {
+      "x": 14,
+      "y": 0,
+      "z": 0,
+      "type": "dirt",
+      "metadata": 0,
+      "state": "minecraft:dirt[]"
+    },
+    {
+      "x": 15,
+      "y": 0,
+      "z": 0,
+      "type": "spruce_stairs",
+      "metadata": 0,
+      "state": "minecraft:spruce_stairs[upside_down_bit=false,weirdo_direction=3]"
+    },
+    {
+      "x": 16,
+      "y": 0,
+      "z": 0,
+      "type": "spruce_stairs",
+      "metadata": 0,
+      "state": "minecraft:spruce_stairs[upside_down_bit=false,weirdo_direction=3]"
+    },
+    {
+      "x": 17,
+      "y": 0,
+      "z": 0,
+      "type": "moss_block",
+      "metadata": 0,
+      "state": "minecraft:moss_block[]"
+    },
+    {
+      "x": 18,
+      "y": 0,
+      "z": 0,
+      "type": "light_gray_concrete",
+      "metadata": 0,
+      "state": "minecraft:light_gray_concrete[]"
+    },
+    {
+      "x": 0,
+      "y": 0,
+      "z": 1,
+      "type": "light_gray_concrete",
+      "metadata": 0,
+      "state": "minecraft:light_gray_concrete[]"
+    },
+    {
+      "x": 1,
+      "y": 0,
+      "z": 1,
+      "type": "light_gray_concrete",
+      "metadata": 0,
+      "state": "minecraft:light_gray_concrete[]"
+    },
+    {
+      "x": 2,
+      "y": 0,
+      "z": 1,
+      "type": "light_gray_concrete",
+      "metadata": 0,
+      "state": "minecraft:light_gray_concrete[]"
+    },
+    {
+      "x": 3,
+      "y": 0,
+      "z": 1,
+      "type": "dirt",
+      "metadata": 0,
+      "state": "minecraft:dirt[]"
+    },
+    {
+      "x": 4,
+      "y": 0,
+      "z": 1,
+      "type": "dirt",
+      "metadata": 0,
+      "state": "minecraft:dirt[]"
+    },
+    {
+      "x": 5,
+      "y": 0,
+      "z": 1,
+      "type": "dirt",
+      "metadata": 0,
+      "state": "minecraft:dirt[]"
+    },
+    {
+      "x": 6,
+      "y": 0,
+      "z": 1,
+      "type": "light_gray_concrete",
+      "metadata": 0,
+      "state": "minecraft:light_gray_concrete[]"
+    },
+    {
+      "x": 7,
+      "y": 0,
+      "z": 1,
+      "type": "light_gray_concrete",
+      "metadata": 0,
+      "state": "minecraft:light_gray_concrete[]"
+    },
+    {
+      "x": 8,
+      "y": 0,
+      "z": 1,
+      "type": "light_gray_concrete",
+      "metadata": 0,
+      "state": "minecraft:light_gray_concrete[]"
+    },
+    {
+      "x": 9,
+      "y": 0,
+      "z": 1,
+      "type": "light_gray_concrete",
+      "metadata": 0,
+      "state": "minecraft:light_gray_concrete[]"
+    },
+    {
+      "x": 10,
+      "y": 0,
+      "z": 1,
+      "type": "light_gray_concrete",
+      "metadata": 0,
+      "state": "minecraft:light_gray_concrete[]"
+    },
+    {
+      "x": 11,
+      "y": 0,
+      "z": 1,
+      "type": "light_gray_concrete",
+      "metadata": 0,
+      "state": "minecraft:light_gray_concrete[]"
+    },
+    {
+      "x": 12,
+      "y": 0,
+      "z": 1,
+      "type": "dirt",
+      "metadata": 0,
+      "state": "minecraft:dirt[]"
+    },
+    {
+      "x": 13,
+      "y": 0,
+      "z": 1,
+      "type": "dirt",
+      "metadata": 0,
+      "state": "minecraft:dirt[]"
+    },
+    {
+      "x": 14,
+      "y": 0,
+      "z": 1,
+      "type": "dirt",
+      "metadata": 0,
+      "state": "minecraft:dirt[]"
+    },
+    {
+      "x": 15,
+      "y": 0,
+      "z": 1,
+      "type": "farmland",
+      "metadata": 0,
+      "state": "minecraft:farmland[moisturized_amount=7]"
+    },
+    {
+      "x": 16,
+      "y": 0,
+      "z": 1,
+      "type": "spruce_stairs",
+      "metadata": 0,
+      "state": "minecraft:spruce_stairs[upside_down_bit=false,weirdo_direction=0]"
+    },
+    {
+      "x": 17,
+      "y": 0,
+      "z": 1,
+      "type": "moss_block",
+      "metadata": 0,
+      "state": "minecraft:moss_block[]"
+    },
+    {
+      "x": 18,
+      "y": 0,
+      "z": 1,
+      "type": "moss_block",
+      "metadata": 0,
+      "state": "minecraft:moss_block[]"
+    },
+    {
+      "x": 0,
+      "y": 0,
+      "z": 2,
+      "type": "light_gray_concrete",
+      "metadata": 0,
+      "state": "minecraft:light_gray_concrete[]"
+    },
+    {
+      "x": 1,
+      "y": 0,
+      "z": 2,
+      "type": "moss_block",
+      "metadata": 0,
+      "state": "minecraft:moss_block[]"
+    },
+    {
+      "x": 2,
+      "y": 0,
+      "z": 2,
+      "type": "dirt",
+      "metadata": 0,
+      "state": "minecraft:dirt[]"
+    },
+    {
+      "x": 3,
+      "y": 0,
+      "z": 2,
+      "type": "water",
+      "metadata": 0,
+      "state": "minecraft:water[liquid_depth=0]"
+    },
+    {
+      "x": 4,
+      "y": 0,
+      "z": 2,
+      "type": "water",
+      "metadata": 0,
+      "state": "minecraft:water[liquid_depth=0]"
+    },
+    {
+      "x": 5,
+      "y": 0,
+      "z": 2,
+      "type": "dirt",
+      "metadata": 0,
+      "state": "minecraft:dirt[]"
+    },
+    {
+      "x": 6,
+      "y": 0,
+      "z": 2,
+      "type": "light_gray_concrete",
+      "metadata": 0,
+      "state": "minecraft:light_gray_concrete[]"
+    },
+    {
+      "x": 7,
+      "y": 0,
+      "z": 2,
+      "type": "light_gray_concrete",
+      "metadata": 0,
+      "state": "minecraft:light_gray_concrete[]"
+    },
+    {
+      "x": 8,
+      "y": 0,
+      "z": 2,
+      "type": "light_gray_concrete",
+      "metadata": 0,
+      "state": "minecraft:light_gray_concrete[]"
+    },
+    {
+      "x": 9,
+      "y": 0,
+      "z": 2,
+      "type": "light_gray_concrete",
+      "metadata": 0,
+      "state": "minecraft:light_gray_concrete[]"
+    },
+    {
+      "x": 10,
+      "y": 0,
+      "z": 2,
+      "type": "light_gray_concrete",
+      "metadata": 0,
+      "state": "minecraft:light_gray_concrete[]"
+    },
+    {
+      "x": 11,
+      "y": 0,
+      "z": 2,
+      "type": "light_gray_concrete",
+      "metadata": 0,
+      "state": "minecraft:light_gray_concrete[]"
+    },
+    {
+      "x": 12,
+      "y": 0,
+      "z": 2,
+      "type": "dirt",
+      "metadata": 0,
+      "state": "minecraft:dirt[]"
+    },
+    {
+      "x": 13,
+      "y": 0,
+      "z": 2,
+      "type": "dirt",
+      "metadata": 0,
+      "state": "minecraft:dirt[]"
+    },
+    {
+      "x": 14,
+      "y": 0,
+      "z": 2,
+      "type": "farmland",
+      "metadata": 0,
+      "state": "minecraft:farmland[moisturized_amount=7]"
+    },
+    {
+      "x": 15,
+      "y": 0,
+      "z": 2,
+      "type": "farmland",
+      "metadata": 0,
+      "state": "minecraft:farmland[moisturized_amount=7]"
+    },
+    {
+      "x": 16,
+      "y": 0,
+      "z": 2,
+      "type": "spruce_stairs",
+      "metadata": 0,
+      "state": "minecraft:spruce_stairs[upside_down_bit=false,weirdo_direction=0]"
+    },
+    {
+      "x": 17,
+      "y": 0,
+      "z": 2,
+      "type": "moss_block",
+      "metadata": 0,
+      "state": "minecraft:moss_block[]"
+    },
+    {
+      "x": 18,
+      "y": 0,
+      "z": 2,
+      "type": "moss_block",
+      "metadata": 0,
+      "state": "minecraft:moss_block[]"
+    },
+    {
+      "x": 0,
+      "y": 0,
+      "z": 3,
+      "type": "moss_block",
+      "metadata": 0,
+      "state": "minecraft:moss_block[]"
+    },
+    {
+      "x": 1,
+      "y": 0,
+      "z": 3,
+      "type": "dirt",
+      "metadata": 0,
+      "state": "minecraft:dirt[]"
+    },
+    {
+      "x": 2,
+      "y": 0,
+      "z": 3,
+      "type": "water",
+      "metadata": 0,
+      "state": "minecraft:water[liquid_depth=0]"
+    },
+    {
+      "x": 3,
+      "y": 0,
+      "z": 3,
+      "type": "water",
+      "metadata": 0,
+      "state": "minecraft:water[liquid_depth=0]"
+    },
+    {
+      "x": 4,
+      "y": 0,
+      "z": 3,
+      "type": "water",
+      "metadata": 0,
+      "state": "minecraft:water[liquid_depth=0]"
+    },
+    {
+      "x": 5,
+      "y": 0,
+      "z": 3,
+      "type": "moss_block",
+      "metadata": 0,
+      "state": "minecraft:moss_block[]"
+    },
+    {
+      "x": 6,
+      "y": 0,
+      "z": 3,
+      "type": "light_gray_concrete",
+      "metadata": 0,
+      "state": "minecraft:light_gray_concrete[]"
+    },
+    {
+      "x": 7,
+      "y": 0,
+      "z": 3,
+      "type": "light_gray_concrete",
+      "metadata": 0,
+      "state": "minecraft:light_gray_concrete[]"
+    },
+    {
+      "x": 8,
+      "y": 0,
+      "z": 3,
+      "type": "light_gray_concrete",
+      "metadata": 0,
+      "state": "minecraft:light_gray_concrete[]"
+    },
+    {
+      "x": 9,
+      "y": 0,
+      "z": 3,
+      "type": "light_gray_concrete",
+      "metadata": 0,
+      "state": "minecraft:light_gray_concrete[]"
+    },
+    {
+      "x": 10,
+      "y": 0,
+      "z": 3,
+      "type": "light_gray_concrete",
+      "metadata": 0,
+      "state": "minecraft:light_gray_concrete[]"
+    },
+    {
+      "x": 11,
+      "y": 0,
+      "z": 3,
+      "type": "light_gray_concrete",
+      "metadata": 0,
+      "state": "minecraft:light_gray_concrete[]"
+    },
+    {
+      "x": 12,
+      "y": 0,
+      "z": 3,
+      "type": "farmland",
+      "metadata": 0,
+      "state": "minecraft:farmland[moisturized_amount=7]"
+    },
+    {
+      "x": 13,
+      "y": 0,
+      "z": 3,
+      "type": "farmland",
+      "metadata": 0,
+      "state": "minecraft:farmland[moisturized_amount=7]"
+    },
+    {
+      "x": 14,
+      "y": 0,
+      "z": 3,
+      "type": "spruce_stairs",
+      "metadata": 0,
+      "state": "minecraft:spruce_stairs[upside_down_bit=false,weirdo_direction=1]"
+    },
+    {
+      "x": 15,
+      "y": 0,
+      "z": 3,
+      "type": "spruce_stairs",
+      "metadata": 0,
+      "state": "minecraft:spruce_stairs[upside_down_bit=false,weirdo_direction=2]"
+    },
+    {
+      "x": 16,
+      "y": 0,
+      "z": 3,
+      "type": "farmland",
+      "metadata": 0,
+      "state": "minecraft:farmland[moisturized_amount=7]"
+    },
+    {
+      "x": 17,
+      "y": 0,
+      "z": 3,
+      "type": "moss_block",
+      "metadata": 0,
+      "state": "minecraft:moss_block[]"
+    },
+    {
+      "x": 18,
+      "y": 0,
+      "z": 3,
+      "type": "light_gray_concrete",
+      "metadata": 0,
+      "state": "minecraft:light_gray_concrete[]"
+    },
+    {
+      "x": 0,
+      "y": 0,
+      "z": 4,
+      "type": "moss_block",
+      "metadata": 0,
+      "state": "minecraft:moss_block[]"
+    },
+    {
+      "x": 1,
+      "y": 0,
+      "z": 4,
+      "type": "dirt",
+      "metadata": 0,
+      "state": "minecraft:dirt[]"
+    },
+    {
+      "x": 2,
+      "y": 0,
+      "z": 4,
+      "type": "water",
+      "metadata": 0,
+      "state": "minecraft:water[liquid_depth=0]"
+    },
+    {
+      "x": 3,
+      "y": 0,
+      "z": 4,
+      "type": "water",
+      "metadata": 0,
+      "state": "minecraft:water[liquid_depth=0]"
+    },
+    {
+      "x": 4,
+      "y": 0,
+      "z": 4,
+      "type": "water",
+      "metadata": 0,
+      "state": "minecraft:water[liquid_depth=0]"
+    },
+    {
+      "x": 5,
+      "y": 0,
+      "z": 4,
+      "type": "moss_block",
+      "metadata": 0,
+      "state": "minecraft:moss_block[]"
+    },
+    {
+      "x": 6,
+      "y": 0,
+      "z": 4,
+      "type": "moss_block",
+      "metadata": 0,
+      "state": "minecraft:moss_block[]"
+    },
+    {
+      "x": 7,
+      "y": 0,
+      "z": 4,
+      "type": "light_gray_concrete",
+      "metadata": 0,
+      "state": "minecraft:light_gray_concrete[]"
+    },
+    {
+      "x": 8,
+      "y": 0,
+      "z": 4,
+      "type": "light_gray_concrete",
+      "metadata": 0,
+      "state": "minecraft:light_gray_concrete[]"
+    },
+    {
+      "x": 9,
+      "y": 0,
+      "z": 4,
+      "type": "light_gray_concrete",
+      "metadata": 0,
+      "state": "minecraft:light_gray_concrete[]"
+    },
+    {
+      "x": 10,
+      "y": 0,
+      "z": 4,
+      "type": "light_gray_concrete",
+      "metadata": 0,
+      "state": "minecraft:light_gray_concrete[]"
+    },
+    {
+      "x": 11,
+      "y": 0,
+      "z": 4,
+      "type": "light_gray_concrete",
+      "metadata": 0,
+      "state": "minecraft:light_gray_concrete[]"
+    },
+    {
+      "x": 12,
+      "y": 0,
+      "z": 4,
+      "type": "dirt",
+      "metadata": 0,
+      "state": "minecraft:dirt[]"
+    },
+    {
+      "x": 13,
+      "y": 0,
+      "z": 4,
+      "type": "farmland",
+      "metadata": 0,
+      "state": "minecraft:farmland[moisturized_amount=7]"
+    },
+    {
+      "x": 14,
+      "y": 0,
+      "z": 4,
+      "type": "spruce_stairs",
+      "metadata": 0,
+      "state": "minecraft:spruce_stairs[upside_down_bit=false,weirdo_direction=1]"
+    },
+    {
+      "x": 15,
+      "y": 0,
+      "z": 4,
+      "type": "farmland",
+      "metadata": 0,
+      "state": "minecraft:farmland[moisturized_amount=7]"
+    },
+    {
+      "x": 16,
+      "y": 0,
+      "z": 4,
+      "type": "farmland",
+      "metadata": 0,
+      "state": "minecraft:farmland[moisturized_amount=7]"
+    },
+    {
+      "x": 17,
+      "y": 0,
+      "z": 4,
+      "type": "moss_block",
+      "metadata": 0,
+      "state": "minecraft:moss_block[]"
+    },
+    {
+      "x": 18,
+      "y": 0,
+      "z": 4,
+      "type": "light_gray_concrete",
+      "metadata": 0,
+      "state": "minecraft:light_gray_concrete[]"
+    },
+    {
+      "x": 0,
+      "y": 0,
+      "z": 5,
+      "type": "moss_block",
+      "metadata": 0,
+      "state": "minecraft:moss_block[]"
+    },
+    {
+      "x": 1,
+      "y": 0,
+      "z": 5,
+      "type": "dirt",
+      "metadata": 0,
+      "state": "minecraft:dirt[]"
+    },
+    {
+      "x": 2,
+      "y": 0,
+      "z": 5,
+      "type": "water",
+      "metadata": 0,
+      "state": "minecraft:water[liquid_depth=0]"
+    },
+    {
+      "x": 3,
+      "y": 0,
+      "z": 5,
+      "type": "water",
+      "metadata": 0,
+      "state": "minecraft:water[liquid_depth=0]"
+    },
+    {
+      "x": 4,
+      "y": 0,
+      "z": 5,
+      "type": "dirt",
+      "metadata": 0,
+      "state": "minecraft:dirt[]"
+    },
+    {
+      "x": 5,
+      "y": 0,
+      "z": 5,
+      "type": "moss_block",
+      "metadata": 0,
+      "state": "minecraft:moss_block[]"
+    },
+    {
+      "x": 6,
+      "y": 0,
+      "z": 5,
+      "type": "moss_block",
+      "metadata": 0,
+      "state": "minecraft:moss_block[]"
+    },
+    {
+      "x": 7,
+      "y": 0,
+      "z": 5,
+      "type": "light_gray_concrete",
+      "metadata": 0,
+      "state": "minecraft:light_gray_concrete[]"
+    },
+    {
+      "x": 8,
+      "y": 0,
+      "z": 5,
+      "type": "light_gray_concrete",
+      "metadata": 0,
+      "state": "minecraft:light_gray_concrete[]"
+    },
+    {
+      "x": 9,
+      "y": 0,
+      "z": 5,
+      "type": "oak_planks",
+      "metadata": 0,
+      "state": "minecraft:oak_planks[]"
+    },
+    {
+      "x": 10,
+      "y": 0,
+      "z": 5,
+      "type": "light_gray_concrete",
+      "metadata": 0,
+      "state": "minecraft:light_gray_concrete[]"
+    },
+    {
+      "x": 11,
+      "y": 0,
+      "z": 5,
+      "type": "light_gray_concrete",
+      "metadata": 0,
+      "state": "minecraft:light_gray_concrete[]"
+    },
+    {
+      "x": 12,
+      "y": 0,
+      "z": 5,
+      "type": "spruce_stairs",
+      "metadata": 0,
+      "state": "minecraft:spruce_stairs[upside_down_bit=false,weirdo_direction=2]"
+    },
+    {
+      "x": 13,
+      "y": 0,
+      "z": 5,
+      "type": "spruce_stairs",
+      "metadata": 0,
+      "state": "minecraft:spruce_stairs[upside_down_bit=false,weirdo_direction=2]"
+    },
+    {
+      "x": 14,
+      "y": 0,
+      "z": 5,
+      "type": "spruce_stairs",
+      "metadata": 0,
+      "state": "minecraft:spruce_stairs[upside_down_bit=false,weirdo_direction=2]"
+    },
+    {
+      "x": 15,
+      "y": 0,
+      "z": 5,
+      "type": "farmland",
+      "metadata": 0,
+      "state": "minecraft:farmland[moisturized_amount=7]"
+    },
+    {
+      "x": 16,
+      "y": 0,
+      "z": 5,
+      "type": "farmland",
+      "metadata": 0,
+      "state": "minecraft:farmland[moisturized_amount=7]"
+    },
+    {
+      "x": 17,
+      "y": 0,
+      "z": 5,
+      "type": "moss_block",
+      "metadata": 0,
+      "state": "minecraft:moss_block[]"
+    },
+    {
+      "x": 18,
+      "y": 0,
+      "z": 5,
+      "type": "light_gray_concrete",
+      "metadata": 0,
+      "state": "minecraft:light_gray_concrete[]"
+    },
+    {
+      "x": 0,
+      "y": 0,
+      "z": 6,
+      "type": "light_gray_concrete",
+      "metadata": 0,
+      "state": "minecraft:light_gray_concrete[]"
+    },
+    {
+      "x": 1,
+      "y": 0,
+      "z": 6,
+      "type": "moss_block",
+      "metadata": 0,
+      "state": "minecraft:moss_block[]"
+    },
+    {
+      "x": 2,
+      "y": 0,
+      "z": 6,
+      "type": "dirt",
+      "metadata": 0,
+      "state": "minecraft:dirt[]"
+    },
+    {
+      "x": 3,
+      "y": 0,
+      "z": 6,
+      "type": "dirt",
+      "metadata": 0,
+      "state": "minecraft:dirt[]"
+    },
+    {
+      "x": 4,
+      "y": 0,
+      "z": 6,
+      "type": "moss_block",
+      "metadata": 0,
+      "state": "minecraft:moss_block[]"
+    },
+    {
+      "x": 5,
+      "y": 0,
+      "z": 6,
+      "type": "moss_block",
+      "metadata": 0,
+      "state": "minecraft:moss_block[]"
+    },
+    {
+      "x": 6,
+      "y": 0,
+      "z": 6,
+      "type": "moss_block",
+      "metadata": 0,
+      "state": "minecraft:moss_block[]"
+    },
+    {
+      "x": 7,
+      "y": 0,
+      "z": 6,
+      "type": "moss_block",
+      "metadata": 0,
+      "state": "minecraft:moss_block[]"
+    },
+    {
+      "x": 8,
+      "y": 0,
+      "z": 6,
+      "type": "moss_block",
+      "metadata": 0,
+      "state": "minecraft:moss_block[]"
+    },
+    {
+      "x": 9,
+      "y": 0,
+      "z": 6,
+      "type": "grass_path",
+      "metadata": 0,
+      "state": "minecraft:grass_path[]"
+    },
+    {
+      "x": 10,
+      "y": 0,
+      "z": 6,
+      "type": "moss_block",
+      "metadata": 0,
+      "state": "minecraft:moss_block[]"
+    },
+    {
+      "x": 11,
+      "y": 0,
+      "z": 6,
+      "type": "moss_block",
+      "metadata": 0,
+      "state": "minecraft:moss_block[]"
+    },
+    {
+      "x": 12,
+      "y": 0,
+      "z": 6,
+      "type": "moss_block",
+      "metadata": 0,
+      "state": "minecraft:moss_block[]"
+    },
+    {
+      "x": 13,
+      "y": 0,
+      "z": 6,
+      "type": "dirt",
+      "metadata": 0,
+      "state": "minecraft:dirt[]"
+    },
+    {
+      "x": 14,
+      "y": 0,
+      "z": 6,
+      "type": "moss_block",
+      "metadata": 0,
+      "state": "minecraft:moss_block[]"
+    },
+    {
+      "x": 15,
+      "y": 0,
+      "z": 6,
+      "type": "moss_block",
+      "metadata": 0,
+      "state": "minecraft:moss_block[]"
+    },
+    {
+      "x": 16,
+      "y": 0,
+      "z": 6,
+      "type": "moss_block",
+      "metadata": 0,
+      "state": "minecraft:moss_block[]"
+    },
+    {
+      "x": 17,
+      "y": 0,
+      "z": 6,
+      "type": "light_gray_concrete",
+      "metadata": 0,
+      "state": "minecraft:light_gray_concrete[]"
+    },
+    {
+      "x": 18,
+      "y": 0,
+      "z": 6,
+      "type": "light_gray_concrete",
+      "metadata": 0,
+      "state": "minecraft:light_gray_concrete[]"
+    },
+    {
+      "x": 0,
+      "y": 0,
+      "z": 7,
+      "type": "light_gray_concrete",
+      "metadata": 0,
+      "state": "minecraft:light_gray_concrete[]"
+    },
+    {
+      "x": 1,
+      "y": 0,
+      "z": 7,
+      "type": "light_gray_concrete",
+      "metadata": 0,
+      "state": "minecraft:light_gray_concrete[]"
+    },
+    {
+      "x": 2,
+      "y": 0,
+      "z": 7,
+      "type": "light_gray_concrete",
+      "metadata": 0,
+      "state": "minecraft:light_gray_concrete[]"
+    },
+    {
+      "x": 3,
+      "y": 0,
+      "z": 7,
+      "type": "moss_block",
+      "metadata": 0,
+      "state": "minecraft:moss_block[]"
+    },
+    {
+      "x": 4,
+      "y": 0,
+      "z": 7,
+      "type": "moss_block",
+      "metadata": 0,
+      "state": "minecraft:moss_block[]"
+    },
+    {
+      "x": 5,
+      "y": 0,
+      "z": 7,
+      "type": "moss_block",
+      "metadata": 0,
+      "state": "minecraft:moss_block[]"
+    },
+    {
+      "x": 6,
+      "y": 0,
+      "z": 7,
+      "type": "moss_block",
+      "metadata": 0,
+      "state": "minecraft:moss_block[]"
+    },
+    {
+      "x": 7,
+      "y": 0,
+      "z": 7,
+      "type": "moss_block",
+      "metadata": 0,
+      "state": "minecraft:moss_block[]"
+    },
+    {
+      "x": 8,
+      "y": 0,
+      "z": 7,
+      "type": "grass_path",
+      "metadata": 0,
+      "state": "minecraft:grass_path[]"
+    },
+    {
+      "x": 9,
+      "y": 0,
+      "z": 7,
+      "type": "grass_path",
+      "metadata": 0,
+      "state": "minecraft:grass_path[]"
+    },
+    {
+      "x": 10,
+      "y": 0,
+      "z": 7,
+      "type": "moss_block",
+      "metadata": 0,
+      "state": "minecraft:moss_block[]"
+    },
+    {
+      "x": 11,
+      "y": 0,
+      "z": 7,
+      "type": "moss_block",
+      "metadata": 0,
+      "state": "minecraft:moss_block[]"
+    },
+    {
+      "x": 12,
+      "y": 0,
+      "z": 7,
+      "type": "dirt",
+      "metadata": 0,
+      "state": "minecraft:dirt[]"
+    },
+    {
+      "x": 13,
+      "y": 0,
+      "z": 7,
+      "type": "light_gray_concrete",
+      "metadata": 0,
+      "state": "minecraft:light_gray_concrete[]"
+    },
+    {
+      "x": 14,
+      "y": 0,
+      "z": 7,
+      "type": "light_gray_concrete",
+      "metadata": 0,
+      "state": "minecraft:light_gray_concrete[]"
+    },
+    {
+      "x": 15,
+      "y": 0,
+      "z": 7,
+      "type": "light_gray_concrete",
+      "metadata": 0,
+      "state": "minecraft:light_gray_concrete[]"
+    },
+    {
+      "x": 16,
+      "y": 0,
+      "z": 7,
+      "type": "light_gray_concrete",
+      "metadata": 0,
+      "state": "minecraft:light_gray_concrete[]"
+    },
+    {
+      "x": 17,
+      "y": 0,
+      "z": 7,
+      "type": "light_gray_concrete",
+      "metadata": 0,
+      "state": "minecraft:light_gray_concrete[]"
+    },
+    {
+      "x": 18,
+      "y": 0,
+      "z": 7,
+      "type": "light_gray_concrete",
+      "metadata": 0,
+      "state": "minecraft:light_gray_concrete[]"
+    },
+    {
+      "x": 0,
+      "y": 0,
+      "z": 8,
+      "type": "light_gray_concrete",
+      "metadata": 0,
+      "state": "minecraft:light_gray_concrete[]"
+    },
+    {
+      "x": 1,
+      "y": 0,
+      "z": 8,
+      "type": "light_gray_concrete",
+      "metadata": 0,
+      "state": "minecraft:light_gray_concrete[]"
+    },
+    {
+      "x": 2,
+      "y": 0,
+      "z": 8,
+      "type": "light_gray_concrete",
+      "metadata": 0,
+      "state": "minecraft:light_gray_concrete[]"
+    },
+    {
+      "x": 3,
+      "y": 0,
+      "z": 8,
+      "type": "light_gray_concrete",
+      "metadata": 0,
+      "state": "minecraft:light_gray_concrete[]"
+    },
+    {
+      "x": 4,
+      "y": 0,
+      "z": 8,
+      "type": "moss_block",
+      "metadata": 0,
+      "state": "minecraft:moss_block[]"
+    },
+    {
+      "x": 5,
+      "y": 0,
+      "z": 8,
+      "type": "light_gray_concrete",
+      "metadata": 0,
+      "state": "minecraft:light_gray_concrete[]"
+    },
+    {
+      "x": 6,
+      "y": 0,
+      "z": 8,
+      "type": "light_gray_concrete",
+      "metadata": 0,
+      "state": "minecraft:light_gray_concrete[]"
+    },
+    {
+      "x": 7,
+      "y": 0,
+      "z": 8,
+      "type": "moss_block",
+      "metadata": 0,
+      "state": "minecraft:moss_block[]"
+    },
+    {
+      "x": 8,
+      "y": 0,
+      "z": 8,
+      "type": "grass_path",
+      "metadata": 0,
+      "state": "minecraft:grass_path[]"
+    },
+    {
+      "x": 9,
+      "y": 0,
+      "z": 8,
+      "type": "grass_path",
+      "metadata": 0,
+      "state": "minecraft:grass_path[]"
+    },
+    {
+      "x": 10,
+      "y": 0,
+      "z": 8,
+      "type": "moss_block",
+      "metadata": 0,
+      "state": "minecraft:moss_block[]"
+    },
+    {
+      "x": 11,
+      "y": 0,
+      "z": 8,
+      "type": "dirt",
+      "metadata": 0,
+      "state": "minecraft:dirt[]"
+    },
+    {
+      "x": 12,
+      "y": 0,
+      "z": 8,
+      "type": "light_gray_concrete",
+      "metadata": 0,
+      "state": "minecraft:light_gray_concrete[]"
+    },
+    {
+      "x": 13,
+      "y": 0,
+      "z": 8,
+      "type": "light_gray_concrete",
+      "metadata": 0,
+      "state": "minecraft:light_gray_concrete[]"
+    },
+    {
+      "x": 14,
+      "y": 0,
+      "z": 8,
+      "type": "light_gray_concrete",
+      "metadata": 0,
+      "state": "minecraft:light_gray_concrete[]"
+    },
+    {
+      "x": 15,
+      "y": 0,
+      "z": 8,
+      "type": "light_gray_concrete",
+      "metadata": 0,
+      "state": "minecraft:light_gray_concrete[]"
+    },
+    {
+      "x": 16,
+      "y": 0,
+      "z": 8,
+      "type": "light_gray_concrete",
+      "metadata": 0,
+      "state": "minecraft:light_gray_concrete[]"
+    },
+    {
+      "x": 17,
+      "y": 0,
+      "z": 8,
+      "type": "light_gray_concrete",
+      "metadata": 0,
+      "state": "minecraft:light_gray_concrete[]"
+    },
+    {
+      "x": 18,
+      "y": 0,
+      "z": 8,
+      "type": "light_gray_concrete",
+      "metadata": 0,
+      "state": "minecraft:light_gray_concrete[]"
+    },
+    {
+      "x": 0,
+      "y": 0,
+      "z": 9,
+      "type": "light_gray_concrete",
+      "metadata": 0,
+      "state": "minecraft:light_gray_concrete[]"
+    },
+    {
+      "x": 1,
+      "y": 0,
+      "z": 9,
+      "type": "light_gray_concrete",
+      "metadata": 0,
+      "state": "minecraft:light_gray_concrete[]"
+    },
+    {
+      "x": 2,
+      "y": 0,
+      "z": 9,
+      "type": "light_gray_concrete",
+      "metadata": 0,
+      "state": "minecraft:light_gray_concrete[]"
+    },
+    {
+      "x": 3,
+      "y": 0,
+      "z": 9,
+      "type": "light_gray_concrete",
+      "metadata": 0,
+      "state": "minecraft:light_gray_concrete[]"
+    },
+    {
+      "x": 4,
+      "y": 0,
+      "z": 9,
+      "type": "light_gray_concrete",
+      "metadata": 0,
+      "state": "minecraft:light_gray_concrete[]"
+    },
+    {
+      "x": 5,
+      "y": 0,
+      "z": 9,
+      "type": "light_gray_concrete",
+      "metadata": 0,
+      "state": "minecraft:light_gray_concrete[]"
+    },
+    {
+      "x": 6,
+      "y": 0,
+      "z": 9,
+      "type": "grass_path",
+      "metadata": 0,
+      "state": "minecraft:grass_path[]"
+    },
+    {
+      "x": 7,
+      "y": 0,
+      "z": 9,
+      "type": "grass_path",
+      "metadata": 0,
+      "state": "minecraft:grass_path[]"
+    },
+    {
+      "x": 8,
+      "y": 0,
+      "z": 9,
+      "type": "grass_path",
+      "metadata": 0,
+      "state": "minecraft:grass_path[]"
+    },
+    {
+      "x": 9,
+      "y": 0,
+      "z": 9,
+      "type": "grass_path",
+      "metadata": 0,
+      "state": "minecraft:grass_path[]"
+    },
+    {
+      "x": 10,
+      "y": 0,
+      "z": 9,
+      "type": "moss_block",
+      "metadata": 0,
+      "state": "minecraft:moss_block[]"
+    },
+    {
+      "x": 11,
+      "y": 0,
+      "z": 9,
+      "type": "light_gray_concrete",
+      "metadata": 0,
+      "state": "minecraft:light_gray_concrete[]"
+    },
+    {
+      "x": 12,
+      "y": 0,
+      "z": 9,
+      "type": "light_gray_concrete",
+      "metadata": 0,
+      "state": "minecraft:light_gray_concrete[]"
+    },
+    {
+      "x": 13,
+      "y": 0,
+      "z": 9,
+      "type": "light_gray_concrete",
+      "metadata": 0,
+      "state": "minecraft:light_gray_concrete[]"
+    },
+    {
+      "x": 14,
+      "y": 0,
+      "z": 9,
+      "type": "light_gray_concrete",
+      "metadata": 0,
+      "state": "minecraft:light_gray_concrete[]"
+    },
+    {
+      "x": 15,
+      "y": 0,
+      "z": 9,
+      "type": "light_gray_concrete",
+      "metadata": 0,
+      "state": "minecraft:light_gray_concrete[]"
+    },
+    {
+      "x": 16,
+      "y": 0,
+      "z": 9,
+      "type": "light_gray_concrete",
+      "metadata": 0,
+      "state": "minecraft:light_gray_concrete[]"
+    },
+    {
+      "x": 17,
+      "y": 0,
+      "z": 9,
+      "type": "light_gray_concrete",
+      "metadata": 0,
+      "state": "minecraft:light_gray_concrete[]"
+    },
+    {
+      "x": 18,
+      "y": 0,
+      "z": 9,
+      "type": "light_gray_concrete",
+      "metadata": 0,
+      "state": "minecraft:light_gray_concrete[]"
+    },
+    {
+      "x": 0,
+      "y": 0,
+      "z": 10,
+      "type": "light_gray_concrete",
+      "metadata": 0,
+      "state": "minecraft:light_gray_concrete[]"
+    },
+    {
+      "x": 1,
+      "y": 0,
+      "z": 10,
+      "type": "light_gray_concrete",
+      "metadata": 0,
+      "state": "minecraft:light_gray_concrete[]"
+    },
+    {
+      "x": 2,
+      "y": 0,
+      "z": 10,
+      "type": "light_gray_concrete",
+      "metadata": 0,
+      "state": "minecraft:light_gray_concrete[]"
+    },
+    {
+      "x": 3,
+      "y": 0,
+      "z": 10,
+      "type": "light_gray_concrete",
+      "metadata": 0,
+      "state": "minecraft:light_gray_concrete[]"
+    },
+    {
+      "x": 4,
+      "y": 0,
+      "z": 10,
+      "type": "light_gray_concrete",
+      "metadata": 0,
+      "state": "minecraft:light_gray_concrete[]"
+    },
+    {
+      "x": 5,
+      "y": 0,
+      "z": 10,
+      "type": "light_gray_concrete",
+      "metadata": 0,
+      "state": "minecraft:light_gray_concrete[]"
+    },
+    {
+      "x": 6,
+      "y": 0,
+      "z": 10,
+      "type": "grass_path",
+      "metadata": 0,
+      "state": "minecraft:grass_path[]"
+    },
+    {
+      "x": 7,
+      "y": 0,
+      "z": 10,
+      "type": "grass_path",
+      "metadata": 0,
+      "state": "minecraft:grass_path[]"
+    },
+    {
+      "x": 8,
+      "y": 0,
+      "z": 10,
+      "type": "grass_path",
+      "metadata": 0,
+      "state": "minecraft:grass_path[]"
+    },
+    {
+      "x": 9,
+      "y": 0,
+      "z": 10,
+      "type": "moss_block",
+      "metadata": 0,
+      "state": "minecraft:moss_block[]"
+    },
+    {
+      "x": 10,
+      "y": 0,
+      "z": 10,
+      "type": "light_gray_concrete",
+      "metadata": 0,
+      "state": "minecraft:light_gray_concrete[]"
+    },
+    {
+      "x": 11,
+      "y": 0,
+      "z": 10,
+      "type": "light_gray_concrete",
+      "metadata": 0,
+      "state": "minecraft:light_gray_concrete[]"
+    },
+    {
+      "x": 12,
+      "y": 0,
+      "z": 10,
+      "type": "light_gray_concrete",
+      "metadata": 0,
+      "state": "minecraft:light_gray_concrete[]"
+    },
+    {
+      "x": 13,
+      "y": 0,
+      "z": 10,
+      "type": "light_gray_concrete",
+      "metadata": 0,
+      "state": "minecraft:light_gray_concrete[]"
+    },
+    {
+      "x": 14,
+      "y": 0,
+      "z": 10,
+      "type": "light_gray_concrete",
+      "metadata": 0,
+      "state": "minecraft:light_gray_concrete[]"
+    },
+    {
+      "x": 15,
+      "y": 0,
+      "z": 10,
+      "type": "light_gray_concrete",
+      "metadata": 0,
+      "state": "minecraft:light_gray_concrete[]"
+    },
+    {
+      "x": 16,
+      "y": 0,
+      "z": 10,
+      "type": "light_gray_concrete",
+      "metadata": 0,
+      "state": "minecraft:light_gray_concrete[]"
+    },
+    {
+      "x": 17,
+      "y": 0,
+      "z": 10,
+      "type": "light_gray_concrete",
+      "metadata": 0,
+      "state": "minecraft:light_gray_concrete[]"
+    },
+    {
+      "x": 18,
+      "y": 0,
+      "z": 10,
+      "type": "light_gray_concrete",
+      "metadata": 0,
+      "state": "minecraft:light_gray_concrete[]"
+    },
+    {
+      "x": 0,
+      "y": 0,
+      "z": 11,
+      "type": "light_gray_concrete",
+      "metadata": 0,
+      "state": "minecraft:light_gray_concrete[]"
+    },
+    {
+      "x": 1,
+      "y": 0,
+      "z": 11,
+      "type": "light_gray_concrete",
+      "metadata": 0,
+      "state": "minecraft:light_gray_concrete[]"
+    },
+    {
+      "x": 2,
+      "y": 0,
+      "z": 11,
+      "type": "light_gray_concrete",
+      "metadata": 0,
+      "state": "minecraft:light_gray_concrete[]"
+    },
+    {
+      "x": 3,
+      "y": 0,
+      "z": 11,
+      "type": "light_gray_concrete",
+      "metadata": 0,
+      "state": "minecraft:light_gray_concrete[]"
+    },
+    {
+      "x": 4,
+      "y": 0,
+      "z": 11,
+      "type": "light_gray_concrete",
+      "metadata": 0,
+      "state": "minecraft:light_gray_concrete[]"
+    },
+    {
+      "x": 5,
+      "y": 0,
+      "z": 11,
+      "type": "light_gray_concrete",
+      "metadata": 0,
+      "state": "minecraft:light_gray_concrete[]"
+    },
+    {
+      "x": 6,
+      "y": 0,
+      "z": 11,
+      "type": "grass_path",
+      "metadata": 0,
+      "state": "minecraft:grass_path[]"
+    },
+    {
+      "x": 7,
+      "y": 0,
+      "z": 11,
+      "type": "grass_path",
+      "metadata": 0,
+      "state": "minecraft:grass_path[]"
+    },
+    {
+      "x": 8,
+      "y": 0,
+      "z": 11,
+      "type": "grass_path",
+      "metadata": 0,
+      "state": "minecraft:grass_path[]"
+    },
+    {
+      "x": 9,
+      "y": 0,
+      "z": 11,
+      "type": "light_gray_concrete",
+      "metadata": 0,
+      "state": "minecraft:light_gray_concrete[]"
+    },
+    {
+      "x": 10,
+      "y": 0,
+      "z": 11,
+      "type": "light_gray_concrete",
+      "metadata": 0,
+      "state": "minecraft:light_gray_concrete[]"
+    },
+    {
+      "x": 11,
+      "y": 0,
+      "z": 11,
+      "type": "light_gray_concrete",
+      "metadata": 0,
+      "state": "minecraft:light_gray_concrete[]"
+    },
+    {
+      "x": 12,
+      "y": 0,
+      "z": 11,
+      "type": "light_gray_concrete",
+      "metadata": 0,
+      "state": "minecraft:light_gray_concrete[]"
+    },
+    {
+      "x": 13,
+      "y": 0,
+      "z": 11,
+      "type": "light_gray_concrete",
+      "metadata": 0,
+      "state": "minecraft:light_gray_concrete[]"
+    },
+    {
+      "x": 14,
+      "y": 0,
+      "z": 11,
+      "type": "light_gray_concrete",
+      "metadata": 0,
+      "state": "minecraft:light_gray_concrete[]"
+    },
+    {
+      "x": 15,
+      "y": 0,
+      "z": 11,
+      "type": "light_gray_concrete",
+      "metadata": 0,
+      "state": "minecraft:light_gray_concrete[]"
+    },
+    {
+      "x": 16,
+      "y": 0,
+      "z": 11,
+      "type": "light_gray_concrete",
+      "metadata": 0,
+      "state": "minecraft:light_gray_concrete[]"
+    },
+    {
+      "x": 17,
+      "y": 0,
+      "z": 11,
+      "type": "light_gray_concrete",
+      "metadata": 0,
+      "state": "minecraft:light_gray_concrete[]"
+    },
+    {
+      "x": 18,
+      "y": 0,
+      "z": 11,
+      "type": "light_gray_concrete",
+      "metadata": 0,
+      "state": "minecraft:light_gray_concrete[]"
+    },
+    {
+      "x": 0,
+      "y": 0,
+      "z": 12,
+      "type": "light_gray_concrete",
+      "metadata": 0,
+      "state": "minecraft:light_gray_concrete[]"
+    },
+    {
+      "x": 1,
+      "y": 0,
+      "z": 12,
+      "type": "light_gray_concrete",
+      "metadata": 0,
+      "state": "minecraft:light_gray_concrete[]"
+    },
+    {
+      "x": 2,
+      "y": 0,
+      "z": 12,
+      "type": "light_gray_concrete",
+      "metadata": 0,
+      "state": "minecraft:light_gray_concrete[]"
+    },
+    {
+      "x": 3,
+      "y": 0,
+      "z": 12,
+      "type": "light_gray_concrete",
+      "metadata": 0,
+      "state": "minecraft:light_gray_concrete[]"
+    },
+    {
+      "x": 4,
+      "y": 0,
+      "z": 12,
+      "type": "light_gray_concrete",
+      "metadata": 0,
+      "state": "minecraft:light_gray_concrete[]"
+    },
+    {
+      "x": 5,
+      "y": 0,
+      "z": 12,
+      "type": "grass_path",
+      "metadata": 0,
+      "state": "minecraft:grass_path[]"
+    },
+    {
+      "x": 6,
+      "y": 0,
+      "z": 12,
+      "type": "grass_path",
+      "metadata": 0,
+      "state": "minecraft:grass_path[]"
+    },
+    {
+      "x": 7,
+      "y": 0,
+      "z": 12,
+      "type": "grass_path",
+      "metadata": 0,
+      "state": "minecraft:grass_path[]"
+    },
+    {
+      "x": 8,
+      "y": 0,
+      "z": 12,
+      "type": "light_gray_concrete",
+      "metadata": 0,
+      "state": "minecraft:light_gray_concrete[]"
+    },
+    {
+      "x": 9,
+      "y": 0,
+      "z": 12,
+      "type": "light_gray_concrete",
+      "metadata": 0,
+      "state": "minecraft:light_gray_concrete[]"
+    },
+    {
+      "x": 10,
+      "y": 0,
+      "z": 12,
+      "type": "light_gray_concrete",
+      "metadata": 0,
+      "state": "minecraft:light_gray_concrete[]"
+    },
+    {
+      "x": 11,
+      "y": 0,
+      "z": 12,
+      "type": "light_gray_concrete",
+      "metadata": 0,
+      "state": "minecraft:light_gray_concrete[]"
+    },
+    {
+      "x": 12,
+      "y": 0,
+      "z": 12,
+      "type": "light_gray_concrete",
+      "metadata": 0,
+      "state": "minecraft:light_gray_concrete[]"
+    },
+    {
+      "x": 13,
+      "y": 0,
+      "z": 12,
+      "type": "light_gray_concrete",
+      "metadata": 0,
+      "state": "minecraft:light_gray_concrete[]"
+    },
+    {
+      "x": 14,
+      "y": 0,
+      "z": 12,
+      "type": "light_gray_concrete",
+      "metadata": 0,
+      "state": "minecraft:light_gray_concrete[]"
+    },
+    {
+      "x": 15,
+      "y": 0,
+      "z": 12,
+      "type": "light_gray_concrete",
+      "metadata": 0,
+      "state": "minecraft:light_gray_concrete[]"
+    },
+    {
+      "x": 16,
+      "y": 0,
+      "z": 12,
+      "type": "light_gray_concrete",
+      "metadata": 0,
+      "state": "minecraft:light_gray_concrete[]"
+    },
+    {
+      "x": 17,
+      "y": 0,
+      "z": 12,
+      "type": "light_gray_concrete",
+      "metadata": 0,
+      "state": "minecraft:light_gray_concrete[]"
+    },
+    {
+      "x": 18,
+      "y": 0,
+      "z": 12,
+      "type": "light_gray_concrete",
+      "metadata": 0,
+      "state": "minecraft:light_gray_concrete[]"
+    },
+    {
+      "x": 0,
+      "y": 0,
+      "z": 13,
+      "type": "light_gray_concrete",
+      "metadata": 0,
+      "state": "minecraft:light_gray_concrete[]"
+    },
+    {
+      "x": 1,
+      "y": 0,
+      "z": 13,
+      "type": "light_gray_concrete",
+      "metadata": 0,
+      "state": "minecraft:light_gray_concrete[]"
+    },
+    {
+      "x": 2,
+      "y": 0,
+      "z": 13,
+      "type": "light_gray_concrete",
+      "metadata": 0,
+      "state": "minecraft:light_gray_concrete[]"
+    },
+    {
+      "x": 3,
+      "y": 0,
+      "z": 13,
+      "type": "light_gray_concrete",
+      "metadata": 0,
+      "state": "minecraft:light_gray_concrete[]"
+    },
+    {
+      "x": 4,
+      "y": 0,
+      "z": 13,
+      "type": "light_gray_concrete",
+      "metadata": 0,
+      "state": "minecraft:light_gray_concrete[]"
+    },
+    {
+      "x": 5,
+      "y": 0,
+      "z": 13,
+      "type": "grass_path",
+      "metadata": 0,
+      "state": "minecraft:grass_path[]"
+    },
+    {
+      "x": 6,
+      "y": 0,
+      "z": 13,
+      "type": "grass_path",
+      "metadata": 0,
+      "state": "minecraft:grass_path[]"
+    },
+    {
+      "x": 7,
+      "y": 0,
+      "z": 13,
+      "type": "light_gray_concrete",
+      "metadata": 0,
+      "state": "minecraft:light_gray_concrete[]"
+    },
+    {
+      "x": 8,
+      "y": 0,
+      "z": 13,
+      "type": "light_gray_concrete",
+      "metadata": 0,
+      "state": "minecraft:light_gray_concrete[]"
+    },
+    {
+      "x": 9,
+      "y": 0,
+      "z": 13,
+      "type": "light_gray_concrete",
+      "metadata": 0,
+      "state": "minecraft:light_gray_concrete[]"
+    },
+    {
+      "x": 10,
+      "y": 0,
+      "z": 13,
+      "type": "light_gray_concrete",
+      "metadata": 0,
+      "state": "minecraft:light_gray_concrete[]"
+    },
+    {
+      "x": 11,
+      "y": 0,
+      "z": 13,
+      "type": "light_gray_concrete",
+      "metadata": 0,
+      "state": "minecraft:light_gray_concrete[]"
+    },
+    {
+      "x": 12,
+      "y": 0,
+      "z": 13,
+      "type": "light_gray_concrete",
+      "metadata": 0,
+      "state": "minecraft:light_gray_concrete[]"
+    },
+    {
+      "x": 13,
+      "y": 0,
+      "z": 13,
+      "type": "light_gray_concrete",
+      "metadata": 0,
+      "state": "minecraft:light_gray_concrete[]"
+    },
+    {
+      "x": 14,
+      "y": 0,
+      "z": 13,
+      "type": "light_gray_concrete",
+      "metadata": 0,
+      "state": "minecraft:light_gray_concrete[]"
+    },
+    {
+      "x": 15,
+      "y": 0,
+      "z": 13,
+      "type": "light_gray_concrete",
+      "metadata": 0,
+      "state": "minecraft:light_gray_concrete[]"
+    },
+    {
+      "x": 16,
+      "y": 0,
+      "z": 13,
+      "type": "light_gray_concrete",
+      "metadata": 0,
+      "state": "minecraft:light_gray_concrete[]"
+    },
+    {
+      "x": 17,
+      "y": 0,
+      "z": 13,
+      "type": "light_gray_concrete",
+      "metadata": 0,
+      "state": "minecraft:light_gray_concrete[]"
+    },
+    {
+      "x": 18,
+      "y": 0,
+      "z": 13,
+      "type": "light_gray_concrete",
+      "metadata": 0,
+      "state": "minecraft:light_gray_concrete[]"
+    },
+    {
+      "x": 1,
+      "y": 1,
+      "z": 0,
+      "type": "moss_block",
+      "metadata": 0,
+      "state": "minecraft:moss_block[]"
+    },
+    {
+      "x": 2,
+      "y": 1,
+      "z": 0,
+      "type": "moss_block",
+      "metadata": 0,
+      "state": "minecraft:moss_block[]"
+    },
+    {
+      "x": 3,
+      "y": 1,
+      "z": 0,
+      "type": "moss_block",
+      "metadata": 0,
+      "state": "minecraft:moss_block[]"
+    },
+    {
+      "x": 4,
+      "y": 1,
+      "z": 0,
+      "type": "moss_block",
+      "metadata": 0,
+      "state": "minecraft:moss_block[]"
+    },
+    {
+      "x": 5,
+      "y": 1,
+      "z": 0,
+      "type": "moss_block",
+      "metadata": 0,
+      "state": "minecraft:moss_block[]"
+    },
+    {
+      "x": 6,
+      "y": 1,
+      "z": 0,
+      "type": "moss_block",
+      "metadata": 0,
+      "state": "minecraft:moss_block[]"
+    },
+    {
+      "x": 12,
+      "y": 1,
+      "z": 0,
+      "type": "dirt",
+      "metadata": 0,
+      "state": "minecraft:dirt[]"
+    },
+    {
+      "x": 13,
+      "y": 1,
+      "z": 0,
+      "type": "dirt",
+      "metadata": 0,
+      "state": "minecraft:dirt[]"
+    },
+    {
+      "x": 14,
+      "y": 1,
+      "z": 0,
+      "type": "dirt",
+      "metadata": 0,
+      "state": "minecraft:dirt[]"
+    },
+    {
+      "x": 17,
+      "y": 1,
+      "z": 0,
+      "type": "pumpkin",
+      "metadata": 0,
+      "state": "minecraft:pumpkin[minecraft:cardinal_direction=north]"
+    },
+    {
+      "x": 18,
+      "y": 1,
+      "z": 0,
+      "type": "pumpkin",
+      "metadata": 0,
+      "state": "minecraft:pumpkin[minecraft:cardinal_direction=north]"
+    },
+    {
+      "x": 1,
+      "y": 1,
+      "z": 1,
+      "type": "moss_block",
+      "metadata": 0,
+      "state": "minecraft:moss_block[]"
+    },
+    {
+      "x": 2,
+      "y": 1,
+      "z": 1,
+      "type": "moss_block",
+      "metadata": 0,
+      "state": "minecraft:moss_block[]"
+    },
+    {
+      "x": 3,
+      "y": 1,
+      "z": 1,
+      "type": "tall_grass",
+      "metadata": 0,
+      "state": "minecraft:tall_grass[upper_block_bit=false]"
+    },
+    {
+      "x": 5,
+      "y": 1,
+      "z": 1,
+      "type": "tall_grass",
+      "metadata": 0,
+      "state": "minecraft:tall_grass[upper_block_bit=false]"
+    },
+    {
+      "x": 6,
+      "y": 1,
+      "z": 1,
+      "type": "spruce_trapdoor",
+      "metadata": 0,
+      "state": "minecraft:spruce_trapdoor[direction=3,open_bit=true,upside_down_bit=false]"
+    },
+    {
+      "x": 7,
+      "y": 1,
+      "z": 1,
+      "type": "stripped_dark_oak_wood",
+      "metadata": 0,
+      "state": "minecraft:stripped_dark_oak_wood[pillar_axis=y]"
+    },
+    {
+      "x": 8,
+      "y": 1,
+      "z": 1,
+      "type": "oak_stairs",
+      "metadata": 0,
+      "state": "minecraft:oak_stairs[upside_down_bit=false,weirdo_direction=2]"
+    },
+    {
+      "x": 9,
+      "y": 1,
+      "z": 1,
+      "type": "oak_planks",
+      "metadata": 0,
+      "state": "minecraft:oak_planks[]"
+    },
+    {
+      "x": 10,
+      "y": 1,
+      "z": 1,
+      "type": "oak_stairs",
+      "metadata": 0,
+      "state": "minecraft:oak_stairs[upside_down_bit=false,weirdo_direction=2]"
+    },
+    {
+      "x": 11,
+      "y": 1,
+      "z": 1,
+      "type": "stripped_dark_oak_wood",
+      "metadata": 0,
+      "state": "minecraft:stripped_dark_oak_wood[pillar_axis=y]"
+    },
+    {
+      "x": 12,
+      "y": 1,
+      "z": 1,
+      "type": "dirt",
+      "metadata": 0,
+      "state": "minecraft:dirt[]"
+    },
+    {
+      "x": 13,
+      "y": 1,
+      "z": 1,
+      "type": "dirt",
+      "metadata": 0,
+      "state": "minecraft:dirt[]"
+    },
+    {
+      "x": 14,
+      "y": 1,
+      "z": 1,
+      "type": "sweet_berry_bush",
+      "metadata": 0,
+      "state": "minecraft:sweet_berry_bush[growth=3]"
+    },
+    {
+      "x": 15,
+      "y": 1,
+      "z": 1,
+      "type": "carrots",
+      "metadata": 0,
+      "state": "minecraft:carrots[growth=7]"
+    },
+    {
+      "x": 17,
+      "y": 1,
+      "z": 1,
+      "type": "rose_bush",
+      "metadata": 0,
+      "state": "minecraft:rose_bush[upper_block_bit=false]"
+    },
+    {
+      "x": 18,
+      "y": 1,
+      "z": 1,
+      "type": "pumpkin",
+      "metadata": 0,
+      "state": "minecraft:pumpkin[minecraft:cardinal_direction=north]"
+    },
+    {
+      "x": 0,
+      "y": 1,
+      "z": 2,
+      "type": "moss_block",
+      "metadata": 0,
+      "state": "minecraft:moss_block[]"
+    },
+    {
+      "x": 2,
+      "y": 1,
+      "z": 2,
+      "type": "grass",
+      "metadata": 0,
+      "state": "minecraft:grass[]"
+    },
+    {
+      "x": 5,
+      "y": 1,
+      "z": 2,
+      "type": "spruce_trapdoor",
+      "metadata": 0,
+      "state": "minecraft:spruce_trapdoor[direction=1,open_bit=true,upside_down_bit=false]"
+    },
+    {
+      "x": 6,
+      "y": 1,
+      "z": 2,
+      "type": "podzol",
+      "metadata": 0,
+      "state": "minecraft:podzol[]"
+    },
+    {
+      "x": 7,
+      "y": 1,
+      "z": 2,
+      "type": "oak_stairs",
+      "metadata": 0,
+      "state": "minecraft:oak_stairs[upside_down_bit=false,weirdo_direction=0]"
+    },
+    {
+      "x": 8,
+      "y": 1,
+      "z": 2,
+      "type": "chest",
+      "metadata": 0,
+      "state": "minecraft:chest[minecraft:cardinal_direction=east]"
+    },
+    {
+      "x": 10,
+      "y": 1,
+      "z": 2,
+      "type": "chest",
+      "metadata": 0,
+      "state": "minecraft:chest[minecraft:cardinal_direction=west]"
+    },
+    {
+      "x": 11,
+      "y": 1,
+      "z": 2,
+      "type": "oak_stairs",
+      "metadata": 0,
+      "state": "minecraft:oak_stairs[upside_down_bit=false,weirdo_direction=1]"
+    },
+    {
+      "x": 12,
+      "y": 1,
+      "z": 2,
+      "type": "rose_bush",
+      "metadata": 0,
+      "state": "minecraft:rose_bush[upper_block_bit=false]"
+    },
+    {
+      "x": 13,
+      "y": 1,
+      "z": 2,
+      "type": "sweet_berry_bush",
+      "metadata": 0,
+      "state": "minecraft:sweet_berry_bush[growth=3]"
+    },
+    {
+      "x": 14,
+      "y": 1,
+      "z": 2,
+      "type": "carrots",
+      "metadata": 0,
+      "state": "minecraft:carrots[growth=7]"
+    },
+    {
+      "x": 15,
+      "y": 1,
+      "z": 2,
+      "type": "beetroot",
+      "metadata": 0,
+      "state": "minecraft:beetroot[growth=7]"
+    },
+    {
+      "x": 18,
+      "y": 1,
+      "z": 2,
+      "type": "sweet_berry_bush",
+      "metadata": 0,
+      "state": "minecraft:sweet_berry_bush[growth=3]"
+    },
+    {
+      "x": 1,
+      "y": 1,
+      "z": 3,
+      "type": "oak_fence",
+      "metadata": 0,
+      "state": "minecraft:oak_fence[]"
+    },
+    {
+      "x": 5,
+      "y": 1,
+      "z": 3,
+      "type": "spruce_trapdoor",
+      "metadata": 0,
+      "state": "minecraft:spruce_trapdoor[direction=1,open_bit=true,upside_down_bit=false]"
+    },
+    {
+      "x": 6,
+      "y": 1,
+      "z": 3,
+      "type": "podzol",
+      "metadata": 0,
+      "state": "minecraft:podzol[]"
+    },
+    {
+      "x": 7,
+      "y": 1,
+      "z": 3,
+      "type": "oak_planks",
+      "metadata": 0,
+      "state": "minecraft:oak_planks[]"
+    },
+    {
+      "x": 8,
+      "y": 1,
+      "z": 3,
+      "type": "spruce_trapdoor",
+      "metadata": 0,
+      "state": "minecraft:spruce_trapdoor[direction=3,open_bit=true,upside_down_bit=false]"
+    },
+    {
+      "x": 10,
+      "y": 1,
+      "z": 3,
+      "type": "crafting_table",
+      "metadata": 0,
+      "state": "minecraft:crafting_table[]"
+    },
+    {
+      "x": 11,
+      "y": 1,
+      "z": 3,
+      "type": "oak_planks",
+      "metadata": 0,
+      "state": "minecraft:oak_planks[]"
+    },
+    {
+      "x": 12,
+      "y": 1,
+      "z": 3,
+      "type": "beetroot",
+      "metadata": 0,
+      "state": "minecraft:beetroot[growth=7]"
+    },
+    {
+      "x": 13,
+      "y": 1,
+      "z": 3,
+      "type": "wheat",
+      "metadata": 0,
+      "state": "minecraft:wheat[growth=7]"
+    },
+    {
+      "x": 16,
+      "y": 1,
+      "z": 3,
+      "type": "beetroot",
+      "metadata": 0,
+      "state": "minecraft:beetroot[growth=7]"
+    },
+    {
+      "x": 1,
+      "y": 1,
+      "z": 4,
+      "type": "campfire",
+      "metadata": 0,
+      "state": "minecraft:campfire[extinguished=true,minecraft:cardinal_direction=west]"
+    },
+    {
+      "x": 6,
+      "y": 1,
+      "z": 4,
+      "type": "spruce_trapdoor",
+      "metadata": 0,
+      "state": "minecraft:spruce_trapdoor[direction=2,open_bit=true,upside_down_bit=false]"
+    },
+    {
+      "x": 7,
+      "y": 1,
+      "z": 4,
+      "type": "oak_stairs",
+      "metadata": 0,
+      "state": "minecraft:oak_stairs[upside_down_bit=false,weirdo_direction=0]"
+    },
+    {
+      "x": 8,
+      "y": 1,
+      "z": 4,
+      "type": "spruce_trapdoor",
+      "metadata": 0,
+      "state": "minecraft:spruce_trapdoor[direction=0,open_bit=false,upside_down_bit=true]"
+    },
+    {
+      "x": 10,
+      "y": 1,
+      "z": 4,
+      "type": "furnace",
+      "metadata": 0,
+      "state": "minecraft:furnace[minecraft:cardinal_direction=west]"
+    },
+    {
+      "x": 11,
+      "y": 1,
+      "z": 4,
+      "type": "oak_stairs",
+      "metadata": 0,
+      "state": "minecraft:oak_stairs[upside_down_bit=false,weirdo_direction=1]"
+    },
+    {
+      "x": 12,
+      "y": 1,
+      "z": 4,
+      "type": "tall_grass",
+      "metadata": 0,
+      "state": "minecraft:tall_grass[upper_block_bit=false]"
+    },
+    {
+      "x": 13,
+      "y": 1,
+      "z": 4,
+      "type": "carrots",
+      "metadata": 0,
+      "state": "minecraft:carrots[growth=7]"
+    },
+    {
+      "x": 15,
+      "y": 1,
+      "z": 4,
+      "type": "wheat",
+      "metadata": 0,
+      "state": "minecraft:wheat[growth=7]"
+    },
+    {
+      "x": 16,
+      "y": 1,
+      "z": 4,
+      "type": "beetroot",
+      "metadata": 0,
+      "state": "minecraft:beetroot[growth=7]"
+    },
+    {
+      "x": 5,
+      "y": 1,
+      "z": 5,
+      "type": "grass",
+      "metadata": 0,
+      "state": "minecraft:grass[]"
+    },
+    {
+      "x": 6,
+      "y": 1,
+      "z": 5,
+      "type": "grass",
+      "metadata": 0,
+      "state": "minecraft:grass[]"
+    },
+    {
+      "x": 7,
+      "y": 1,
+      "z": 5,
+      "type": "stripped_dark_oak_wood",
+      "metadata": 0,
+      "state": "minecraft:stripped_dark_oak_wood[pillar_axis=y]"
+    },
+    {
+      "x": 8,
+      "y": 1,
+      "z": 5,
+      "type": "oak_planks",
+      "metadata": 0,
+      "state": "minecraft:oak_planks[]"
+    },
+    {
+      "x": 9,
+      "y": 1,
+      "z": 5,
+      "type": "spruce_door",
+      "metadata": 0,
+      "state": "minecraft:spruce_door[door_hinge_bit=false,minecraft:cardinal_direction=west,open_bit=false,upper_block_bit=false]"
+    },
+    {
+      "x": 10,
+      "y": 1,
+      "z": 5,
+      "type": "oak_planks",
+      "metadata": 0,
+      "state": "minecraft:oak_planks[]"
+    },
+    {
+      "x": 11,
+      "y": 1,
+      "z": 5,
+      "type": "stripped_dark_oak_wood",
+      "metadata": 0,
+      "state": "minecraft:stripped_dark_oak_wood[pillar_axis=y]"
+    },
+    {
+      "x": 15,
+      "y": 1,
+      "z": 5,
+      "type": "carrots",
+      "metadata": 0,
+      "state": "minecraft:carrots[growth=7]"
+    },
+    {
+      "x": 16,
+      "y": 1,
+      "z": 5,
+      "type": "wheat",
+      "metadata": 0,
+      "state": "minecraft:wheat[growth=7]"
+    },
+    {
+      "x": 2,
+      "y": 1,
+      "z": 6,
+      "type": "campfire",
+      "metadata": 0,
+      "state": "minecraft:campfire[extinguished=true,minecraft:cardinal_direction=north]"
+    },
+    {
+      "x": 11,
+      "y": 1,
+      "z": 6,
+      "type": "oak_fence",
+      "metadata": 0,
+      "state": "minecraft:oak_fence[]"
+    },
+    {
+      "x": 11,
+      "y": 1,
+      "z": 7,
+      "type": "grass",
+      "metadata": 0,
+      "state": "minecraft:grass[]"
+    },
+    {
+      "x": 3,
+      "y": 2,
+      "z": 0,
+      "type": "moss_block",
+      "metadata": 0,
+      "state": "minecraft:moss_block[]"
+    },
+    {
+      "x": 4,
+      "y": 2,
+      "z": 0,
+      "type": "moss_block",
+      "metadata": 0,
+      "state": "minecraft:moss_block[]"
+    },
+    {
+      "x": 5,
+      "y": 2,
+      "z": 0,
+      "type": "moss_block",
+      "metadata": 0,
+      "state": "minecraft:moss_block[]"
+    },
+    {
+      "x": 6,
+      "y": 2,
+      "z": 0,
+      "type": "moss_block",
+      "metadata": 0,
+      "state": "minecraft:moss_block[]"
+    },
+    {
+      "x": 12,
+      "y": 2,
+      "z": 0,
+      "type": "dirt",
+      "metadata": 0,
+      "state": "minecraft:dirt[]"
+    },
+    {
+      "x": 13,
+      "y": 2,
+      "z": 0,
+      "type": "dirt",
+      "metadata": 0,
+      "state": "minecraft:dirt[]"
+    },
+    {
+      "x": 14,
+      "y": 2,
+      "z": 0,
+      "type": "sweet_berry_bush",
+      "metadata": 0,
+      "state": "minecraft:sweet_berry_bush[growth=3]"
+    },
+    {
+      "x": 18,
+      "y": 2,
+      "z": 0,
+      "type": "pumpkin",
+      "metadata": 0,
+      "state": "minecraft:pumpkin[minecraft:cardinal_direction=north]"
+    },
+    {
+      "x": 3,
+      "y": 2,
+      "z": 1,
+      "type": "tall_grass",
+      "metadata": 0,
+      "state": "minecraft:tall_grass[upper_block_bit=true]"
+    },
+    {
+      "x": 5,
+      "y": 2,
+      "z": 1,
+      "type": "tall_grass",
+      "metadata": 0,
+      "state": "minecraft:tall_grass[upper_block_bit=true]"
+    },
+    {
+      "x": 7,
+      "y": 2,
+      "z": 1,
+      "type": "stripped_dark_oak_wood",
+      "metadata": 0,
+      "state": "minecraft:stripped_dark_oak_wood[pillar_axis=y]"
+    },
+    {
+      "x": 8,
+      "y": 2,
+      "z": 1,
+      "type": "glass_pane",
+      "metadata": 0,
+      "state": "minecraft:glass_pane[]"
+    },
+    {
+      "x": 9,
+      "y": 2,
+      "z": 1,
+      "type": "oak_planks",
+      "metadata": 0,
+      "state": "minecraft:oak_planks[]"
+    },
+    {
+      "x": 10,
+      "y": 2,
+      "z": 1,
+      "type": "glass_pane",
+      "metadata": 0,
+      "state": "minecraft:glass_pane[]"
+    },
+    {
+      "x": 11,
+      "y": 2,
+      "z": 1,
+      "type": "stripped_dark_oak_wood",
+      "metadata": 0,
+      "state": "minecraft:stripped_dark_oak_wood[pillar_axis=y]"
+    },
+    {
+      "x": 12,
+      "y": 2,
+      "z": 1,
+      "type": "oak_fence",
+      "metadata": 0,
+      "state": "minecraft:oak_fence[]"
+    },
+    {
+      "x": 13,
+      "y": 2,
+      "z": 1,
+      "type": "rose_bush",
+      "metadata": 0,
+      "state": "minecraft:rose_bush[upper_block_bit=false]"
+    },
+    {
+      "x": 17,
+      "y": 2,
+      "z": 1,
+      "type": "rose_bush",
+      "metadata": 0,
+      "state": "minecraft:rose_bush[upper_block_bit=true]"
+    },
+    {
+      "x": 6,
+      "y": 2,
+      "z": 2,
+      "type": "oxeye_daisy",
+      "metadata": 0,
+      "state": "minecraft:oxeye_daisy[]"
+    },
+    {
+      "x": 7,
+      "y": 2,
+      "z": 2,
+      "type": "glass_pane",
+      "metadata": 0,
+      "state": "minecraft:glass_pane[]"
+    },
+    {
+      "x": 11,
+      "y": 2,
+      "z": 2,
+      "type": "glass_pane",
+      "metadata": 0,
+      "state": "minecraft:glass_pane[]"
+    },
+    {
+      "x": 12,
+      "y": 2,
+      "z": 2,
+      "type": "rose_bush",
+      "metadata": 0,
+      "state": "minecraft:rose_bush[upper_block_bit=true]"
+    },
+    {
+      "x": 1,
+      "y": 2,
+      "z": 3,
+      "type": "lantern",
+      "metadata": 0,
+      "state": "minecraft:lantern[hanging=false]"
+    },
+    {
+      "x": 6,
+      "y": 2,
+      "z": 3,
+      "type": "azure_bluet",
+      "metadata": 0,
+      "state": "minecraft:azure_bluet[]"
+    },
+    {
+      "x": 7,
+      "y": 2,
+      "z": 3,
+      "type": "oak_planks",
+      "metadata": 0,
+      "state": "minecraft:oak_planks[]"
+    },
+    {
+      "x": 8,
+      "y": 2,
+      "z": 3,
+      "type": "ladder",
+      "metadata": 0,
+      "state": "minecraft:ladder[facing_direction=5]"
+    },
+    {
+      "x": 11,
+      "y": 2,
+      "z": 3,
+      "type": "oak_planks",
+      "metadata": 0,
+      "state": "minecraft:oak_planks[]"
+    },
+    {
+      "x": 7,
+      "y": 2,
+      "z": 4,
+      "type": "glass_pane",
+      "metadata": 0,
+      "state": "minecraft:glass_pane[]"
+    },
+    {
+      "x": 8,
+      "y": 2,
+      "z": 4,
+      "type": "cake",
+      "metadata": 0,
+      "state": "minecraft:cake[bite_counter=0]"
+    },
+    {
+      "x": 10,
+      "y": 2,
+      "z": 4,
+      "type": "lantern",
+      "metadata": 0,
+      "state": "minecraft:lantern[hanging=false]"
+    },
+    {
+      "x": 11,
+      "y": 2,
+      "z": 4,
+      "type": "glass_pane",
+      "metadata": 0,
+      "state": "minecraft:glass_pane[]"
+    },
+    {
+      "x": 12,
+      "y": 2,
+      "z": 4,
+      "type": "tall_grass",
+      "metadata": 0,
+      "state": "minecraft:tall_grass[upper_block_bit=true]"
+    },
+    {
+      "x": 7,
+      "y": 2,
+      "z": 5,
+      "type": "stripped_dark_oak_wood",
+      "metadata": 0,
+      "state": "minecraft:stripped_dark_oak_wood[pillar_axis=y]"
+    },
+    {
+      "x": 8,
+      "y": 2,
+      "z": 5,
+      "type": "oak_planks",
+      "metadata": 0,
+      "state": "minecraft:oak_planks[]"
+    },
+    {
+      "x": 9,
+      "y": 2,
+      "z": 5,
+      "type": "spruce_door",
+      "metadata": 0,
+      "state": "minecraft:spruce_door[door_hinge_bit=false,minecraft:cardinal_direction=west,open_bit=false,upper_block_bit=true]"
+    },
+    {
+      "x": 10,
+      "y": 2,
+      "z": 5,
+      "type": "oak_planks",
+      "metadata": 0,
+      "state": "minecraft:oak_planks[]"
+    },
+    {
+      "x": 11,
+      "y": 2,
+      "z": 5,
+      "type": "stripped_dark_oak_wood",
+      "metadata": 0,
+      "state": "minecraft:stripped_dark_oak_wood[pillar_axis=y]"
+    },
+    {
+      "x": 11,
+      "y": 2,
+      "z": 6,
+      "type": "lantern",
+      "metadata": 0,
+      "state": "minecraft:lantern[hanging=false]"
+    },
+    {
+      "x": 5,
+      "y": 3,
+      "z": 0,
+      "type": "moss_block",
+      "metadata": 0,
+      "state": "minecraft:moss_block[]"
+    },
+    {
+      "x": 6,
+      "y": 3,
+      "z": 0,
+      "type": "moss_block",
+      "metadata": 0,
+      "state": "minecraft:moss_block[]"
+    },
+    {
+      "x": 12,
+      "y": 3,
+      "z": 0,
+      "type": "dirt",
+      "metadata": 0,
+      "state": "minecraft:dirt[]"
+    },
+    {
+      "x": 7,
+      "y": 3,
+      "z": 1,
+      "type": "stripped_dark_oak_wood",
+      "metadata": 0,
+      "state": "minecraft:stripped_dark_oak_wood[pillar_axis=y]"
+    },
+    {
+      "x": 8,
+      "y": 3,
+      "z": 1,
+      "type": "glass_pane",
+      "metadata": 0,
+      "state": "minecraft:glass_pane[]"
+    },
+    {
+      "x": 9,
+      "y": 3,
+      "z": 1,
+      "type": "oak_planks",
+      "metadata": 0,
+      "state": "minecraft:oak_planks[]"
+    },
+    {
+      "x": 10,
+      "y": 3,
+      "z": 1,
+      "type": "glass_pane",
+      "metadata": 0,
+      "state": "minecraft:glass_pane[]"
+    },
+    {
+      "x": 11,
+      "y": 3,
+      "z": 1,
+      "type": "stripped_dark_oak_wood",
+      "metadata": 0,
+      "state": "minecraft:stripped_dark_oak_wood[pillar_axis=y]"
+    },
+    {
+      "x": 13,
+      "y": 3,
+      "z": 1,
+      "type": "rose_bush",
+      "metadata": 0,
+      "state": "minecraft:rose_bush[upper_block_bit=true]"
+    },
+    {
+      "x": 7,
+      "y": 3,
+      "z": 2,
+      "type": "oak_stairs",
+      "metadata": 0,
+      "state": "minecraft:oak_stairs[upside_down_bit=true,weirdo_direction=0]"
+    },
+    {
+      "x": 8,
+      "y": 3,
+      "z": 2,
+      "type": "spruce_trapdoor",
+      "metadata": 0,
+      "state": "minecraft:spruce_trapdoor[direction=1,open_bit=false,upside_down_bit=true]"
+    },
+    {
+      "x": 9,
+      "y": 3,
+      "z": 2,
+      "type": "spruce_trapdoor",
+      "metadata": 0,
+      "state": "minecraft:spruce_trapdoor[direction=1,open_bit=false,upside_down_bit=true]"
+    },
+    {
+      "x": 10,
+      "y": 3,
+      "z": 2,
+      "type": "spruce_trapdoor",
+      "metadata": 0,
+      "state": "minecraft:spruce_trapdoor[direction=1,open_bit=false,upside_down_bit=true]"
+    },
+    {
+      "x": 11,
+      "y": 3,
+      "z": 2,
+      "type": "oak_stairs",
+      "metadata": 0,
+      "state": "minecraft:oak_stairs[upside_down_bit=true,weirdo_direction=1]"
+    },
+    {
+      "x": 7,
+      "y": 3,
+      "z": 3,
+      "type": "oak_planks",
+      "metadata": 0,
+      "state": "minecraft:oak_planks[]"
+    },
+    {
+      "x": 8,
+      "y": 3,
+      "z": 3,
+      "type": "spruce_trapdoor",
+      "metadata": 0,
+      "state": "minecraft:spruce_trapdoor[direction=0,open_bit=false,upside_down_bit=true]"
+    },
+    {
+      "x": 9,
+      "y": 3,
+      "z": 3,
+      "type": "spruce_trapdoor",
+      "metadata": 0,
+      "state": "minecraft:spruce_trapdoor[direction=1,open_bit=false,upside_down_bit=true]"
+    },
+    {
+      "x": 10,
+      "y": 3,
+      "z": 3,
+      "type": "spruce_trapdoor",
+      "metadata": 0,
+      "state": "minecraft:spruce_trapdoor[direction=1,open_bit=false,upside_down_bit=true]"
+    },
+    {
+      "x": 11,
+      "y": 3,
+      "z": 3,
+      "type": "oak_planks",
+      "metadata": 0,
+      "state": "minecraft:oak_planks[]"
+    },
+    {
+      "x": 7,
+      "y": 3,
+      "z": 4,
+      "type": "oak_stairs",
+      "metadata": 0,
+      "state": "minecraft:oak_stairs[upside_down_bit=true,weirdo_direction=0]"
+    },
+    {
+      "x": 8,
+      "y": 3,
+      "z": 4,
+      "type": "spruce_trapdoor",
+      "metadata": 0,
+      "state": "minecraft:spruce_trapdoor[direction=1,open_bit=false,upside_down_bit=true]"
+    },
+    {
+      "x": 9,
+      "y": 3,
+      "z": 4,
+      "type": "spruce_trapdoor",
+      "metadata": 0,
+      "state": "minecraft:spruce_trapdoor[direction=1,open_bit=false,upside_down_bit=true]"
+    },
+    {
+      "x": 10,
+      "y": 3,
+      "z": 4,
+      "type": "spruce_trapdoor",
+      "metadata": 0,
+      "state": "minecraft:spruce_trapdoor[direction=1,open_bit=false,upside_down_bit=true]"
+    },
+    {
+      "x": 11,
+      "y": 3,
+      "z": 4,
+      "type": "oak_stairs",
+      "metadata": 0,
+      "state": "minecraft:oak_stairs[upside_down_bit=true,weirdo_direction=1]"
+    },
+    {
+      "x": 7,
+      "y": 3,
+      "z": 5,
+      "type": "stripped_dark_oak_wood",
+      "metadata": 0,
+      "state": "minecraft:stripped_dark_oak_wood[pillar_axis=y]"
+    },
+    {
+      "x": 8,
+      "y": 3,
+      "z": 5,
+      "type": "oak_planks",
+      "metadata": 0,
+      "state": "minecraft:oak_planks[]"
+    },
+    {
+      "x": 9,
+      "y": 3,
+      "z": 5,
+      "type": "oak_stairs",
+      "metadata": 0,
+      "state": "minecraft:oak_stairs[upside_down_bit=true,weirdo_direction=3]"
+    },
+    {
+      "x": 10,
+      "y": 3,
+      "z": 5,
+      "type": "oak_planks",
+      "metadata": 0,
+      "state": "minecraft:oak_planks[]"
+    },
+    {
+      "x": 11,
+      "y": 3,
+      "z": 5,
+      "type": "stripped_dark_oak_wood",
+      "metadata": 0,
+      "state": "minecraft:stripped_dark_oak_wood[pillar_axis=y]"
+    },
+    {
+      "x": 6,
+      "y": 4,
+      "z": 0,
+      "type": "stone_brick_stairs",
+      "metadata": 0,
+      "state": "minecraft:stone_brick_stairs[upside_down_bit=false,weirdo_direction=0]"
+    },
+    {
+      "x": 12,
+      "y": 4,
+      "z": 0,
+      "type": "stone_brick_stairs",
+      "metadata": 0,
+      "state": "minecraft:stone_brick_stairs[upside_down_bit=false,weirdo_direction=1]"
+    },
+    {
+      "x": 6,
+      "y": 4,
+      "z": 1,
+      "type": "stone_brick_stairs",
+      "metadata": 0,
+      "state": "minecraft:stone_brick_stairs[upside_down_bit=false,weirdo_direction=0]"
+    },
+    {
+      "x": 7,
+      "y": 4,
+      "z": 1,
+      "type": "stripped_dark_oak_wood",
+      "metadata": 0,
+      "state": "minecraft:stripped_dark_oak_wood[pillar_axis=y]"
+    },
+    {
+      "x": 8,
+      "y": 4,
+      "z": 1,
+      "type": "oak_planks",
+      "metadata": 0,
+      "state": "minecraft:oak_planks[]"
+    },
+    {
+      "x": 9,
+      "y": 4,
+      "z": 1,
+      "type": "oak_planks",
+      "metadata": 0,
+      "state": "minecraft:oak_planks[]"
+    },
+    {
+      "x": 10,
+      "y": 4,
+      "z": 1,
+      "type": "oak_planks",
+      "metadata": 0,
+      "state": "minecraft:oak_planks[]"
+    },
+    {
+      "x": 11,
+      "y": 4,
+      "z": 1,
+      "type": "stripped_dark_oak_wood",
+      "metadata": 0,
+      "state": "minecraft:stripped_dark_oak_wood[pillar_axis=y]"
+    },
+    {
+      "x": 12,
+      "y": 4,
+      "z": 1,
+      "type": "stone_brick_stairs",
+      "metadata": 0,
+      "state": "minecraft:stone_brick_stairs[upside_down_bit=false,weirdo_direction=1]"
+    },
+    {
+      "x": 6,
+      "y": 4,
+      "z": 2,
+      "type": "stone_brick_stairs",
+      "metadata": 0,
+      "state": "minecraft:stone_brick_stairs[upside_down_bit=false,weirdo_direction=0]"
+    },
+    {
+      "x": 7,
+      "y": 4,
+      "z": 2,
+      "type": "oak_planks",
+      "metadata": 0,
+      "state": "minecraft:oak_planks[]"
+    },
+    {
+      "x": 10,
+      "y": 4,
+      "z": 2,
+      "type": "bed",
+      "metadata": 0,
+      "state": "minecraft:bed[direction=2,head_piece_bit=true,occupied_bit=false]"
+    },
+    {
+      "x": 11,
+      "y": 4,
+      "z": 2,
+      "type": "oak_planks",
+      "metadata": 0,
+      "state": "minecraft:oak_planks[]"
+    },
+    {
+      "x": 12,
+      "y": 4,
+      "z": 2,
+      "type": "stone_brick_stairs",
+      "metadata": 0,
+      "state": "minecraft:stone_brick_stairs[upside_down_bit=false,weirdo_direction=1]"
+    },
+    {
+      "x": 6,
+      "y": 4,
+      "z": 3,
+      "type": "stone_brick_stairs",
+      "metadata": 0,
+      "state": "minecraft:stone_brick_stairs[upside_down_bit=false,weirdo_direction=0]"
+    },
+    {
+      "x": 7,
+      "y": 4,
+      "z": 3,
+      "type": "oak_planks",
+      "metadata": 0,
+      "state": "minecraft:oak_planks[]"
+    },
+    {
+      "x": 10,
+      "y": 4,
+      "z": 3,
+      "type": "bed",
+      "metadata": 0,
+      "state": "minecraft:bed[direction=2,head_piece_bit=false,occupied_bit=false]"
+    },
+    {
+      "x": 11,
+      "y": 4,
+      "z": 3,
+      "type": "oak_planks",
+      "metadata": 0,
+      "state": "minecraft:oak_planks[]"
+    },
+    {
+      "x": 12,
+      "y": 4,
+      "z": 3,
+      "type": "stone_brick_stairs",
+      "metadata": 0,
+      "state": "minecraft:stone_brick_stairs[upside_down_bit=false,weirdo_direction=1]"
+    },
+    {
+      "x": 6,
+      "y": 4,
+      "z": 4,
+      "type": "stone_brick_stairs",
+      "metadata": 0,
+      "state": "minecraft:stone_brick_stairs[upside_down_bit=false,weirdo_direction=0]"
+    },
+    {
+      "x": 7,
+      "y": 4,
+      "z": 4,
+      "type": "oak_planks",
+      "metadata": 0,
+      "state": "minecraft:oak_planks[]"
+    },
+    {
+      "x": 10,
+      "y": 4,
+      "z": 4,
+      "type": "ender_chest",
+      "metadata": 0,
+      "state": "minecraft:ender_chest[minecraft:cardinal_direction=west]"
+    },
+    {
+      "x": 11,
+      "y": 4,
+      "z": 4,
+      "type": "oak_planks",
+      "metadata": 0,
+      "state": "minecraft:oak_planks[]"
+    },
+    {
+      "x": 12,
+      "y": 4,
+      "z": 4,
+      "type": "stone_brick_stairs",
+      "metadata": 0,
+      "state": "minecraft:stone_brick_stairs[upside_down_bit=false,weirdo_direction=1]"
+    },
+    {
+      "x": 6,
+      "y": 4,
+      "z": 5,
+      "type": "stone_brick_stairs",
+      "metadata": 0,
+      "state": "minecraft:stone_brick_stairs[upside_down_bit=false,weirdo_direction=0]"
+    },
+    {
+      "x": 7,
+      "y": 4,
+      "z": 5,
+      "type": "stripped_dark_oak_wood",
+      "metadata": 0,
+      "state": "minecraft:stripped_dark_oak_wood[pillar_axis=y]"
+    },
+    {
+      "x": 8,
+      "y": 4,
+      "z": 5,
+      "type": "oak_planks",
+      "metadata": 0,
+      "state": "minecraft:oak_planks[]"
+    },
+    {
+      "x": 9,
+      "y": 4,
+      "z": 5,
+      "type": "glass_pane",
+      "metadata": 0,
+      "state": "minecraft:glass_pane[]"
+    },
+    {
+      "x": 10,
+      "y": 4,
+      "z": 5,
+      "type": "oak_planks",
+      "metadata": 0,
+      "state": "minecraft:oak_planks[]"
+    },
+    {
+      "x": 11,
+      "y": 4,
+      "z": 5,
+      "type": "stripped_dark_oak_wood",
+      "metadata": 0,
+      "state": "minecraft:stripped_dark_oak_wood[pillar_axis=y]"
+    },
+    {
+      "x": 12,
+      "y": 4,
+      "z": 5,
+      "type": "stone_brick_stairs",
+      "metadata": 0,
+      "state": "minecraft:stone_brick_stairs[upside_down_bit=false,weirdo_direction=1]"
+    },
+    {
+      "x": 6,
+      "y": 4,
+      "z": 6,
+      "type": "stone_brick_stairs",
+      "metadata": 0,
+      "state": "minecraft:stone_brick_stairs[upside_down_bit=false,weirdo_direction=0]"
+    },
+    {
+      "x": 7,
+      "y": 4,
+      "z": 6,
+      "type": "stone_brick_stairs",
+      "metadata": 0,
+      "state": "minecraft:stone_brick_stairs[upside_down_bit=true,weirdo_direction=1]"
+    },
+    {
+      "x": 11,
+      "y": 4,
+      "z": 6,
+      "type": "stone_brick_stairs",
+      "metadata": 0,
+      "state": "minecraft:stone_brick_stairs[upside_down_bit=true,weirdo_direction=0]"
+    },
+    {
+      "x": 12,
+      "y": 4,
+      "z": 6,
+      "type": "stone_brick_stairs",
+      "metadata": 0,
+      "state": "minecraft:stone_brick_stairs[upside_down_bit=false,weirdo_direction=1]"
+    },
+    {
+      "x": 7,
+      "y": 5,
+      "z": 0,
+      "type": "stone_brick_stairs",
+      "metadata": 0,
+      "state": "minecraft:stone_brick_stairs[upside_down_bit=false,weirdo_direction=0]"
+    },
+    {
+      "x": 11,
+      "y": 5,
+      "z": 0,
+      "type": "stone_brick_stairs",
+      "metadata": 0,
+      "state": "minecraft:stone_brick_stairs[upside_down_bit=false,weirdo_direction=1]"
+    },
+    {
+      "x": 7,
+      "y": 5,
+      "z": 1,
+      "type": "dark_oak_stairs",
+      "metadata": 0,
+      "state": "minecraft:dark_oak_stairs[upside_down_bit=false,weirdo_direction=0]"
+    },
+    {
+      "x": 8,
+      "y": 5,
+      "z": 1,
+      "type": "oak_planks",
+      "metadata": 0,
+      "state": "minecraft:oak_planks[]"
+    },
+    {
+      "x": 9,
+      "y": 5,
+      "z": 1,
+      "type": "oak_planks",
+      "metadata": 0,
+      "state": "minecraft:oak_planks[]"
+    },
+    {
+      "x": 10,
+      "y": 5,
+      "z": 1,
+      "type": "oak_planks",
+      "metadata": 0,
+      "state": "minecraft:oak_planks[]"
+    },
+    {
+      "x": 11,
+      "y": 5,
+      "z": 1,
+      "type": "dark_oak_stairs",
+      "metadata": 0,
+      "state": "minecraft:dark_oak_stairs[upside_down_bit=false,weirdo_direction=1]"
+    },
+    {
+      "x": 7,
+      "y": 5,
+      "z": 2,
+      "type": "dark_oak_stairs",
+      "metadata": 0,
+      "state": "minecraft:dark_oak_stairs[upside_down_bit=false,weirdo_direction=0]"
+    },
+    {
+      "x": 11,
+      "y": 5,
+      "z": 2,
+      "type": "dark_oak_stairs",
+      "metadata": 0,
+      "state": "minecraft:dark_oak_stairs[upside_down_bit=false,weirdo_direction=1]"
+    },
+    {
+      "x": 7,
+      "y": 5,
+      "z": 3,
+      "type": "dark_oak_stairs",
+      "metadata": 0,
+      "state": "minecraft:dark_oak_stairs[upside_down_bit=false,weirdo_direction=0]"
+    },
+    {
+      "x": 11,
+      "y": 5,
+      "z": 3,
+      "type": "dark_oak_stairs",
+      "metadata": 0,
+      "state": "minecraft:dark_oak_stairs[upside_down_bit=false,weirdo_direction=1]"
+    },
+    {
+      "x": 7,
+      "y": 5,
+      "z": 4,
+      "type": "dark_oak_stairs",
+      "metadata": 0,
+      "state": "minecraft:dark_oak_stairs[upside_down_bit=false,weirdo_direction=0]"
+    },
+    {
+      "x": 9,
+      "y": 5,
+      "z": 4,
+      "type": "wall_banner",
+      "metadata": 0,
+      "state": "minecraft:wall_banner[facing_direction=2]"
+    },
+    {
+      "x": 11,
+      "y": 5,
+      "z": 4,
+      "type": "dark_oak_stairs",
+      "metadata": 0,
+      "state": "minecraft:dark_oak_stairs[upside_down_bit=false,weirdo_direction=1]"
+    },
+    {
+      "x": 7,
+      "y": 5,
+      "z": 5,
+      "type": "dark_oak_stairs",
+      "metadata": 0,
+      "state": "minecraft:dark_oak_stairs[upside_down_bit=false,weirdo_direction=0]"
+    },
+    {
+      "x": 8,
+      "y": 5,
+      "z": 5,
+      "type": "oak_planks",
+      "metadata": 0,
+      "state": "minecraft:oak_planks[]"
+    },
+    {
+      "x": 9,
+      "y": 5,
+      "z": 5,
+      "type": "oak_stairs",
+      "metadata": 0,
+      "state": "minecraft:oak_stairs[upside_down_bit=true,weirdo_direction=3]"
+    },
+    {
+      "x": 10,
+      "y": 5,
+      "z": 5,
+      "type": "oak_planks",
+      "metadata": 0,
+      "state": "minecraft:oak_planks[]"
+    },
+    {
+      "x": 11,
+      "y": 5,
+      "z": 5,
+      "type": "dark_oak_stairs",
+      "metadata": 0,
+      "state": "minecraft:dark_oak_stairs[upside_down_bit=false,weirdo_direction=1]"
+    },
+    {
+      "x": 7,
+      "y": 5,
+      "z": 6,
+      "type": "stone_brick_stairs",
+      "metadata": 0,
+      "state": "minecraft:stone_brick_stairs[upside_down_bit=false,weirdo_direction=0]"
+    },
+    {
+      "x": 8,
+      "y": 5,
+      "z": 6,
+      "type": "stone_brick_stairs",
+      "metadata": 0,
+      "state": "minecraft:stone_brick_stairs[upside_down_bit=true,weirdo_direction=1]"
+    },
+    {
+      "x": 10,
+      "y": 5,
+      "z": 6,
+      "type": "stone_brick_stairs",
+      "metadata": 0,
+      "state": "minecraft:stone_brick_stairs[upside_down_bit=true,weirdo_direction=0]"
+    },
+    {
+      "x": 11,
+      "y": 5,
+      "z": 6,
+      "type": "stone_brick_stairs",
+      "metadata": 0,
+      "state": "minecraft:stone_brick_stairs[upside_down_bit=false,weirdo_direction=1]"
+    },
+    {
+      "x": 8,
+      "y": 6,
+      "z": 0,
+      "type": "stone_brick_stairs",
+      "metadata": 0,
+      "state": "minecraft:stone_brick_stairs[upside_down_bit=false,weirdo_direction=0]"
+    },
+    {
+      "x": 10,
+      "y": 6,
+      "z": 0,
+      "type": "stone_brick_stairs",
+      "metadata": 0,
+      "state": "minecraft:stone_brick_stairs[upside_down_bit=false,weirdo_direction=1]"
+    },
+    {
+      "x": 8,
+      "y": 6,
+      "z": 1,
+      "type": "dark_oak_stairs",
+      "metadata": 0,
+      "state": "minecraft:dark_oak_stairs[upside_down_bit=false,weirdo_direction=0]"
+    },
+    {
+      "x": 9,
+      "y": 6,
+      "z": 1,
+      "type": "oak_planks",
+      "metadata": 0,
+      "state": "minecraft:oak_planks[]"
+    },
+    {
+      "x": 10,
+      "y": 6,
+      "z": 1,
+      "type": "dark_oak_stairs",
+      "metadata": 0,
+      "state": "minecraft:dark_oak_stairs[upside_down_bit=false,weirdo_direction=1]"
+    },
+    {
+      "x": 8,
+      "y": 6,
+      "z": 2,
+      "type": "dark_oak_stairs",
+      "metadata": 0,
+      "state": "minecraft:dark_oak_stairs[upside_down_bit=false,weirdo_direction=0]"
+    },
+    {
+      "x": 10,
+      "y": 6,
+      "z": 2,
+      "type": "dark_oak_stairs",
+      "metadata": 0,
+      "state": "minecraft:dark_oak_stairs[upside_down_bit=false,weirdo_direction=1]"
+    },
+    {
+      "x": 8,
+      "y": 6,
+      "z": 3,
+      "type": "dark_oak_stairs",
+      "metadata": 0,
+      "state": "minecraft:dark_oak_stairs[upside_down_bit=false,weirdo_direction=0]"
+    },
+    {
+      "x": 10,
+      "y": 6,
+      "z": 3,
+      "type": "dark_oak_stairs",
+      "metadata": 0,
+      "state": "minecraft:dark_oak_stairs[upside_down_bit=false,weirdo_direction=1]"
+    },
+    {
+      "x": 8,
+      "y": 6,
+      "z": 4,
+      "type": "dark_oak_stairs",
+      "metadata": 0,
+      "state": "minecraft:dark_oak_stairs[upside_down_bit=false,weirdo_direction=0]"
+    },
+    {
+      "x": 10,
+      "y": 6,
+      "z": 4,
+      "type": "dark_oak_stairs",
+      "metadata": 0,
+      "state": "minecraft:dark_oak_stairs[upside_down_bit=false,weirdo_direction=1]"
+    },
+    {
+      "x": 8,
+      "y": 6,
+      "z": 5,
+      "type": "dark_oak_stairs",
+      "metadata": 0,
+      "state": "minecraft:dark_oak_stairs[upside_down_bit=false,weirdo_direction=0]"
+    },
+    {
+      "x": 9,
+      "y": 6,
+      "z": 5,
+      "type": "oak_planks",
+      "metadata": 0,
+      "state": "minecraft:oak_planks[]"
+    },
+    {
+      "x": 10,
+      "y": 6,
+      "z": 5,
+      "type": "dark_oak_stairs",
+      "metadata": 0,
+      "state": "minecraft:dark_oak_stairs[upside_down_bit=false,weirdo_direction=1]"
+    },
+    {
+      "x": 8,
+      "y": 6,
+      "z": 6,
+      "type": "stone_brick_stairs",
+      "metadata": 0,
+      "state": "minecraft:stone_brick_stairs[upside_down_bit=false,weirdo_direction=0]"
+    },
+    {
+      "x": 9,
+      "y": 6,
+      "z": 6,
+      "type": "stone_brick_stairs",
+      "metadata": 0,
+      "state": "minecraft:stone_brick_stairs[upside_down_bit=true,weirdo_direction=3]"
+    },
+    {
+      "x": 10,
+      "y": 6,
+      "z": 6,
+      "type": "stone_brick_stairs",
+      "metadata": 0,
+      "state": "minecraft:stone_brick_stairs[upside_down_bit=false,weirdo_direction=1]"
+    },
+    {
+      "x": 9,
+      "y": 7,
+      "z": 0,
+      "type": "stone_brick_slab",
+      "metadata": 0,
+      "state": "minecraft:stone_brick_slab[minecraft:vertical_half=bottom]"
+    },
+    {
+      "x": 9,
+      "y": 7,
+      "z": 1,
+      "type": "dark_oak_slab",
+      "metadata": 0,
+      "state": "minecraft:dark_oak_slab[minecraft:vertical_half=bottom]"
+    },
+    {
+      "x": 9,
+      "y": 7,
+      "z": 2,
+      "type": "dark_oak_slab",
+      "metadata": 0,
+      "state": "minecraft:dark_oak_slab[minecraft:vertical_half=bottom]"
+    },
+    {
+      "x": 9,
+      "y": 7,
+      "z": 3,
+      "type": "dark_oak_slab",
+      "metadata": 0,
+      "state": "minecraft:dark_oak_slab[minecraft:vertical_half=bottom]"
+    },
+    {
+      "x": 9,
+      "y": 7,
+      "z": 4,
+      "type": "dark_oak_slab",
+      "metadata": 0,
+      "state": "minecraft:dark_oak_slab[minecraft:vertical_half=bottom]"
+    },
+    {
+      "x": 9,
+      "y": 7,
+      "z": 5,
+      "type": "dark_oak_slab",
+      "metadata": 0,
+      "state": "minecraft:dark_oak_slab[minecraft:vertical_half=bottom]"
+    },
+    {
+      "x": 9,
+      "y": 7,
+      "z": 6,
+      "type": "stone_brick_slab",
+      "metadata": 0,
+      "state": "minecraft:stone_brick_slab[minecraft:vertical_half=bottom]"
+    }
+  ],
+  "features": {}
+}

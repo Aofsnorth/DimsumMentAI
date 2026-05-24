@@ -4,16 +4,25 @@
 
 # --- Server Settings ---
 server:
-  address: "127.0.0.1:19132"       # Server IP:Port
-  offline: true                     # true = no Xbox Live auth (local server)
+  host: "127.0.0.1"
+  port: 19132
+  offline: true # true = no Xbox Live auth (local server)
 
 # --- Bot Identity ---
 bot:
-  name: "KiritoBot"                 # In-game display name
+  name: "Luna" # In-game display name
 
 # --- Skin & Geometry ---
 skin:
-  image_path: "imports/skins/image/kirito-kazuto-kirigaya-sword-art-onlinesao-hero-boy-black-swordsman-anime.png"
-  geometry_path: "imports/geometry/mobs.json"
-  geometry_name: "geometry.humanoid.customSlim"
-  arm_size: "slim"                  # "slim" (Alex) or "wide" (Steve)
+  image_path: "imports/skins/image/Anime-thing-on-planetminecraft-com.png"
+  arm_size: "slim" # "slim" (Alex) or "wide" (Steve)
+
+# --- AI & LLM Settings ---
+ai:
+  provider: "nvidia" # "nvidia" or "none"
+  model: "openai/gpt-oss-120b"
+  api_key: "" # Leave empty to load from NVIDIA_API_KEY environment variable
+  main_player: ".OnyxStygian" # Primary player/owner username
+  respond_only_to_linked_player: false
+  respond_only_when_tagged: false # true = only respond when tagged/named in chat (e.g. Luna or @Luna)
+  custom_personality: "" # Custom LLM personality prompt override (leave empty to use default)

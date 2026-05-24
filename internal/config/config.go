@@ -1,14 +1,22 @@
 package config
 
+import "fmt"
+
 type Config struct {
 	Server ServerConfig `yaml:"server"`
 	Bot    BotConfig    `yaml:"bot"`
 	Skin   SkinConfig   `yaml:"skin"`
+	AI     AIConfig     `yaml:"ai"`
 }
 
 type ServerConfig struct {
-	Address string `yaml:"address"`
+	Host    string `yaml:"host"`
+	Port    int    `yaml:"port"`
 	Offline bool   `yaml:"offline"`
+}
+
+func (s ServerConfig) Address() string {
+	return s.Host + ":" + fmt.Sprint(s.Port)
 }
 
 type BotConfig struct {
@@ -17,7 +25,15 @@ type BotConfig struct {
 
 type SkinConfig struct {
 	ImagePath    string `yaml:"image_path"`
-	GeometryPath string `yaml:"geometry_path"`
-	GeometryName string `yaml:"geometry_name"`
 	ArmSize      string `yaml:"arm_size"`
+}
+
+type AIConfig struct {
+	Provider                  string `yaml:"provider"`
+	Model                     string `yaml:"model"`
+	ApiKey                    string `yaml:"api_key"`
+	MainPlayer                string `yaml:"main_player"`
+	RespondOnlyToLinkedPlayer bool   `yaml:"respond_only_to_linked_player"`
+	RespondOnlyWhenTagged     bool   `yaml:"respond_only_when_tagged"`
+	CustomPersonality         string `yaml:"custom_personality"`
 }

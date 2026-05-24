@@ -10,6 +10,7 @@ import (
 	"reflect"
 	"syscall"
 
+	"bedrock-ai/internal/ai"
 	"bedrock-ai/internal/bot"
 	"bedrock-ai/internal/config"
 	"bedrock-ai/internal/connection"
@@ -17,6 +18,7 @@ import (
 	"bedrock-ai/internal/handler"
 	"bedrock-ai/internal/skin"
 
+	"github.com/google/uuid"
 	"github.com/sandertv/gophertunnel/minecraft/protocol/login"
 	"github.com/sandertv/gophertunnel/minecraft/protocol/packet"
 )
@@ -39,40 +41,38 @@ func main() {
 	// --- Skin ---
 	logger.Info("loading skin",
 		slog.String("image", cfg.Skin.ImagePath),
-		slog.String("geometry", cfg.Skin.GeometryName),
 		slog.String("arm_size", cfg.Skin.ArmSize),
 	)
 
 	skinProvider := skin.NewProvider(cfg.Skin)
-	clientData, err := skinProvider.Provide()
+	assets, err := skinProvider.Provide()
 	if err != nil {
 		logger.Error("failed to load skin", slog.String("error", err.Error()))
 		os.Exit(1)
 	}
 
-	// Debug: verify skin data before sending
+	clientData := assets.ClientData
 	skinBytes, _ := base64.StdEncoding.DecodeString(clientData.SkinData)
 	patchBytes, _ := base64.StdEncoding.DecodeString(clientData.SkinResourcePatch)
 	logger.Info("skin data prepared",
 		slog.Int("rgba_bytes", len(skinBytes)),
 		slog.Int("width", clientData.SkinImageWidth),
 		slog.Int("height", clientData.SkinImageHeight),
-		slog.Int("expected_rgba", clientData.SkinImageWidth*clientData.SkinImageHeight*4),
 		slog.Bool("size_match", len(skinBytes) == clientData.SkinImageWidth*clientData.SkinImageHeight*4),
-		slog.String("skin_id", clientData.SkinID),
 		slog.String("arm_size", clientData.ArmSize),
 		slog.String("resource_patch", string(patchBytes)),
-		slog.Int("geometry_len", len(clientData.SkinGeometry)),
-		slog.Int("geometry_version_len", len(clientData.SkinGeometryVersion)),
+		slog.Int("geometry_json_len", len(assets.ProtocolSkin.SkinGeometry)),
 	)
 
-	// --- Identity ---
+	// --- Identity (fixed UUID so PlayerSkin can reference it) ---
+	playerUUID := uuid.New()
 	identityData := login.IdentityData{
+		Identity:    playerUUID.String(),
 		DisplayName: cfg.Bot.Name,
 	}
 	logger.Info("identity set",
 		slog.String("display_name", identityData.DisplayName),
-		slog.String("identity", identityData.Identity),
+		slog.String("uuid", identityData.Identity),
 	)
 
 	// --- Events ---
@@ -90,6 +90,21 @@ func main() {
 	// --- Connection ---
 	dialer := connection.NewDialer(cfg.Server, identityData, clientData)
 
+	// --- AI Services ---
+	var aiClient *ai.NvidiaClient
+	var throttler *ai.MessageThrottler
+
+	if cfg.AI.Provider == "nvidia" {
+		logger.Info("initializing Nvidia NIM LLM client",
+			slog.String("model", cfg.AI.Model),
+		)
+		aiClient = ai.NewNvidiaClient(cfg.AI.ApiKey, cfg.AI.Model)
+		if cfg.AI.CustomPersonality != "" {
+			aiClient.SetPersona(cfg.AI.CustomPersonality)
+		}
+		throttler = ai.DefaultThrottler()
+	}
+
 	// --- Bot ---
 	b, err := bot.New(
 		bot.WithLogger(logger),
@@ -97,6 +112,8 @@ func main() {
 		bot.WithRegistry(registry),
 		bot.WithEventBus(bus),
 		bot.WithName(cfg.Bot.Name),
+		bot.WithSkin(assets.ProtocolSkin, playerUUID),
+		bot.WithAI(aiClient, throttler, cfg.AI),
 	)
 	if err != nil {
 		logger.Error("failed to create bot", slog.String("error", err.Error()))
@@ -105,7 +122,7 @@ func main() {
 
 	logger.Info("starting bot",
 		slog.String("name", cfg.Bot.Name),
-		slog.String("address", cfg.Server.Address),
+		slog.String("address", cfg.Server.Address()),
 	)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)

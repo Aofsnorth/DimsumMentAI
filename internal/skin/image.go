@@ -7,6 +7,11 @@ import (
 	"os"
 )
 
+const (
+	StandardSkinWidth  = 64
+	StandardSkinHeight = 64
+)
+
 type ImageData struct {
 	RGBA   []byte
 	Width  int
@@ -27,15 +32,24 @@ func LoadImage(path string) (*ImageData, error) {
 
 	nrgba := ensureNRGBA(img)
 
-	expected := nrgba.Bounds().Dx() * nrgba.Bounds().Dy() * 4
+	w := nrgba.Bounds().Dx()
+	h := nrgba.Bounds().Dy()
+
+	// Validate standard Bedrock skin dimensions: 64x32, 64x64, or 128x128.
+	validSize := (w == 64 && h == 32) || (w == 64 && h == 64) || (w == 128 && h == 128)
+	if !validSize {
+		return nil, fmt.Errorf("invalid skin dimensions: %dx%d (only 64x32, 64x64, or 128x128 are supported)", w, h)
+	}
+
+	expected := w * h * 4
 	if len(nrgba.Pix) != expected {
 		return nil, fmt.Errorf("unexpected RGBA data size: got %d, expected %d", len(nrgba.Pix), expected)
 	}
 
 	return &ImageData{
 		RGBA:   nrgba.Pix,
-		Width:  nrgba.Bounds().Dx(),
-		Height: nrgba.Bounds().Dy(),
+		Width:  w,
+		Height: h,
 	}, nil
 }
 
