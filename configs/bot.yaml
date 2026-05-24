@@ -1,0 +1,19 @@
+# ============================================
+#  Minecraft Bedrock AI Bot Configuration
+# ============================================
+
+# --- Server Settings ---
+server:
+  address: "127.0.0.1:19132"       # Server IP:Port
+  offline: true                     # true = no Xbox Live auth (local server)
+
+# --- Bot Identity ---
+bot:
+  name: "KiritoBot"                 # In-game display name
+
+# --- Skin & Geometry ---
+skin:
+  image_path: "imports/skins/image/kirito-kazuto-kirigaya-sword-art-onlinesao-hero-boy-black-swordsman-anime.png"
+  geometry_path: "imports/geometry/mobs.json"
+  geometry_name: "geometry.humanoid.customSlim"
+  arm_size: "slim"                  # "slim" (Alex) or "wide" (Steve)

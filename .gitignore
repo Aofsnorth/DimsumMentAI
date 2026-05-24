@@ -1,5 +1,13 @@
-server
-.claude
-.vscode
-.kilo
+# Build artifacts
+*.exe
+
+# IDE / tooling
+.vscode/
+.claude/
+.kilo/
+
+# Server binaries
+server/
+
+# Worktrees
 import.worktrees/
