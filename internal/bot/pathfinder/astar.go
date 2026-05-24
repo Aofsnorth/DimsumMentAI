@@ -50,7 +50,7 @@ func FindPath(startNode, targetNode Node, world WorldModel) []Node {
 		Y: startNode.Y,
 		Z: startNode.Z,
 		G: 0,
-		H: Distance(startNode, targetNode),
+		H: HeuristicCost(startNode, targetNode),
 	}
 	start.F = start.G + start.H
 
@@ -59,7 +59,7 @@ func FindPath(startNode, targetNode Node, world WorldModel) []Node {
 
 	// Dynamic maxIterations based on distance to target
 	// For closer targets, use fewer iterations to avoid delays in follow mode
-	distanceToTarget := Distance(startNode, targetNode)
+	distanceToTarget := HeuristicCost(startNode, targetNode)
 	maxIterations := int32(2000)
 	if distanceToTarget < 20 {
 		maxIterations = 500 // Faster for short distances
@@ -69,7 +69,7 @@ func FindPath(startNode, targetNode Node, world WorldModel) []Node {
 	iterations := int32(0)
 
 	var bestNode *Node = start
-	var closestDistance float32 = Distance(*start, targetNode)
+	var closestDistance float32 = HeuristicCost(*start, targetNode)
 
 	for openSet.Len() > 0 && iterations < maxIterations {
 		iterations++
@@ -82,7 +82,7 @@ func FindPath(startNode, targetNode Node, world WorldModel) []Node {
 			return reconstructPath(current)
 		}
 
-		dist := Distance(*current, targetNode)
+		dist := HeuristicCost(*current, targetNode)
 		if dist < closestDistance {
 			closestDistance = dist
 			bestNode = current
@@ -104,7 +104,7 @@ func FindPath(startNode, targetNode Node, world WorldModel) []Node {
 					Y:      neighbor.Y,
 					Z:      neighbor.Z,
 					G:      tentativeG,
-					H:      Distance(neighbor, targetNode),
+					H:      HeuristicCost(neighbor, targetNode),
 					Parent: current,
 				}
 				newNode.F = newNode.G + newNode.H

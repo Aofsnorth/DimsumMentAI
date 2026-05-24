@@ -1,16 +1,16 @@
-# Build artifacts
-*.exe
-
-# IDE / tooling
-.vscode/
-.claude/
-.kilo/
-
-# Server binaries
-server/
-
-# Worktrees
-import.worktrees/
-
-# Credentials/Tokens
-configs/token.json
+```
+# Compiled and build artifacts
+*.o
+*.obj
+*.out
+# Dependencies
+vendor/
+# Logs and temp files
+*.log
+*.tmp
+*.swp
+# Environment
+.env
+.env.local
+.env.*
+```
