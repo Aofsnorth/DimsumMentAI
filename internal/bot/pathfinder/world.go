@@ -130,12 +130,16 @@ func (w *LocalWorldModel) GetNeighbors(node Node) []Node {
 	var neighbors []Node
 	cx, cy, cz := node.X, node.Y, node.Z
 
-	// 4 cardinal directions (North, South, East, West)
+	// 8 directions (4 cardinal + 4 diagonals) for smoother movement
 	offsets := []struct{ dx, dz int32 }{
-		{0, -1}, // North
-		{0, 1},  // South
-		{1, 0},  // East
-		{-1, 0}, // West
+		{0, -1},  // North
+		{0, 1},   // South
+		{1, 0},   // East
+		{-1, 0},  // West
+		{1, -1},  // Northeast
+		{1, 1},   // Southeast
+		{-1, 1},  // Southwest
+		{-1, -1}, // Northwest
 	}
 
 	for _, off := range offsets {
@@ -145,6 +149,16 @@ func (w *LocalWorldModel) GetNeighbors(node Node) []Node {
 		// Skip if target block or head height is a known hazard
 		if w.IsHazard(tx, cy, tz) || w.IsHazard(tx, cy+1, tz) {
 			continue
+		}
+
+		// For diagonal movement, ensure both adjacent cardinal blocks are walkable
+		// to prevent cutting through corners
+		if off.dx != 0 && off.dz != 0 {
+			// Check the two adjacent cardinal blocks
+			if w.IsSolid(cx+off.dx, cy, cz) || w.IsSolid(cx+off.dx, cy+1, cz) ||
+				w.IsSolid(cx, cy, cz+off.dz) || w.IsSolid(cx, cy+1, cz+off.dz) {
+				continue
+			}
 		}
 
 		// 1. Move straight (same height)

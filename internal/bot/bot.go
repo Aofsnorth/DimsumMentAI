@@ -517,7 +517,8 @@ func (b *Bot) sendInputLoop(ctx context.Context, gd minecraft.GameData) {
 			var targetPitch float32 = pitch
 
 			if mState == "follow" && tPlayer != "" {
-				// Follow mode: smoothly turn head towards the player's head height
+				// Follow mode: primarily look in direction of travel, occasionally glance at player
+				// This makes movement look more natural while still tracking the player
 				var targetHeadPos mgl32.Vec3
 				targetFound := false
 				if _, pos, ok := b.FindPlayer(tPlayer); ok {
@@ -525,9 +526,27 @@ func (b *Bot) sendInputLoop(ctx context.Context, gd minecraft.GameData) {
 					targetFound = true
 				}
 
-				if targetFound {
+				if dist > 0.1 {
+					// Primary: look in direction of travel for natural movement
+					yawRad := math.Atan2(float64(dz), float64(dx))
+					targetYaw = float32(yawRad*180/math.Pi) - 90
+					
+					// Calculate pitch based on terrain elevation ahead
+					dyH := nextTarget.Y() - (currentPos.Y() + 1.62)
+					distH := float32(math.Sqrt(float64(dx*dx + dz*dz)))
+					pitchRad := -math.Atan2(float64(dyH), float64(distH))
+					targetPitch = float32(pitchRad * 180 / math.Pi)
+					
+					// Clamp pitch to reasonable range for natural look
+					if targetPitch > 20 {
+						targetPitch = 20
+					} else if targetPitch < -20 {
+						targetPitch = -20
+					}
+				} else if targetFound && dist <= 0.1 {
+					// Only look at player when very close or stopped
 					dxH := targetHeadPos.X() - currentPos.X()
-					dyH := targetHeadPos.Y() - (currentPos.Y() + 1.62) // eye height of bot is ~1.62
+					dyH := targetHeadPos.Y() - (currentPos.Y() + 1.62)
 					dzH := targetHeadPos.Z() - currentPos.Z()
 					distH := float32(math.Sqrt(float64(dxH*dxH + dzH*dzH)))
 					if distH > 0.01 {
@@ -536,11 +555,6 @@ func (b *Bot) sendInputLoop(ctx context.Context, gd minecraft.GameData) {
 						pitchRad := -math.Atan2(float64(dyH), float64(distH))
 						targetPitch = float32(pitchRad * 180 / math.Pi)
 					}
-				} else if dist > 0.1 {
-					// Fallback to travel direction
-					yawRad := math.Atan2(float64(dz), float64(dx))
-					targetYaw = float32(yawRad*180/math.Pi) - 90
-					targetPitch = 0
 				}
 			} else if mState == "walk_to" {
 				// Walk mode: look smoothly towards direction of travel
