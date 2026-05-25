@@ -22,6 +22,7 @@ import (
 	"bedrock-ai/internal/event"
 	"bedrock-ai/internal/handler"
 
+	"github.com/df-mc/dragonfly/server/block/cube"
 	"github.com/go-gl/mathgl/mgl32"
 	"github.com/google/uuid"
 	"github.com/sandertv/gophertunnel/minecraft"
@@ -72,6 +73,7 @@ type Bot struct {
 
 	// A* Pathfinding
 	worldModel            *pathfinder.LocalWorldModel
+	worldCache            *WorldCache
 	currentPath           []pathfinder.Node
 	pathIndex             int
 	ticksStuck            int
@@ -116,6 +118,7 @@ func newBot(opts ...Option) (*Bot, error) {
 		health:              20,
 		hunger:              20,
 		worldModel:          pathfinder.NewLocalWorldModel(),
+		worldCache:          NewWorldCache(0, cube.Range{-64, 319}, nil), // Air is runtime ID 0 in most cases, but we will fix logger in Run
 		actors:              make(map[uint64]*entity.Info),
 		uniqueIDToRuntimeID: make(map[int64]uint64),
 	}
@@ -204,6 +207,9 @@ func (b *Bot) Run(ctx context.Context) error {
 	)
 
 	// Initialize subsystems
+	b.worldCache.logger = b.logger // Set logger since it was nil in newBot
+	b.worldModel.SetChunkQuerier(b.worldCache)
+
 	b.combatMgr = combat.NewCombatManager(b, b.logger)
 	b.threatDet = combat.NewThreatDetector(b, b.combatMgr, b.logger)
 	b.gatherer = gathering.NewResourceGatherer(b, b.logger)
@@ -249,6 +255,8 @@ func (b *Bot) Run(ctx context.Context) error {
 		}
 	}()
 
+	go b.chunkRequesterLoop(ctx)
+
 	return b.packetLoop(ctx)
 }
 
@@ -262,6 +270,61 @@ func (b *Bot) sendLoadingScreenDone() {
 		Type: packet.LoadingScreenTypeEnd,
 	})
 	b.logger.Info("sent loading screen packets")
+}
+
+func (b *Bot) chunkRequesterLoop(ctx context.Context) {
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+
+	// Track requested chunks to avoid spamming the server
+	requested := make(map[string]time.Time)
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			b.mu.Lock()
+			pos := b.pos
+			b.mu.Unlock()
+
+			chunkX := int32(math.Floor(float64(pos.X()) / 16.0))
+			chunkZ := int32(math.Floor(float64(pos.Z()) / 16.0))
+			dim := int32(0) // overworld
+
+			// Request chunks in a 3x3 grid around the bot
+			for dx := int32(-1); dx <= 1; dx++ {
+				for dz := int32(-1); dz <= 1; dz++ {
+					cx := chunkX + dx
+					cz := chunkZ + dz
+					k := fmt.Sprintf("%d,%d", cx, cz)
+
+					// Only request if not requested recently (e.g., within last 5 seconds)
+					if lastReq, ok := requested[k]; ok && time.Since(lastReq) < 5*time.Second {
+						continue
+					}
+
+					requested[k] = time.Now()
+
+					var offsets []protocol.SubChunkOffset
+					// Request all subchunks from Y=-64 to Y=319 (indices -4 to 24)
+					for y := int32(-4); y <= 25; y++ {
+						offsets = append(offsets, protocol.SubChunkOffset{0, int8(y), 0})
+					}
+
+					_ = b.conn.WritePacket(&packet.SubChunkRequest{
+						Dimension: dim,
+						Position: protocol.SubChunkPos{
+							cx,
+							0, // Center Y is relative
+							cz,
+						},
+						Offsets: offsets,
+					})
+				}
+			}
+		}
+	}
 }
 
 func (b *Bot) sendPlayerSkin() {
@@ -326,9 +389,11 @@ func (b *Bot) sendInputLoop(ctx context.Context, gd minecraft.GameData) {
 			if mState == "follow" && tPlayer != "" {
 				if _, pos, ok := b.FindPlayer(tPlayer); ok {
 					b.mu.Lock()
-					dx := pos.X() - b.targetPos.X()
-					dz := pos.Z() - b.targetPos.Z()
-					if dx*dx+dz*dz > 1.0 {
+					dxT := pos.X() - b.targetPos.X()
+					dzT := pos.Z() - b.targetPos.Z()
+					timeSinceRecalc := time.Since(b.lastPathRecalcTime)
+
+					if dxT*dxT+dzT*dzT > 4.0 && timeSinceRecalc > 500*time.Millisecond {
 						b.targetPos = pos
 						b.lastPathRecalcTime = time.Now()
 						b.mu.Unlock()
@@ -339,7 +404,6 @@ func (b *Bot) sendInputLoop(ctx context.Context, gd minecraft.GameData) {
 					}
 					tPos = b.targetPos
 
-					timeSinceRecalc := time.Since(b.lastPathRecalcTime)
 					hasPath := len(b.currentPath) > 0 && b.pathIndex < len(b.currentPath)
 					if (!hasPath || b.ticksStuck > 10) && timeSinceRecalc > 800*time.Millisecond {
 						b.lastPathRecalcTime = time.Now()
@@ -517,7 +581,7 @@ func (b *Bot) sendInputLoop(ctx context.Context, gd minecraft.GameData) {
 			var targetPitch float32 = pitch
 
 			if mState == "follow" && tPlayer != "" {
-				// Follow mode: smoothly turn head towards the player's head height
+				// Follow mode: look where we walk if moving, stare at player if close/stopped
 				var targetHeadPos mgl32.Vec3
 				targetFound := false
 				if _, pos, ok := b.FindPlayer(tPlayer); ok {
@@ -530,7 +594,16 @@ func (b *Bot) sendInputLoop(ctx context.Context, gd minecraft.GameData) {
 					dyH := targetHeadPos.Y() - (currentPos.Y() + 1.62) // eye height of bot is ~1.62
 					dzH := targetHeadPos.Z() - currentPos.Z()
 					distH := float32(math.Sqrt(float64(dxH*dxH + dzH*dzH)))
-					if distH > 0.01 {
+
+					if distH > 3.0 && dist > 0.1 {
+						// We are walking towards target but still far, look in direction of travel
+						yawRad := math.Atan2(float64(dz), float64(dx))
+						targetYaw = float32(yawRad*180/math.Pi) - 90
+						dyPath := nextTarget.Y() - (currentPos.Y() + 1.62)
+						pitchRad := -math.Atan2(float64(dyPath), float64(dist))
+						targetPitch = float32(pitchRad * 180 / math.Pi)
+					} else if distH > 0.01 {
+						// Close to player or standing still, stare at player
 						yawRad := math.Atan2(float64(dzH), float64(dxH))
 						targetYaw = float32(yawRad*180/math.Pi) - 90
 						pitchRad := -math.Atan2(float64(dyH), float64(distH))
@@ -741,6 +814,36 @@ func (b *Bot) packetLoop(ctx context.Context) error {
 		}
 
 		switch p := pk.(type) {
+		case *packet.LevelChunk:
+			b.worldCache.HandleLevelChunk(p)
+
+			// Request sub-chunks if the server prompts us to
+			if p.SubChunkCount == protocol.SubChunkRequestModeLimitless || p.SubChunkCount == protocol.SubChunkRequestModeLimited {
+				highestY := int32(25) // Default to standard max height subchunk (Y=319 is subchunk index 24, so up to 25)
+				if p.SubChunkCount == protocol.SubChunkRequestModeLimited {
+					highestY = int32(p.HighestSubChunk)
+				}
+
+				var offsets []protocol.SubChunkOffset
+				// Request subchunks from index -4 (Y=-64) up to highestY
+				for y := int32(-4); y <= highestY; y++ {
+					offsets = append(offsets, protocol.SubChunkOffset{0, int8(y), 0})
+				}
+
+				_ = b.conn.WritePacket(&packet.SubChunkRequest{
+					Dimension: p.Dimension,
+					Position: protocol.SubChunkPos{
+						p.Position[0],
+						0, // Center subchunk Y, offsets handle the rest
+						p.Position[1],
+					},
+					Offsets: offsets,
+				})
+			}
+
+		case *packet.SubChunk:
+			b.worldCache.HandleSubChunk(p)
+
 		case *packet.AddPlayer:
 			b.mu.Lock()
 			b.playerEntityIDs[p.Username] = p.EntityRuntimeID
@@ -768,7 +871,22 @@ func (b *Bot) packetLoop(ctx context.Context) error {
 					correctionDz := newPos.Z() - b.pos.Z()
 					correctionDist := math.Sqrt(float64(correctionDx*correctionDx + correctionDz*correctionDz))
 
-					if b.movementState == "idle" || correctionDist > 2.0 {
+					// Detect falling (server pulled us down significantly)
+					fell := b.pos.Y()-newPos.Y() > 0.4
+					if fell {
+						feetX := int32(math.Floor(float64(b.pos.X())))
+						feetY := int32(math.Floor(float64(b.pos.Y())))
+						feetZ := int32(math.Floor(float64(b.pos.Z())))
+
+						b.worldModel.SetSolid(feetX, feetY-1, feetZ, false)
+						b.logger.Warn("Bot fell! Marking block as hole", "x", feetX, "y", feetY-1, "z", feetZ)
+
+						if b.movementState != "idle" {
+							b.currentPath = nil
+						}
+					}
+
+					if b.movementState == "idle" || correctionDist > 2.0 || fell {
 						b.pos = newPos
 					}
 				} else {
@@ -783,6 +901,16 @@ func (b *Bot) packetLoop(ctx context.Context) error {
 			b.mu.Lock()
 			correctedPos := p.Position.Sub(mgl32.Vec3{0, 1.62, 0})
 			if correctedPos.Y() <= 320 && correctedPos.Y() >= -64 {
+				if b.pos.Y()-correctedPos.Y() > 0.4 {
+					feetX := int32(math.Floor(float64(b.pos.X())))
+					feetY := int32(math.Floor(float64(b.pos.Y())))
+					feetZ := int32(math.Floor(float64(b.pos.Z())))
+					b.worldModel.SetSolid(feetX, feetY-1, feetZ, false)
+					b.logger.Warn("Bot fell (correction)! Marking block as hole", "x", feetX, "y", feetY-1, "z", feetZ)
+					if b.movementState != "idle" {
+						b.currentPath = nil
+					}
+				}
 				b.pos = correctedPos
 			}
 			b.mu.Unlock()

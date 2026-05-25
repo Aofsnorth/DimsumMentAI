@@ -2,7 +2,6 @@ package pathfinder
 
 import (
 	"fmt"
-	"math"
 	"sync"
 )
 
@@ -12,10 +11,20 @@ type WorldModel interface {
 	GetNeighbors(node Node) []Node
 }
 
+// ChunkQuerier is the interface for querying actual block data from the chunk cache.
+// If the chunk at (x, y, z) is loaded, it returns (isAir, true).
+// If the chunk is not loaded, it returns (false, false).
+type ChunkQuerier interface {
+	IsBlockAir(x, y, z int32) (isAir bool, loaded bool)
+}
+
 type LocalWorldModel struct {
 	mu           sync.RWMutex
 	solidBlocks  map[string]bool
 	hazardBlocks map[string]bool
+
+	// Chunk cache for real block data from the server
+	chunkQuerier ChunkQuerier
 
 	// Pathfinder bounds for fallback solidity when chunk block data is empty
 	hasBounds bool
@@ -32,6 +41,13 @@ func NewLocalWorldModel() *LocalWorldModel {
 		solidBlocks:  make(map[string]bool),
 		hazardBlocks: make(map[string]bool),
 	}
+}
+
+// SetChunkQuerier sets the chunk cache querier for real block data lookups.
+func (w *LocalWorldModel) SetChunkQuerier(q ChunkQuerier) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.chunkQuerier = q
 }
 
 // SetPathBounds registers the start and target search coordinates to enable ground interpolation fallback.
@@ -51,59 +67,53 @@ func (w *LocalWorldModel) SetSolid(x, y, z int32, solid bool) {
 	if solid {
 		w.solidBlocks[k] = true
 	} else {
-		delete(w.solidBlocks, k)
+		// Explicitly mark as not-solid (false) so we know we've checked it
+		w.solidBlocks[k] = false
 	}
 }
 
 func (w *LocalWorldModel) IsSolid(x, y, z int32) bool {
 	w.mu.RLock()
 	defer w.mu.RUnlock()
+
+	// 1. Check explicit override map (from UpdateBlock packets, or manual SetSolid calls)
 	k := fmt.Sprintf("%d,%d,%d", x, y, z)
 	if val, ok := w.solidBlocks[k]; ok {
 		return val
 	}
 
-	// Fallback when we don't have block data from chunk packets
-	if !w.hasBounds {
-		// Default guess baseline - assume ground at y=62 (typical sea level)
-		// This is more conservative than y<70 for varied terrain
-		// But if y is very high (void), assume no solid blocks
-		if y > 320 {
-			return false // Void - no solid blocks
+	// 2. Query chunk cache for real block data from the server
+	if w.chunkQuerier != nil {
+		isAir, loaded := w.chunkQuerier.IsBlockAir(x, y, z)
+		if loaded {
+			// Block is solid if it is NOT air.
+			// (This is a simplification — water/lava are also not air but not solid walkable.
+			//  However, for basic pathfinding this is a massive improvement over guessing.)
+			return !isAir
 		}
+	}
+
+	// 3. Fallback: chunk not loaded. Treat as impassable so the bot won't walk
+	//    into unknown territory. This is the conservative approach.
+	//    However, if we're close to start/target positions we still need some
+	//    fallback so pathfinding can at least begin.
+	if y > 320 {
+		return false // Void
+	}
+
+	// If no bounds set, use simple sea-level assumption
+	if !w.hasBounds {
 		return y <= 62
 	}
 
-	// Calculate distance-based interpolated ground level at (x, z)
-	dx := float64(w.targetX - w.startX)
-	dz := float64(w.targetZ - w.startZ)
-	totDistSq := dx*dx + dz*dz
-
-	var groundY int32
-	if totDistSq < 0.01 {
-		groundY = w.targetY - 1
-	} else {
-		// Project the point (x, z) onto the line segment from start to target
-		px := float64(x - w.startX)
-		pz := float64(z - w.startZ)
-
-		t := (px*dx + pz*dz) / totDistSq
-		if t < 0 {
-			t = 0
-		} else if t > 1 {
-			t = 1
-		}
-
-		interpolatedY := float64(w.startY-1) + t*float64(w.targetY-w.startY)
-		groundY = int32(math.Round(interpolatedY))
+	// Conservative: if chunk is not loaded but we have bounds,
+	// assume a flat ground at the lower of start/target Y levels.
+	// This is only used as a last resort.
+	minY := w.startY - 1
+	if w.targetY-1 < minY {
+		minY = w.targetY - 1
 	}
-
-	// If in void (y > 320), assume no solid blocks to allow pathfinding to work
-	if y > 320 {
-		return false
-	}
-
-	return y <= groundY
+	return y <= minY
 }
 
 // SetHazard registers or removes a block as hazardous (lava, fire, void)
