@@ -71,24 +71,40 @@ func SendInputLoop(ctx context.Context, b *bot.Bot, gd minecraft.GameData) {
 			b.WorldModel.SetSolid(feetX, feetY+2, feetZ, false)
 			// ====================================
 
-			// === DETECT ACTIVE LADDER STATE ===
+			// === DETECT ACTIVE LADDER STATE & attached wall ===
 			isLadderActive := false
+			var ladderWallYaw float32 = -999
 			if b.WorldModel != nil {
+				b.Mu.Lock()
+				hasPathForLadder := len(b.CurrentPath) > 0 && b.PathIndex < len(b.CurrentPath)
+				var currNode pathfinder.Node
+				if hasPathForLadder {
+					currNode = b.CurrentPath[b.PathIndex]
+				}
+				b.Mu.Unlock()
+
+				var checkX, checkY, checkZ int32
+
 				if b.WorldModel.IsLadder(feetX, feetY, feetZ) || b.WorldModel.IsLadder(feetX, feetY+1, feetZ) {
 					isLadderActive = true
-				} else {
-					b.Mu.Lock()
-					hasPathForLadder := len(b.CurrentPath) > 0 && b.PathIndex < len(b.CurrentPath)
-					var currNode pathfinder.Node
-					if hasPathForLadder {
-						currNode = b.CurrentPath[b.PathIndex]
+					checkX, checkY, checkZ = feetX, feetY, feetZ
+				} else if hasPathForLadder {
+					if b.WorldModel.IsLadder(currNode.X, currNode.Y, currNode.Z) || b.WorldModel.IsLadder(currNode.X, currNode.Y-1, currNode.Z) {
+						isLadderActive = true
+						checkX, checkY, checkZ = currNode.X, currNode.Y, currNode.Z
 					}
-					b.Mu.Unlock()
+				}
 
-					if hasPathForLadder {
-						if b.WorldModel.IsLadder(currNode.X, currNode.Y, currNode.Z) || b.WorldModel.IsLadder(currNode.X, currNode.Y-1, currNode.Z) {
-							isLadderActive = true
-						}
+				if isLadderActive {
+					// Check adjacent blocks to find which one is solid (wall attached to the ladder)
+					if b.WorldModel.IsSolid(checkX+1, checkY, checkZ) {
+						ladderWallYaw = -90 // East
+					} else if b.WorldModel.IsSolid(checkX-1, checkY, checkZ) {
+						ladderWallYaw = 90 // West
+					} else if b.WorldModel.IsSolid(checkX, checkY, checkZ+1) {
+						ladderWallYaw = 0 // South
+					} else if b.WorldModel.IsSolid(checkX, checkY, checkZ-1) {
+						ladderWallYaw = 180 // North
 					}
 				}
 			}
@@ -572,6 +588,73 @@ func SendInputLoop(ctx context.Context, b *bot.Bot, gd minecraft.GameData) {
 				}
 			}
 
+			// STATE-BASED LOOK CONTROLLER
+			var targetYaw float32 = yaw
+			var targetPitch float32 = pitch
+
+			// wantsToMove is true if we are actively navigating (walking or following and not yet arrived)
+			wantsToMove := mState == "walk_to" || (mState == "follow" && !(distToPlayer < 2.0 && playerHeightDiff < 1.5))
+
+			if wantsToMove {
+				if dist > 0.1 && hasHorizontalMove {
+					yawRad := math.Atan2(float64(dz), float64(dx))
+					targetYaw = float32(yawRad*180/math.Pi) - 90
+					targetPitch = 0
+				} else {
+					targetYaw = yaw
+					targetPitch = pitch
+				}
+
+				// Force the bot to face the ladder wall while actively climbing
+				if activelyClimbing && ladderWallYaw != -999 {
+					targetYaw = ladderWallYaw
+				}
+			} else {
+				// We have ARRIVED! (wantsToMove is false)
+				if mState == "follow" {
+					b.Mu.Lock()
+					playerPos := b.TargetPos
+					b.Mu.Unlock()
+					
+					dxP := playerPos.X() - currentPos.X()
+					dzP := playerPos.Z() - currentPos.Z()
+					dyP := (playerPos.Y() + 1.62) - (currentPos.Y() + 1.62) // Eye level
+					
+					distP := float32(math.Sqrt(float64(dxP*dxP + dzP*dzP)))
+					if distP > 0.1 {
+						yawRad := math.Atan2(float64(dzP), float64(dxP))
+						targetYaw = float32(yawRad*180/math.Pi) - 90
+						pitchRad := math.Atan2(float64(dyP), float64(distP))
+						targetPitch = float32(-pitchRad * 180 / math.Pi)
+					} else {
+						targetYaw = yaw
+						targetPitch = pitch
+					}
+				} else {
+					targetYaw = yaw
+					targetPitch = pitch
+				}
+			}
+
+			// Calculate the absolute difference between current yaw and target yaw
+			yawDiff := targetYaw - yaw
+			for yawDiff < -180 {
+				yawDiff += 360
+			}
+			for yawDiff > 180 {
+				yawDiff -= 360
+			}
+			absYawDiff := math.Abs(float64(yawDiff))
+
+			var yawSpeed float32 = 25.0
+			if isLadderActive {
+				yawSpeed = 60.0 // Fast turning when approaching/climbing ladders
+			} else if absYawDiff > 30.0 {
+				yawSpeed = 45.0 // Turn faster on sharp corners
+			}
+			yaw = InterpolateAngle(yaw, targetYaw, yawSpeed)
+			pitch = InterpolatePitch(pitch, targetPitch, 15.0)
+
 			if isOnLadder && activelyClimbing {
 				// While actively climbing a ladder: center horizontally on the ladder block
 				// and suppress horizontal movement to prevent drifting off
@@ -626,6 +709,15 @@ func SendInputLoop(ctx context.Context, b *bot.Bot, gd minecraft.GameData) {
 				// On or approaching ladder: slow down to align perfectly and climb safely
 				if isLadderActive {
 					speed = 0.12
+				}
+
+				// Scale down speed during sharp turns to prevent overshooting narrow paths
+				if absYawDiff > 15.0 {
+					factor := float32(1.0 - (absYawDiff-15.0)/75.0)
+					if factor < 0.1 {
+						factor = 0.1
+					}
+					speed = speed * factor
 				}
 
 				if dist < speed {
@@ -723,55 +815,6 @@ func SendInputLoop(ctx context.Context, b *bot.Bot, gd minecraft.GameData) {
 			lastPredictedY = predictedPos.Y()
 			moveDelta = currentPos.Sub(prevPos)
 
-			// STATE-BASED LOOK CONTROLLER
-			var targetYaw float32 = yaw
-			var targetPitch float32 = pitch
-
-			// wantsToMove is true if we are actively navigating (walking or following and not yet arrived)
-			wantsToMove := mState == "walk_to" || (mState == "follow" && !(distToPlayer < 2.0 && playerHeightDiff < 1.5))
-
-			if wantsToMove {
-				if dist > 0.1 && hasHorizontalMove {
-					yawRad := math.Atan2(float64(dz), float64(dx))
-					targetYaw = float32(yawRad*180/math.Pi) - 90
-					targetPitch = 0
-				} else {
-					// We are still navigating, but temporarily stopped horizontally (e.g. preparing for jump).
-					// Keep current looking direction, do NOT look at player yet.
-					targetYaw = yaw
-					targetPitch = pitch
-				}
-			} else {
-				// We have ARRIVED! (wantsToMove is false)
-				if mState == "follow" {
-					b.Mu.Lock()
-					playerPos := b.TargetPos
-					b.Mu.Unlock()
-					
-					dxP := playerPos.X() - currentPos.X()
-					dzP := playerPos.Z() - currentPos.Z()
-					dyP := (playerPos.Y() + 1.62) - (currentPos.Y() + 1.62) // Eye level
-					
-					distP := float32(math.Sqrt(float64(dxP*dxP + dzP*dzP)))
-					if distP > 0.1 {
-						yawRad := math.Atan2(float64(dzP), float64(dxP))
-						targetYaw = float32(yawRad*180/math.Pi) - 90
-						pitchRad := math.Atan2(float64(dyP), float64(distP))
-						targetPitch = float32(-pitchRad * 180 / math.Pi)
-					} else {
-						targetYaw = yaw
-						targetPitch = pitch
-					}
-				} else {
-					targetYaw = yaw
-					targetPitch = pitch
-				}
-			}
-
-			var yawSpeed float32 = 25.0
-			yaw = InterpolateAngle(yaw, targetYaw, yawSpeed)
-			pitch = InterpolatePitch(pitch, targetPitch, 15.0)
-
 			// Calculate MoveVector relative to the updated yaw we will send in this packet
 			yawWorldRad := float64(yaw+90) * math.Pi / 180
 			forwardX := float32(math.Cos(yawWorldRad))
@@ -782,6 +825,17 @@ func SendInputLoop(ctx context.Context, b *bot.Bot, gd minecraft.GameData) {
 				moveDirZ := dz / dist
 				moveForward := moveDirX*forwardX + moveDirZ*forwardZ
 				moveStrafe := moveDirX*(-forwardZ) + moveDirZ*forwardX
+
+				// Disable strafing (left/right stepping) when on/approaching a ladder to prevent oscillations and slipping
+				if isLadderActive {
+					moveStrafe = 0.0
+				}
+
+				// Disable strafing on sharp turns to prevent crabbing off narrow paths
+				if absYawDiff > 10.0 {
+					moveStrafe = 0.0
+				}
+
 				moveVec = mgl32.Vec2{moveStrafe, moveForward}
 			}
 
