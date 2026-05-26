@@ -13,66 +13,66 @@ import (
 
 // WalkTo directs the bot to walk to a coordinate
 func (b *Bot) WalkTo(pos mgl32.Vec3) {
-	b.mu.Lock()
-	b.movementState = "walk_to"
-	b.targetPos = pos
-	b.logger.Info("WalkTo initiated", "x", pos.X(), "y", pos.Y(), "z", pos.Z())
-	b.mu.Unlock()
+	b.Mu.Lock()
+	b.MovementState = "walk_to"
+	b.TargetPos = pos
+	b.Logger.Info("WalkTo initiated", "x", pos.X(), "y", pos.Y(), "z", pos.Z())
+	b.Mu.Unlock()
 	b.RecalculatePath()
 }
 
 // FollowPlayer directs the bot to follow a player
 func (b *Bot) FollowPlayer(username string) {
-	b.mu.Lock()
-	b.movementState = "follow"
-	b.targetPlayerName = username
-	b.logger.Info("FollowPlayer initiated", "username", username)
-	b.mu.Unlock()
+	b.Mu.Lock()
+	b.MovementState = "follow"
+	b.TargetPlayerName = username
+	b.Logger.Info("FollowPlayer initiated", "username", username)
+	b.Mu.Unlock()
 
 	if _, pos, ok := b.FindPlayer(username); ok {
-		b.mu.Lock()
-		b.targetPos = pos
-		b.lastPathRecalcTime = time.Now()
-		b.mu.Unlock()
+		b.Mu.Lock()
+		b.TargetPos = pos
+		b.LastPathRecalcTime = time.Now()
+		b.Mu.Unlock()
 		b.RecalculatePath()
-		b.logger.Info("Player found for follow, setting target position", "username", username, "pos", pos)
+		b.Logger.Info("Player found for follow, setting target position", "username", username, "pos", pos)
 	} else {
-		b.logger.Warn("Player not found for follow", "username", username)
+		b.Logger.Warn("Player not found for follow", "username", username)
 	}
 }
 
 // Stop halts all bot movements
 func (b *Bot) Stop() {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	b.movementState = "idle"
-	b.currentPath = nil
-	b.logger.Info("Bot movement stopped")
+	b.Mu.Lock()
+	defer b.Mu.Unlock()
+	b.MovementState = "idle"
+	b.CurrentPath = nil
+	b.Logger.Info("Bot movement stopped")
 }
 
 // TriggerEmote triggers a custom bot animation
 func (b *Bot) TriggerEmote(name string) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	b.emoteState = name
-	b.emoteTicks = 40 // 2 seconds duration at 20 ticks/sec
-	b.logger.Info("Emote triggered", "name", name)
+	b.Mu.Lock()
+	defer b.Mu.Unlock()
+	b.EmoteState = name
+	b.EmoteTicks = 40 // 2 seconds duration at 20 ticks/sec
+	b.Logger.Info("Emote triggered", "name", name)
 }
 
 // TrackBotMessage records a message sent by the bot to prevent echo-loops
 func (b *Bot) TrackBotMessage(text string) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	b.recentBotMessages[strings.ToLower(strings.TrimSpace(text))] = time.Now()
+	b.Mu.Lock()
+	defer b.Mu.Unlock()
+	b.RecentBotMessages[strings.ToLower(strings.TrimSpace(text))] = time.Now()
 }
 
 // IsBotEcho checks if the text matches a recently sent bot message (within 5 seconds)
 func (b *Bot) IsBotEcho(text string) bool {
-	b.mu.Lock()
-	defer b.mu.Unlock()
+	b.Mu.Lock()
+	defer b.Mu.Unlock()
 
 	clean := strings.ToLower(strings.TrimSpace(text))
-	t, ok := b.recentBotMessages[clean]
+	t, ok := b.RecentBotMessages[clean]
 	if !ok {
 		return false
 	}
@@ -82,9 +82,9 @@ func (b *Bot) IsBotEcho(text string) bool {
 	}
 
 	// Clean up old entries
-	for k, v := range b.recentBotMessages {
+	for k, v := range b.RecentBotMessages {
 		if time.Since(v) > 10*time.Second {
-			delete(b.recentBotMessages, k)
+			delete(b.RecentBotMessages, k)
 		}
 	}
 	return false
@@ -92,17 +92,17 @@ func (b *Bot) IsBotEcho(text string) bool {
 
 // GetInventorySummary returns a human-readable list of items in the inventory
 func (b *Bot) GetInventorySummary() string {
-	b.mu.Lock()
-	defer b.mu.Unlock()
+	b.Mu.Lock()
+	defer b.Mu.Unlock()
 
-	if len(b.inventoryMap) == 0 {
+	if len(b.InventoryMap) == 0 {
 		return "Inventory kosong"
 	}
 
 	var items []string
 	itemCounts := make(map[string]int)
-	for _, stack := range b.inventoryMap {
-		name := b.itemNames[stack.NetworkID]
+	for _, stack := range b.InventoryMap {
+		name := b.ItemNames[stack.NetworkID]
 		if name == "" {
 			name = fmt.Sprintf("item_%d", stack.NetworkID)
 		}
@@ -120,15 +120,15 @@ func (b *Bot) GetInventorySummary() string {
 
 // GetHeldItem returns the name of the item currently held by the bot
 func (b *Bot) GetHeldItem() string {
-	b.mu.Lock()
-	defer b.mu.Unlock()
+	b.Mu.Lock()
+	defer b.Mu.Unlock()
 
-	stack, ok := b.inventoryMap[b.heldSlot]
+	stack, ok := b.InventoryMap[b.HeldSlot]
 	if !ok || stack.Count == 0 || stack.NetworkID == 0 {
 		return "nothing"
 	}
 
-	name := b.itemNames[stack.NetworkID]
+	name := b.ItemNames[stack.NetworkID]
 	if name == "" {
 		return fmt.Sprintf("item_%d", stack.NetworkID)
 	}
@@ -139,26 +139,26 @@ func (b *Bot) GetHeldItem() string {
 
 // GetStatusDetails returns current health, hunger, and coordinates
 func (b *Bot) GetStatusDetails() (int, int, string) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	posStr := fmt.Sprintf("X:%.0f Y:%.0f Z:%.0f", b.pos.X(), b.pos.Y(), b.pos.Z())
-	return b.health, b.hunger, posStr
+	b.Mu.Lock()
+	defer b.Mu.Unlock()
+	posStr := fmt.Sprintf("X:%.0f Y:%.0f Z:%.0f", b.Pos.X(), b.Pos.Y(), b.Pos.Z())
+	return b.Health, b.Hunger, posStr
 }
 
 // GetCoords returns bot's coordinates as Vec3
 func (b *Bot) GetCoords() mgl32.Vec3 {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.pos
+	b.Mu.Lock()
+	defer b.Mu.Unlock()
+	return b.Pos
 }
 
 // GetPlayerCoords returns coordinates of player by username
 func (b *Bot) GetPlayerCoords(username string) (mgl32.Vec3, bool) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
+	b.Mu.Lock()
+	defer b.Mu.Unlock()
 
-	if targetID, ok := b.playerEntityIDs[username]; ok {
-		if pos, ok := b.playerPositions[targetID]; ok {
+	if targetID, ok := b.PlayerEntityIDs[username]; ok {
+		if pos, ok := b.PlayerPositions[targetID]; ok {
 			return pos, true
 		}
 	}
@@ -175,16 +175,20 @@ func (b *Bot) SendSafeChat(msg string) {
 		// Track to avoid echo loops
 		b.TrackBotMessage(chunk)
 
+		b.Mu.Lock()
+		botName := b.Name
+		b.Mu.Unlock()
+
 		pk := &packet.Text{
 			TextType:         packet.TextTypeChat,
-			SourceName:       b.name,
+			SourceName:       botName,
 			Message:          chunk,
 			NeedsTranslation: false,
 			XUID:             "",
 			PlatformChatID:   "",
 		}
-		_ = b.conn.WritePacket(pk)
-		b.logger.Info("sent chat message", "message", chunk)
+		_ = b.Conn.WritePacket(pk)
+		b.Logger.Info("sent chat message", "message", chunk)
 		time.Sleep(300 * time.Millisecond) // brief delay to prevent packet flooding
 	}
 }
@@ -240,17 +244,17 @@ func (b *Bot) ExecuteAction(label string, param string, user string) {
 
 	switch label {
 	case "build":
-		go b.builderAgent.Build(context.Background(), user, param)
+		go b.BuilderAgent.Build(context.Background(), user, param)
 
 	case "stopbuild", "stopbuilding":
-		b.builderAgent.StopBuilding()
+		b.BuilderAgent.StopBuilding()
 
 	case "undo":
 		count := 0
 		if param != "" {
 			_, _ = fmt.Sscanf(param, "%d", &count)
 		}
-		go b.builderAgent.UndoBuild(context.Background(), count)
+		go b.BuilderAgent.UndoBuild(context.Background(), count)
 
 	case "come":
 		target := param
@@ -296,12 +300,12 @@ func (b *Bot) ExecuteAction(label string, param string, user string) {
 		b.TriggerEmote(emoteName)
 
 	case "attack", "hunt", "pvp", "guard":
-		b.mu.Lock()
+		b.Mu.Lock()
 		targetID := uint64(0)
 		closestDist := float32(math.MaxFloat32)
-		botPos := b.pos
+		botPos := b.Pos
 
-		for username, id := range b.playerEntityIDs {
+		for username, id := range b.PlayerEntityIDs {
 			if strings.EqualFold(username, param) || (param == "" && strings.EqualFold(username, user)) {
 				targetID = id
 				break
@@ -309,7 +313,7 @@ func (b *Bot) ExecuteAction(label string, param string, user string) {
 		}
 
 		if targetID == 0 {
-			for id, actor := range b.actors {
+			for id, actor := range b.Actors {
 				if param == "" || strings.Contains(strings.ToLower(actor.Name), strings.ToLower(param)) || strings.Contains(strings.ToLower(actor.Type), strings.ToLower(param)) {
 					dx := actor.Position.X() - botPos.X()
 					dy := actor.Position.Y() - botPos.Y()
@@ -322,12 +326,12 @@ func (b *Bot) ExecuteAction(label string, param string, user string) {
 				}
 			}
 		}
-		b.mu.Unlock()
+		b.Mu.Unlock()
 
 		if targetID != 0 {
-			b.combatMgr.EngageTarget(targetID)
+			b.CombatMgr.EngageTarget(targetID)
 		} else {
-			b.logger.Warn("ExecuteAction: no target found to attack", "param", param)
+			b.Logger.Warn("ExecuteAction: no target found to attack", "param", param)
 		}
 
 	case "gather":
@@ -342,9 +346,9 @@ func (b *Bot) ExecuteAction(label string, param string, user string) {
 		}
 
 		if strings.Contains(itemName, "wood") || strings.Contains(itemName, "log") {
-			go b.gatherer.GatherWood(context.Background(), count)
+			go b.Gatherer.GatherWood(context.Background(), count)
 		} else {
-			go b.gatherer.GatherBlock(context.Background(), itemName, count)
+			go b.Gatherer.GatherBlock(context.Background(), itemName, count)
 		}
 
 	case "mine", "automine":
@@ -357,12 +361,12 @@ func (b *Bot) ExecuteAction(label string, param string, user string) {
 		if len(parts) >= 2 {
 			_, _ = fmt.Sscanf(parts[1], "%d", &count)
 		}
-		go b.gatherer.GatherBlock(context.Background(), itemName, count)
+		go b.Gatherer.GatherBlock(context.Background(), itemName, count)
 
 	case "clear", "scan":
 		go func() {
-			collected := b.gatherer.CollectAllDrops(context.Background(), 12.0)
-			b.logger.Info("Swept drops complete", "collected", collected)
+			collected := b.Gatherer.CollectAllDrops(context.Background(), 12.0)
+			b.Logger.Info("Swept drops complete", "collected", collected)
 		}()
 
 	case "craft":
@@ -373,15 +377,15 @@ func (b *Bot) ExecuteAction(label string, param string, user string) {
 			_, _ = fmt.Sscanf(parts[1], "%d", &count)
 		}
 
-		b.mu.Lock()
-		recipeID, ok := b.recipes[itemName]
-		b.mu.Unlock()
+		b.Mu.Lock()
+		recipeID, ok := b.Recipes[itemName]
+		b.Mu.Unlock()
 
 		if ok {
-			b.logger.Info("Executing craft action", "item", itemName, "recipeID", recipeID, "count", count)
+			b.Logger.Info("Executing craft action", "item", itemName, "recipeID", recipeID, "count", count)
 			_ = b.CraftItem(recipeID, count)
 		} else {
-			b.logger.Warn("ExecuteAction: recipe not found for item", "item", itemName)
+			b.Logger.Warn("ExecuteAction: recipe not found for item", "item", itemName)
 			var guessed uint32
 			if _, err := fmt.Sscanf(itemName, "%d", &guessed); err == nil && guessed != 0 {
 				_ = b.CraftItem(guessed, count)
@@ -391,15 +395,15 @@ func (b *Bot) ExecuteAction(label string, param string, user string) {
 	case "smelt":
 		go func() {
 			itemName := strings.ToLower(strings.TrimSpace(param))
-			success := b.inventoryMgr.Container().SmeltItem(context.Background(), itemName)
-			b.logger.Info("Smelt complete", "success", success, "item", itemName)
+			success := b.InventoryMgr.Container().SmeltItem(context.Background(), itemName)
+			b.Logger.Info("Smelt complete", "success", success, "item", itemName)
 		}()
 
 	case "store", "storeall":
 		go func() {
 			itemName := strings.ToLower(strings.TrimSpace(param))
-			success := b.inventoryMgr.Container().StoreItem(context.Background(), itemName, 0)
-			b.logger.Info("Store complete", "success", success, "item", itemName)
+			success := b.InventoryMgr.Container().StoreItem(context.Background(), itemName, 0)
+			b.Logger.Info("Store complete", "success", success, "item", itemName)
 		}()
 
 	case "take", "retrieve":
@@ -413,11 +417,11 @@ func (b *Bot) ExecuteAction(label string, param string, user string) {
 					count = int32(parsed)
 				}
 			}
-			success := b.inventoryMgr.Container().GiveItem(context.Background(), itemName, user, count)
-			b.logger.Info("Give complete", "success", success, "item", itemName)
+			success := b.InventoryMgr.Container().GiveItem(context.Background(), itemName, user, count)
+			b.Logger.Info("Give complete", "success", success, "item", itemName)
 		}()
 
 	default:
-		b.logger.Info("unknown or unhandled action label", "label", label, "param", param)
+		b.Logger.Info("unknown or unhandled action label", "label", label, "param", param)
 	}
 }

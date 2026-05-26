@@ -4,22 +4,23 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/sandertv/gophertunnel/minecraft/protocol"
 	"github.com/sandertv/gophertunnel/minecraft/protocol/login"
 )
 
 // mergeClientData takes skin-related fields and merges them with default device/game info
 func mergeClientData(skinData login.ClientData) login.ClientData {
 	skinData.ClientRandomID = int64(time.Now().UnixNano())
-	skinData.CurrentInputMode = 2 // touch / generic
-	skinData.DefaultInputMode = 2
-	skinData.DeviceModel = "Bedrock AI Bot"
-	skinData.DeviceOS = 1 // Android/Generic
+	skinData.CurrentInputMode = 1 // Keyboard & Mouse
+	skinData.DefaultInputMode = 1
+	skinData.DeviceModel = "Custom"
+	skinData.DeviceOS = 7 // Windows 10/11
 	skinData.DeviceID = login.DeviceID(uuid.New().String())
-	skinData.GameVersion = "1.26.20" // Important for compatibility
+	skinData.GameVersion = protocol.CurrentVersion // Match current gophertunnel protocol version
 	skinData.LanguageCode = "en_US"
 	skinData.SelfSignedID = uuid.New().String()
-	skinData.PlayFabID = "50afc685b094b0f3" // generic mock ID
-	skinData.UIProfile = 0
+	skinData.PlayFabID = "" // Leave empty, let server assign
+	skinData.UIProfile = 0  // Classic UI
 	
 	// Ensure these are set
 	skinData.TrustedSkin = true

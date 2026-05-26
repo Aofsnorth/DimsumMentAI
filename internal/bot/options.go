@@ -16,38 +16,38 @@ type Option func(*Bot)
 
 func WithLogger(logger *slog.Logger) Option {
 	return func(b *Bot) {
-		b.logger = logger
+		b.Logger = logger
 	}
 }
 
 func WithDialer(dialer DialerFunc) Option {
 	return func(b *Bot) {
-		b.dialer = dialer
+		b.Dialer = dialer
 	}
 }
 
 func WithRegistry(registry *handler.Registry) Option {
 	return func(b *Bot) {
-		b.registry = registry
+		b.Registry = registry
 	}
 }
 
 func WithEventBus(bus *event.Bus) Option {
 	return func(b *Bot) {
-		b.bus = bus
+		b.Bus = bus
 	}
 }
 
 func WithName(name string) Option {
 	return func(b *Bot) {
-		b.name = name
+		b.Name = name
 	}
 }
 
 func WithSkin(skin protocol.Skin, playerUUID uuid.UUID) Option {
 	return func(b *Bot) {
-		b.protoSkin = skin
-		b.playerUUID = playerUUID
+		b.ProtoSkin = skin
+		b.PlayerUUID = playerUUID
 	}
 }
 

@@ -58,13 +58,15 @@ func FindPath(startNode, targetNode Node, world WorldModel) []Node {
 	openMap[key(start.X, start.Y, start.Z)] = start
 
 	// Dynamic maxIterations based on distance to target
-	// For closer targets, use fewer iterations to avoid delays in follow mode
+	// Go is extremely fast, so we can afford much higher iterations for complex environments
 	distanceToTarget := Distance(startNode, targetNode)
-	maxIterations := int32(2000)
+	var maxIterations int32 = 10000
 	if distanceToTarget < 20 {
-		maxIterations = 500 // Faster for short distances
+		maxIterations = 5000 
 	} else if distanceToTarget < 50 {
-		maxIterations = 1000 // Medium for medium distances
+		maxIterations = 15000 
+	} else {
+		maxIterations = 30000 
 	}
 	iterations := int32(0)
 
@@ -95,7 +97,10 @@ func FindPath(startNode, targetNode Node, world WorldModel) []Node {
 				continue
 			}
 
-			tentativeG := current.G + Distance(*current, neighbor)
+			tentativeG := neighbor.G
+			if tentativeG == 0 {
+				tentativeG = current.G + Distance(*current, neighbor)
+			}
 
 			existing, inOpen := openMap[nKey]
 			if !inOpen {

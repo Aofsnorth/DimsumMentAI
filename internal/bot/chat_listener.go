@@ -12,14 +12,14 @@ import (
 
 // InitChatListener registers the bot's listener on the event bus for ChatEvents
 func (b *Bot) InitChatListener(ctx context.Context) {
-	b.bus.Subscribe(reflect.TypeOf(event.ChatEvent{}), func(evt interface{}) {
+	b.Bus.Subscribe(reflect.TypeOf(event.ChatEvent{}), func(evt interface{}) {
 		chatEvt, ok := evt.(event.ChatEvent)
 		if !ok {
 			return
 		}
 		go b.handleIncomingChat(ctx, chatEvt)
 	})
-	b.logger.Info("Chat listener successfully registered on event bus")
+	b.Logger.Info("Chat listener successfully registered on event bus")
 }
 
 func (b *Bot) handleIncomingChat(ctx context.Context, evt event.ChatEvent) {
@@ -28,8 +28,12 @@ func (b *Bot) handleIncomingChat(ctx context.Context, evt event.ChatEvent) {
 		return
 	}
 
+	b.Mu.Lock()
+	botName := b.Name
+	b.Mu.Unlock()
+
 	// 1. Skip bot's own echoes
-	if strings.EqualFold(evt.SourceName, b.name) {
+	if strings.EqualFold(evt.SourceName, botName) {
 		return
 	}
 	if b.IsBotEcho(msg) {
@@ -39,7 +43,7 @@ func (b *Bot) handleIncomingChat(ctx context.Context, evt event.ChatEvent) {
 	// 2. Validate linked player whitelist
 	if b.AiCfg.RespondOnlyToLinkedPlayer && b.AiCfg.MainPlayer != "" {
 		if !strings.EqualFold(evt.SourceName, b.AiCfg.MainPlayer) {
-			b.logger.Debug("Ignoring message from unlinked player", "source", evt.SourceName, "linked", b.AiCfg.MainPlayer)
+			b.Logger.Debug("Ignoring message from unlinked player", "source", evt.SourceName, "linked", b.AiCfg.MainPlayer)
 			return
 		}
 	}
@@ -47,13 +51,13 @@ func (b *Bot) handleIncomingChat(ctx context.Context, evt event.ChatEvent) {
 	// 2b. Validate if the message tags the bot when respond_only_when_tagged is enabled
 	if b.AiCfg.RespondOnlyWhenTagged {
 		tagged := false
-		botNameLower := strings.ToLower(b.name)
+		botNameLower := strings.ToLower(botName)
 		msgLower := strings.ToLower(msg)
 		if strings.Contains(msgLower, botNameLower) || strings.Contains(msgLower, "@"+botNameLower) {
 			tagged = true
 		}
 		if !tagged {
-			b.logger.Debug("Ignoring message: bot not tagged", "msg", msg, "botName", b.name)
+			b.Logger.Debug("Ignoring message: bot not tagged", "msg", msg, "botName", botName)
 			return
 		}
 	}
@@ -62,7 +66,7 @@ func (b *Bot) handleIncomingChat(ctx context.Context, evt event.ChatEvent) {
 	if b.AiCfg.MainPlayer == "" {
 		pCoords, ok := b.GetPlayerCoords(evt.SourceName)
 		if !ok {
-			b.logger.Debug("Ignoring player (no coordinates tracked)", "player", evt.SourceName)
+			b.Logger.Debug("Ignoring player (no coordinates tracked)", "player", evt.SourceName)
 			return
 		}
 		botCoords := b.GetCoords()
@@ -71,7 +75,7 @@ func (b *Bot) handleIncomingChat(ctx context.Context, evt event.ChatEvent) {
 		dz := pCoords.Z() - botCoords.Z()
 		dist := float32(mathSqrt(float64(dx*dx + dy*dy + dz*dz)))
 		if dist > 10.0 {
-			b.logger.Debug("Ignoring player (too far)", "player", evt.SourceName, "distance", dist)
+			b.Logger.Debug("Ignoring player (too far)", "player", evt.SourceName, "distance", dist)
 			return
 		}
 	}
@@ -95,7 +99,7 @@ func (b *Bot) handleIncomingChat(ctx context.Context, evt event.ChatEvent) {
 	// 6. Deduplication filter immediately (addresses the duplicate message race bug)
 	allowed, _ := b.Throttler.Filter(msg)
 	if !allowed {
-		b.logger.Info("Throttled duplicate or rate-limited message", "msg", msg)
+		b.Logger.Info("Throttled duplicate or rate-limited message", "msg", msg)
 		return
 	}
 
@@ -110,7 +114,7 @@ func (b *Bot) handleIncomingChat(ctx context.Context, evt event.ChatEvent) {
 
 	botStatusText := fmt.Sprintf("HP: %d/20, Hunger: %d/20", hp, hunger)
 	systemPrompt := b.AiClient.BuildSystemPrompt(
-		b.name,
+		botName,
 		botCoords+" ("+botStatusText+")",
 		playerCoordsStr,
 		heldItem,
@@ -120,11 +124,11 @@ func (b *Bot) handleIncomingChat(ctx context.Context, evt event.ChatEvent) {
 	// 8. Call Nvidia Client
 	reply, err := b.AiClient.Ask(evt.SourceName, systemPrompt, msg)
 	if err != nil {
-		b.logger.Error("Failed to ask Nvidia LLM", "error", err.Error())
+		b.Logger.Error("Failed to ask Nvidia LLM", "error", err.Error())
 		return
 	}
 
-	b.logger.Info("Nvidia LLM raw response received", "raw", reply)
+	b.Logger.Info("Nvidia LLM raw response received", "raw", reply)
 
 	// 9. Parse actions and clean reply
 	parsed := ai.Parse(reply)
@@ -189,7 +193,7 @@ func (b *Bot) handleAdminCommand(cmd string, user string) {
 		param = strings.TrimSpace(parts[1])
 	}
 
-	b.logger.Info("Admin command triggered", "action", action, "param", param)
+	b.Logger.Info("Admin command triggered", "action", action, "param", param)
 
 	switch action {
 	case "say":
@@ -215,7 +219,7 @@ func (b *Bot) handleAdminCommand(cmd string, user string) {
 		b.Stop()
 		b.SendSafeChat("Stopped all movements")
 	default:
-		b.logger.Warn("Unknown admin command", "command", action)
+		b.Logger.Warn("Unknown admin command", "command", action)
 	}
 }
 

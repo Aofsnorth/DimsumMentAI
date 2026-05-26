@@ -12,6 +12,8 @@ import (
 
 	"bedrock-ai/internal/ai"
 	"bedrock-ai/internal/bot"
+	"bedrock-ai/internal/bot/movement"
+	"bedrock-ai/internal/bot/network"
 	"bedrock-ai/internal/config"
 	"bedrock-ai/internal/connection"
 	"bedrock-ai/internal/event"
@@ -104,6 +106,18 @@ func main() {
 		}
 		throttler = ai.DefaultThrottler()
 	}
+
+	// --- Dependency Injection Registration ---
+	bot.SendInputLoopFunc = movement.SendInputLoop
+	bot.PacketLoopFunc = network.PacketLoop
+	bot.ChunkRequesterLoopFunc = network.ChunkRequesterLoop
+	bot.SendPlayerSkinFunc = network.SendPlayerSkin
+	bot.SendLoadingScreenDoneFunc = network.SendLoadingScreenDone
+	bot.RecalculatePathFunc = movement.RecalculatePath
+	bot.NavigateToFunc = movement.NavigateTo
+	bot.StopMovementFunc = movement.StopMovement
+	bot.NavigateToBlockFunc = movement.NavigateToBlock
+	bot.LookAtFunc = movement.LookAt
 
 	// --- Bot ---
 	b, err := bot.New(
