@@ -12,6 +12,8 @@ import (
 
 	"bedrock-ai/internal/ai"
 	"bedrock-ai/internal/bot"
+	"bedrock-ai/internal/bot/action"
+	"bedrock-ai/internal/bot/chat"
 	"bedrock-ai/internal/bot/movement"
 	"bedrock-ai/internal/bot/network"
 	"bedrock-ai/internal/config"
@@ -118,6 +120,10 @@ func main() {
 	bot.StopMovementFunc = movement.StopMovement
 	bot.NavigateToBlockFunc = movement.NavigateToBlock
 	bot.LookAtFunc = movement.LookAt
+
+	// Chat listener and action hooks
+	bot.InitChatListenerFunc = chat.Init
+	bot.ExecuteActionFunc = action.Execute
 
 	// --- Bot ---
 	b, err := bot.New(
