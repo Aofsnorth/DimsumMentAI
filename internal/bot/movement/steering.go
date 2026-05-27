@@ -169,7 +169,15 @@ func (tc *TickContext) performActiveSteering() {
 					nextNode := tc.B.CurrentPath[tc.B.PathIndex]
 					baseY := int32(math.Floor(float64(tc.CurrPos.Y() + 0.1)))
 
-					if nextNode.Y > baseY && tc.Dist < 1.8 {
+					requiresStepUp := nextNode.Y > baseY
+					if requiresStepUp && tc.B.PathIndex > 0 {
+						// The local Y position can lag behind after a jump; only jump again
+						// when the current path edge itself climbs upward.
+						prevNode := tc.B.CurrentPath[tc.B.PathIndex-1]
+						requiresStepUp = nextNode.Y > prevNode.Y
+					}
+
+					if requiresStepUp && tc.Dist < 1.8 {
 						yawRad := math.Atan2(float64(tc.Dz), float64(tc.Dx))
 						idealYaw := float32(yawRad*180/math.Pi) - 90
 						yawDiff := math.Mod(float64(tc.B.Yaw-idealYaw+540), 360) - 180

@@ -23,3 +23,5 @@ debug-090ce4.log
 
 # Persistent device identity (per install)
 data/device_identity.json
+
+data\bot_state.json
