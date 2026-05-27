@@ -31,11 +31,13 @@ func RecalculatePath(b *bot.Bot) {
 	lastTickPos := b.Pos
 	b.Mu.Unlock()
 
-	b.Logger.Debug("recalculating path using A*",
+	b.Logger.Info("recalculating path using A*",
 		"start_x", start.X, "start_y", start.Y, "start_z", start.Z,
 		"target_x", target.X, "target_y", target.Y, "target_z", target.Z,
 		"movement_state", movementState,
 	)
+
+	b.WorldModel.PurgeFalseSolidOverrides()
 
 	if standTarget, ok := nearestStandableNode(b, start, target, 2); ok {
 		target = standTarget
@@ -64,12 +66,19 @@ func RecalculatePath(b *bot.Bot) {
 		"target_floor", fmt.Sprintf("%s (rid=%d, solid=%t)", targetBlockFloor, targetFloorRID, b.WorldCache.IsRIDSolid(targetFloorRID)),
 	)
 
-	path := pathfinder.FindPath(start, target, b.WorldModel)
+	// Pass 1: Normal pathfinding without fallback
+	path := pathfinder.FindPath(start, target, b.WorldModel, false)
 	if len(path) == 0 {
+		// Pass 2: Retry with scaffolding and mining allowed, without fallback
 		b.WorldModel.AllowScaffold = true
 		b.Logger.Info("Normal pathfinding failed, retrying with scaffolding and mining allowed...")
-		path = pathfinder.FindPath(start, target, b.WorldModel)
+		path = pathfinder.FindPath(start, target, b.WorldModel, false)
 		b.WorldModel.AllowScaffold = false
+	}
+	if len(path) == 0 {
+		// Pass 3: If both failed, retry with fallback enabled so the bot gets as close as possible
+		b.Logger.Info("Pathfinding with scaffolding failed, retrying with fallback enabled...")
+		path = pathfinder.FindPath(start, target, b.WorldModel, true)
 	}
 
 	b.Mu.Lock()
@@ -85,11 +94,12 @@ func RecalculatePath(b *bot.Bot) {
 		b.LastTickPos = lastTickPos
 		b.LastPathRecalcTime = time.Now()
 		b.ConsecutiveStuckCount = 0
+		b.LastJumpPathIndex = -1
 		nodeCoords := make([]string, len(path))
 		for i, n := range path {
-			nodeCoords[i] = fmt.Sprintf("(%d,%d,%d)", n.X, n.Y, n.Z)
+			nodeCoords[i] = fmt.Sprintf("(%d,%d,%d,%s,%s)", n.X, n.Y, n.Z, n.LinkType, n.Action)
 		}
-		b.Logger.Debug("A* pathfinding completed", "nodes", len(path), "path", strings.Join(nodeCoords, " -> "), "movement_state", movementState)
+		b.Logger.Info("A* pathfinding completed", "nodes", len(path), "path", strings.Join(nodeCoords, " -> "), "movement_state", movementState)
 	} else {
 		b.CurrentPath = nil
 		b.LastPathRecalcTime = time.Now()

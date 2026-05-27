@@ -64,7 +64,7 @@ func (wc *WorldCache) IsRIDSolid(rid uint32) bool {
 
 	m := b.Model()
 	if m == nil {
-		return false
+		return true
 	}
 
 	if _, isEmpty := m.(model.Empty); isEmpty {

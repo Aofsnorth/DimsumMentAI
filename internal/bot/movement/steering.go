@@ -6,6 +6,7 @@ import (
 	"math"
 	"time"
 
+	"bedrock-ai/internal/bot/pathfinder"
 	"github.com/go-gl/mathgl/mgl32"
 )
 
@@ -83,8 +84,16 @@ func (tc *TickContext) performActiveSteering() {
 			if tc.HasPath && tc.Dist < advanceDist {
 				tc.B.Mu.Lock()
 				nextNode := tc.B.CurrentPath[tc.B.PathIndex]
-				heightDiff := math.Abs(float64(nextNode.Y) - float64(tc.CurrPos.Y()))
-				if heightDiff < maxHeightDiff {
+				yDiff := float64(nextNode.Y) - float64(tc.CurrPos.Y())
+				heightDiff := math.Abs(yDiff)
+
+				canAdvance := heightDiff < maxHeightDiff
+				if yDiff > 0.5 {
+					// Allow advancing while climbing if we're within one block of node Y.
+					canAdvance = heightDiff < 1.05 && float64(tc.CurrPos.Y())+0.15 >= float64(nextNode.Y)
+				}
+
+				if canAdvance {
 					tc.B.PathIndex++
 					tc.B.TicksStuck = 0
 					tc.B.LastTickPos = tc.CurrPos
@@ -139,7 +148,9 @@ func (tc *TickContext) performActiveSteering() {
 
 					if tc.HasPath && tc.B.PathIndex < len(tc.B.CurrentPath) {
 						node := tc.B.CurrentPath[tc.B.PathIndex]
-						tc.B.WorldModel.SetTempSolid(node.X, node.Y, node.Z, 5*time.Second)
+						if node.Y == int32(math.Floor(float64(tc.CurrPos.Y()))) {
+							tc.B.WorldModel.SetTempSolid(node.X, node.Y, node.Z, 5*time.Second)
+						}
 						tc.B.Mu.Unlock()
 						RecalculatePath(tc.B)
 						tc.B.Mu.Lock()
@@ -165,57 +176,76 @@ func (tc *TickContext) performActiveSteering() {
 			tc.B.Mu.Unlock()
 			if tc.HasPath {
 				tc.B.Mu.Lock()
-				if tc.B.PathIndex < len(tc.B.CurrentPath) {
+				if tc.B.PathIndex < len(tc.B.CurrentPath) && tc.B.PathIndex > 0 {
+					prevNode := tc.B.CurrentPath[tc.B.PathIndex-1]
 					nextNode := tc.B.CurrentPath[tc.B.PathIndex]
 					baseY := int32(math.Floor(float64(tc.CurrPos.Y() + 0.1)))
 
-					requiresStepUp := nextNode.Y > baseY
-					if requiresStepUp && tc.B.PathIndex > 0 {
-						// The local Y position can lag behind after a jump; only jump again
-						// when the current path edge itself climbs upward.
-						prevNode := tc.B.CurrentPath[tc.B.PathIndex-1]
-						requiresStepUp = nextNode.Y > prevNode.Y
-					}
+					dxPath := math.Abs(float64(nextNode.X - prevNode.X))
+					dzPath := math.Abs(float64(nextNode.Z - prevNode.Z))
+					horizDistance := float32(math.Max(dxPath, dzPath))
 
-					if requiresStepUp && tc.Dist < 1.8 {
-						yawRad := math.Atan2(float64(tc.Dz), float64(tc.Dx))
-						idealYaw := float32(yawRad*180/math.Pi) - 90
-						yawDiff := math.Mod(float64(tc.B.Yaw-idealYaw+540), 360) - 180
+					// Check if we are approaching a parkour link (horizontal gap jump OR step jump with gap)
+					isParkourLink := nextNode.LinkType == pathfinder.LinkJump ||
+						(nextNode.LinkType == pathfinder.LinkStepJump && horizDistance > 1.5)
 
-						if math.Abs(yawDiff) < 45.0 {
-							tc.ShouldJump = true
-							tc.JumpReason = fmt.Sprintf("Step Up: nextNode.Y(%d) > baseY(%d)", nextNode.Y, baseY)
-						}
-					}
+					if isParkourLink {
+						jumpTriggerDist := horizDistance - 0.5
+						isApproaching := tc.IsGrounded && tc.Dist >= jumpTriggerDist-0.2
+						isJumpingOrMidAir := !tc.IsGrounded
 
-					isGapInPath := false
-					gapDistance := float32(0)
-					if tc.B.PathIndex > 0 {
-						prevNode := tc.B.CurrentPath[tc.B.PathIndex-1]
-						dxPath := math.Abs(float64(nextNode.X - prevNode.X))
-						dzPath := math.Abs(float64(nextNode.Z - prevNode.Z))
-						gapDistance = float32(math.Max(dxPath, dzPath))
-						if gapDistance > 1.5 && gapDistance <= 4.0 {
-							isGapInPath = true
-						}
-					}
-
-					if nextNode.Y == baseY && isGapInPath && tc.Dist < gapDistance+0.55 && tc.Dist > 0.55 {
-						yawRad := math.Atan2(float64(tc.Dz), float64(tc.Dx))
-						idealYaw := float32(yawRad*180/math.Pi) - 90
-						yawDiff := math.Mod(float64(tc.B.Yaw-idealYaw+540), 360) - 180
-						if math.Abs(yawDiff) < 25.0 {
-							tc.ShouldJump = true
+						if isApproaching || isJumpingOrMidAir {
 							tc.IsParkourJump = true
-							tc.B.ParkourUntil = time.Now().Add(1800 * time.Millisecond)
-							tc.JumpReason = fmt.Sprintf("Parkour Gap: distance %.0f", gapDistance)
+							tc.B.ParkourUntil = time.Now().Add(1200 * time.Millisecond)
+						}
+
+						// Wide window for jumping to avoid "bullet-through-paper" race condition
+						if tc.B.LastJumpPathIndex != tc.B.PathIndex && tc.Dist <= jumpTriggerDist+0.25 && tc.Dist >= 0.2 {
+							yawRad := math.Atan2(float64(tc.Dz), float64(tc.Dx))
+							idealYaw := float32(yawRad*180/math.Pi) - 90
+							yawDiff := math.Mod(float64(tc.B.Yaw-idealYaw+540), 360) - 180
+							if math.Abs(yawDiff) < 90.0 {
+								tc.ShouldJump = true
+								tc.B.LastJumpPathIndex = tc.B.PathIndex
+								tc.JumpReason = fmt.Sprintf("Parkour Gap (%s): dist %.2f, gap %.2f", nextNode.LinkType, tc.Dist, horizDistance)
+							}
+						}
+					} else if nextNode.LinkType == pathfinder.LinkStepJump {
+						// Directly adjacent step-up jump (distance <= 1.5)
+						if tc.Dist < 1.4 {
+							yawRad := math.Atan2(float64(tc.Dz), float64(tc.Dx))
+							idealYaw := float32(yawRad*180/math.Pi) - 90
+							yawDiff := math.Mod(float64(tc.B.Yaw-idealYaw+540), 360) - 180
+							if math.Abs(yawDiff) < 90.0 {
+								tc.ShouldJump = true
+								tc.JumpReason = fmt.Sprintf("Step Up: nextNode.Y(%d) > baseY(%d)", nextNode.Y, baseY)
+							}
 						}
 					}
 				}
 				tc.B.Mu.Unlock()
 			}
 
-			if !tc.ShouldJump && !tc.pathAheadIsLevelOrDown() && tc.Dist > 0.1 && tc.MState != "idle" {
+			// Disable auto-jump check entirely when on or near a ladder
+			isNearLadder := tc.IsOnLadder
+			if !isNearLadder && tc.B.WorldModel != nil && tc.HasPath {
+				tc.B.Mu.Lock()
+				lookahead := 3
+				if tc.B.PathIndex+lookahead > len(tc.B.CurrentPath) {
+					lookahead = len(tc.B.CurrentPath) - tc.B.PathIndex
+				}
+				for li := 0; li < lookahead; li++ {
+					ln := tc.B.CurrentPath[tc.B.PathIndex+li]
+					if tc.B.WorldModel.IsLadder(ln.X, ln.Y, ln.Z) || tc.B.WorldModel.IsLadder(ln.X, ln.Y+1, ln.Z) {
+						isNearLadder = true
+						break
+					}
+				}
+				tc.B.Mu.Unlock()
+			}
+
+			// Enable auto-jump check only when direct-steering (no path)
+			if !tc.HasPath && !isNearLadder && !tc.ShouldJump && tc.Dist > 0.1 && tc.MState != "idle" {
 				moveDirX := tc.Dx / tc.Dist
 				moveDirZ := tc.Dz / tc.Dist
 
@@ -248,9 +278,9 @@ func (tc *TickContext) pathAheadIsLevelOrDown() bool {
 	if !tc.HasPath || tc.B.PathIndex >= len(tc.B.CurrentPath) {
 		return true
 	}
-	feetY := int32(math.Floor(float64(tc.CurrPos.Y() + 0.1)))
+	baselineY := tc.B.CurrentPath[tc.B.PathIndex].Y
 	for i := tc.B.PathIndex + 1; i < len(tc.B.CurrentPath); i++ {
-		if tc.B.CurrentPath[i].Y > feetY {
+		if tc.B.CurrentPath[i].Y > baselineY {
 			return false
 		}
 	}

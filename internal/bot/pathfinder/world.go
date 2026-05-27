@@ -2,6 +2,7 @@ package pathfinder
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -25,17 +26,18 @@ type ChunkQuerier interface {
 }
 
 type LocalWorldModel struct {
-	mu             sync.RWMutex
-	solidBlocks    map[string]bool
-	hazardBlocks   map[string]bool
-	passableBlocks map[string]bool // Blok yang bot tahu bisa dilewati (rumput, bunga, air)
-	tempSolidBlocks map[string]time.Time // Temporary solid blocks to avoid stuck loops
-	chunkQuerier   ChunkQuerier
+	mu              sync.RWMutex
+	solidBlocks     map[string]bool
+	hazardBlocks    map[string]bool
+	passableBlocks  map[string]bool // mined/placed passable overrides (persistent)
+	bodyClearance   map[string]bool // bot AABB cells for the current tick only
+	tempSolidBlocks map[string]time.Time
+	chunkQuerier    ChunkQuerier
 
-	AllowScaffold  bool
+	AllowScaffold bool
 
 	hasBounds bool
-	startX, startY, startZ   int32
+	startX, startY, startZ    int32
 	targetX, targetY, targetZ int32
 }
 
@@ -62,8 +64,23 @@ func NewLocalWorldModel() *LocalWorldModel {
 		solidBlocks:     make(map[string]bool),
 		hazardBlocks:    make(map[string]bool),
 		passableBlocks:  make(map[string]bool),
+		bodyClearance:   make(map[string]bool),
 		tempSolidBlocks: make(map[string]time.Time),
 	}
+}
+
+// ClearBodyClearance resets per-tick occupancy marks (bot body volume).
+func (w *LocalWorldModel) ClearBodyClearance() {
+	w.mu.Lock()
+	w.bodyClearance = make(map[string]bool)
+	w.mu.Unlock()
+}
+
+// SetBodyClearance marks a block as non-solid for collision this tick only.
+func (w *LocalWorldModel) SetBodyClearance(x, y, z int32) {
+	w.mu.Lock()
+	w.bodyClearance[fmt.Sprintf("%d,%d,%d", x, y, z)] = true
+	w.mu.Unlock()
 }
 
 func (w *LocalWorldModel) SetChunkQuerier(q ChunkQuerier) {
@@ -80,7 +97,8 @@ func (w *LocalWorldModel) SetPathBounds(start, target Node) {
 	w.hasBounds = true
 }
 
-// SetSolid menandai blok. Jika solid=false, blok masuk ke passableBlocks
+// SetSolid sets a persistent block override (UpdateBlock, mining, building).
+// Use SetBodyClearance for per-tick bot occupancy — not SetSolid(false).
 func (w *LocalWorldModel) SetSolid(x, y, z int32, solid bool) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -93,6 +111,49 @@ func (w *LocalWorldModel) SetSolid(x, y, z int32, solid bool) {
 		w.solidBlocks[k] = false
 		w.passableBlocks[k] = true // Tandai sebagai bisa dilewati (rumput, bunga, dll)
 	}
+}
+
+// PurgeFalseSolidOverrides removes stale non-solid overrides when chunk data says solid.
+func (w *LocalWorldModel) PurgeFalseSolidOverrides() {
+	if w.chunkQuerier == nil {
+		return
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	for k := range w.passableBlocks {
+		if coords, ok := parseBlockKey(k); ok && w.chunkSaysSolid(coords[0], coords[1], coords[2]) {
+			delete(w.passableBlocks, k)
+			delete(w.solidBlocks, k)
+		}
+	}
+	for k, solid := range w.solidBlocks {
+		if solid {
+			continue
+		}
+		if coords, ok := parseBlockKey(k); ok && w.chunkSaysSolid(coords[0], coords[1], coords[2]) {
+			delete(w.passableBlocks, k)
+			delete(w.solidBlocks, k)
+		}
+	}
+}
+
+func (w *LocalWorldModel) chunkSaysSolid(x, y, z int32) bool {
+	isSolid, loaded := w.chunkQuerier.IsBlockSolid(x, y, z)
+	return loaded && isSolid
+}
+
+func parseBlockKey(k string) ([3]int32, bool) {
+	parts := strings.Split(k, ",")
+	if len(parts) != 3 {
+		return [3]int32{}, false
+	}
+	x, errX := strconv.ParseInt(parts[0], 10, 32)
+	y, errY := strconv.ParseInt(parts[1], 10, 32)
+	z, errZ := strconv.ParseInt(parts[2], 10, 32)
+	if errX != nil || errY != nil || errZ != nil {
+		return [3]int32{}, false
+	}
+	return [3]int32{int32(x), int32(y), int32(z)}, true
 }
 
 func (w *LocalWorldModel) SetTempSolid(x, y, z int32, duration time.Duration) {
@@ -113,17 +174,20 @@ func (w *LocalWorldModel) IsSolid(x, y, z int32) bool {
 		}
 	}
 
-	// 1. Cek Passable Blocks (Auto-Learned dari posisi bot)
+	// Bot body volume this tick (does not persist).
+	if w.bodyClearance[k] {
+		return false
+	}
+
+	// Persistent overrides from UpdateBlock / mining / building.
+	if val, ok := w.solidBlocks[k]; ok {
+		return val
+	}
 	if _, isPassable := w.passableBlocks[k]; isPassable {
 		return false
 	}
 
-	// 2. Cek Override Map (dari packet UpdateBlock)
-	if val, ok := w.solidBlocks[k]; ok {
-		return val
-	}
-
-	// 3. Cek Chunk Cache (Real block data)
+	// Chunk cache is the source of truth when loaded.
 	if w.chunkQuerier != nil {
 		isSolid, loaded := w.chunkQuerier.IsBlockSolid(x, y, z)
 		if loaded {
@@ -131,7 +195,7 @@ func (w *LocalWorldModel) IsSolid(x, y, z int32) bool {
 		}
 	}
 
-	// 4. Fallback jika chunk belum load
+	// Fallback when chunk is not loaded yet.
 	if y > 320 || y < -64 {
 		return false // Void
 	}

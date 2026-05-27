@@ -3,6 +3,7 @@ package movement
 import (
 	"math"
 
+	"bedrock-ai/internal/bot/pathfinder"
 	"github.com/go-gl/mathgl/mgl32"
 )
 
@@ -99,7 +100,8 @@ func (tc *TickContext) calculateMovementSpeedAndPosition() {
 		baseY := int32(math.Floor(float64(tc.CurrPos.Y() + 0.1)))
 		descentTargetY, descentDrop, plannedDescent := tc.plannedDescent(baseY)
 		hasSameLevelSupport := tc.hasGroundSupportAt(targetX, targetZ, baseY)
-		if !needsStepUp && !tc.IsLadderActive && !tc.IsParkourJump && !isMidJump && !plannedDescent && !hasSameLevelSupport {
+		pathAllowsGap := tc.pathAllowsForwardWithoutGround(baseY)
+		if !needsStepUp && !tc.IsLadderActive && !tc.IsParkourJump && !isMidJump && !plannedDescent && !hasSameLevelSupport && !pathAllowsGap {
 			targetX = tc.CurrPos.X()
 			targetZ = tc.CurrPos.Z()
 			tc.HasHorizontalMove = false
@@ -212,6 +214,37 @@ func controlledDescentY(currentY, physicsNextY, targetY float32, drop int32) (fl
 		nextY = targetY
 	}
 	return nextY, nextY - currentY
+}
+
+// pathAllowsForwardWithoutGround is true when the active path expects a gap
+// jump or the next stand node already has floor support.
+func (tc *TickContext) pathAllowsForwardWithoutGround(feetY int32) bool {
+	if !tc.HasPath || tc.B.WorldModel == nil {
+		return false
+	}
+	tc.B.Mu.Lock()
+	defer tc.B.Mu.Unlock()
+	if tc.B.PathIndex >= len(tc.B.CurrentPath) {
+		return false
+	}
+	next := tc.B.CurrentPath[tc.B.PathIndex]
+	if next.LinkType == pathfinder.LinkJump || next.LinkType == pathfinder.LinkStepJump {
+		return true
+	}
+	if tc.B.PathIndex > 0 {
+		prev := tc.B.CurrentPath[tc.B.PathIndex-1]
+		dx := abs32(next.X - prev.X)
+		dz := abs32(next.Z - prev.Z)
+		if dx > 1 || dz > 1 {
+			return true
+		}
+	}
+	floorY := next.Y - 1
+	if floorY < feetY-3 {
+		return false
+	}
+	return tc.B.WorldModel.IsSolid(next.X, floorY, next.Z) &&
+		!tc.B.WorldModel.IsHazard(next.X, floorY, next.Z)
 }
 
 func (tc *TickContext) hasGroundSupportAt(x, z float32, feetY int32) bool {

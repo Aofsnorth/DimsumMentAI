@@ -90,37 +90,24 @@ func SendInputLoop(ctx context.Context, b *bot.Bot, gd minecraft.GameData) {
 			tc.FeetY = int32(math.Floor(float64(tc.CurrPos.Y())))
 			tc.FeetZ = int32(math.Floor(float64(tc.CurrPos.Z())))
 
-			// === AUTO-LEARN PASSABLE BLOCKS ===
-			// Only mark the block below feet as solid when grounded.
-			// During a jump the bot passes through air blocks; marking
-			// them solid would create phantom ground and break gravity.
+			// Per-tick body clearance: feet/head cells are non-solid for
+			// collision only this tick. Do not use SetSolid(false) here —
+			// that permanently erased real blocks from the world model.
+			b.WorldModel.ClearBodyClearance()
+			b.WorldModel.SetBodyClearance(tc.FeetX, tc.FeetY, tc.FeetZ)
+			b.WorldModel.SetBodyClearance(tc.FeetX, tc.FeetY+1, tc.FeetZ)
+			b.WorldModel.SetBodyClearance(tc.FeetX, tc.FeetY+2, tc.FeetZ)
+
 			b.Mu.Lock()
 			isGrounded := b.IsGrounded
 			velY := b.VelY
 			b.Mu.Unlock()
-
 			isMidAir := !isGrounded || velY > 0.05 || velY < -0.05
-
-			if !isMidAir {
-				// Grounded: safe to learn floor below feet as solid.
-				// But cross-check against real chunk data first so we
-				// don't override an air block the chunk knows about.
-				shouldMarkSolid := true
-				if b.WorldCache != nil {
-					isSolid, loaded := b.WorldCache.IsBlockSolid(tc.FeetX, tc.FeetY-1, tc.FeetZ)
-					if loaded && !isSolid {
-						shouldMarkSolid = false
-					}
-				}
-				if shouldMarkSolid {
+			if !isMidAir && b.WorldCache != nil {
+				if isSolid, loaded := b.WorldCache.IsBlockSolid(tc.FeetX, tc.FeetY-1, tc.FeetZ); loaded && isSolid {
 					b.WorldModel.SetSolid(tc.FeetX, tc.FeetY-1, tc.FeetZ, true)
 				}
 			}
-			// The blocks at feet, head and above are always passable
-			// (the bot is standing in them, so they can't be solid).
-			b.WorldModel.SetSolid(tc.FeetX, tc.FeetY, tc.FeetZ, false)
-			b.WorldModel.SetSolid(tc.FeetX, tc.FeetY+1, tc.FeetZ, false)
-			b.WorldModel.SetSolid(tc.FeetX, tc.FeetY+2, tc.FeetZ, false)
 
 			tc.detectLadder()
 			tc.updateDistanceToPlayer()

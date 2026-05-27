@@ -2,7 +2,6 @@ package player
 
 import (
 	"log/slog"
-	"math"
 
 	"bedrock-ai/internal/bot"
 	"bedrock-ai/internal/debuglog"
@@ -26,16 +25,6 @@ func handleMovePlayer(b *bot.Bot, p *packet.MovePlayer) {
 	if isSelf {
 		newPos := p.Position.Sub(mgl32.Vec3{0, 1.62, 0})
 		if newPos.Y() <= 320 && newPos.Y() >= -64 {
-			fell := b.Pos.Y()-newPos.Y() > 0.4
-			if fell {
-				feetX := int32(math.Floor(float64(b.Pos.X())))
-				feetY := int32(math.Floor(float64(b.Pos.Y())))
-				feetZ := int32(math.Floor(float64(b.Pos.Z())))
-				b.WorldModel.SetSolid(feetX, feetY-1, feetZ, false)
-				if b.MovementState != "idle" {
-					b.CurrentPath = nil
-				}
-			}
 			b.Pos = newPos
 			b.VelY = 0.0
 		}
@@ -72,16 +61,8 @@ func handleCorrectPrediction(b *bot.Bot, p *packet.CorrectPlayerMovePrediction) 
 			float64(b.Pos.Y()-correctedPos.Y())*float64(b.Pos.Y()-correctedPos.Y()) +
 			float64(b.Pos.Z()-correctedPos.Z())*float64(b.Pos.Z()-correctedPos.Z())
 
-		if posDiff > 4.0 {
-			if b.Pos.Y()-correctedPos.Y() > 0.4 {
-				feetX := int32(math.Floor(float64(b.Pos.X())))
-				feetY := int32(math.Floor(float64(b.Pos.Y())))
-				feetZ := int32(math.Floor(float64(b.Pos.Z())))
-				b.WorldModel.SetSolid(feetX, feetY-1, feetZ, false)
-			}
-			if b.MovementState != "idle" {
-				b.CurrentPath = nil
-			}
+		if posDiff > 4.0 && b.MovementState != "idle" {
+			b.CurrentPath = nil
 		}
 
 		b.Pos = correctedPos

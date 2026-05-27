@@ -178,7 +178,7 @@ func (tc *TickContext) runPhysicsAndCollisions() {
 }
 
 func groundCheckOffsets(isDescending, isParkourJump bool) []float32 {
-	if isDescending || isParkourJump {
+	if isDescending {
 		return []float32{0.0}
 	}
 	return []float32{0.0, -0.3, 0.3}

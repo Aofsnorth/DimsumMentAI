@@ -113,6 +113,7 @@ type Bot struct {
 	WorldCache            *world.WorldCache
 	CurrentPath           []pathfinder.Node
 	PathIndex             int
+	LastJumpPathIndex     int
 	TicksStuck            int
 	LastTickPos           mgl32.Vec3
 	LastPathRecalcTime    time.Time
@@ -171,6 +172,7 @@ func newBot(opts ...Option) (*Bot, error) {
 		Actors:              make(map[uint64]*entity.Info),
 		UniqueIDToRuntimeID: make(map[int64]uint64),
 		VelY:                0.0,
+		LastJumpPathIndex:   -1,
 	}
 
 	for _, opt := range opts {

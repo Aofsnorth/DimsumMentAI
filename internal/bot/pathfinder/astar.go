@@ -31,7 +31,7 @@ func (pq *PriorityQueue) Pop() interface{} {
 }
 
 // FindPath executes the A* algorithm in 3D grid space using the provided world walkability rules
-func FindPath(startNode, targetNode Node, world WorldModel) []Node {
+func FindPath(startNode, targetNode Node, world WorldModel, allowFallback bool) []Node {
 	type boundableWorld interface {
 		SetPathBounds(start, target Node)
 	}
@@ -62,11 +62,11 @@ func FindPath(startNode, targetNode Node, world WorldModel) []Node {
 	distanceToTarget := Distance(startNode, targetNode)
 	var maxIterations int32 = 10000
 	if distanceToTarget < 20 {
-		maxIterations = 5000 
+		maxIterations = 5000
 	} else if distanceToTarget < 50 {
-		maxIterations = 15000 
+		maxIterations = 15000
 	} else {
-		maxIterations = 30000 
+		maxIterations = 30000
 	}
 	iterations := int32(0)
 
@@ -110,12 +110,14 @@ func FindPath(startNode, targetNode Node, world WorldModel) []Node {
 			existing, inOpen := openMap[nKey]
 			if !inOpen {
 				newNode := &Node{
-					X:      neighbor.X,
-					Y:      neighbor.Y,
-					Z:      neighbor.Z,
-					G:      tentativeG,
-					H:      Distance(neighbor, targetNode),
-					Parent: current,
+					X:        neighbor.X,
+					Y:        neighbor.Y,
+					Z:        neighbor.Z,
+					G:        tentativeG,
+					H:        Distance(neighbor, targetNode),
+					Parent:   current,
+					Action:   neighbor.Action,
+					LinkType: neighbor.LinkType,
 				}
 				newNode.F = newNode.G + newNode.H
 				heap.Push(openSet, newNode)
@@ -124,13 +126,15 @@ func FindPath(startNode, targetNode Node, world WorldModel) []Node {
 				existing.G = tentativeG
 				existing.F = existing.G + existing.H
 				existing.Parent = current
+				existing.Action = neighbor.Action
+				existing.LinkType = neighbor.LinkType
 				heap.Fix(openSet, existing.Index)
 			}
 		}
 	}
 
 	// Fallback to the closest node reached if perfect destination is blocked
-	if bestNode != start {
+	if allowFallback && bestNode != start {
 		return reconstructPath(bestNode)
 	}
 

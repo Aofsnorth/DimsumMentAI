@@ -22,6 +22,7 @@ import (
 	"bedrock-ai/internal/event"
 	"bedrock-ai/internal/handler"
 	"bedrock-ai/internal/skin"
+	"bedrock-ai/internal/bot/visualizer"
 
 	"github.com/google/uuid"
 	"github.com/sandertv/gophertunnel/minecraft/protocol/login"
@@ -158,6 +159,8 @@ func main() {
 		slog.String("name", cfg.Bot.Name),
 		slog.String("address", cfg.Server.Address()),
 	)
+
+	visualizer.StartServer(b)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
