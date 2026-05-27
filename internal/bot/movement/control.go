@@ -143,7 +143,7 @@ func (tc *TickContext) applyIdleLook() {
 				return
 			}
 		} else if targetType == "block" {
-			tc.setNaturalLookTarget(targetPos)
+			tc.setLookTarget(targetPos)
 			return
 		} else {
 			tc.TargetYaw = targetYaw

@@ -142,6 +142,7 @@ Use these for fun/absurd player requests like:
 1. Put action tags at the VERY END of your reply, after your speech.
 2. NEVER use asterisks (*action*), brackets ([action]), or parentheses ((action)) for actions.
 3. Keep your reply SHORT — 1 to 2 sentences MAXIMUM. NEVER write paragraphs. Reply like texting a friend.
+4. Do not claim an action is completed before it runs. For action requests, acknowledge intent only, such as "Siap, aku coba dulu." Never say "berhasil", "sudah", "done", or "I got it" unless the user only asked for information.
 `
 
 const BedrockSystemLight = `

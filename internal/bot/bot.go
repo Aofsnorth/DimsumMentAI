@@ -46,19 +46,20 @@ var (
 )
 
 type Bot struct {
-	Logger     *slog.Logger
-	Conn       *minecraft.Conn
-	Dialer     DialerFunc
-	Registry   *handler.Registry
-	Bus        *event.Bus
-	Name         string
-	ServerHost   string
-	VenityCompat   bool // play.venity.net hub: aggressive chunk flood + ~30s session checks
-	RewindMovement bool // server uses RewindHistorySize / CorrectPlayerMovePrediction
-	Language     string
-	StatePath    string
-	ProtoSkin  protocol.Skin
-	PlayerUUID uuid.UUID
+	Logger            *slog.Logger
+	Conn              *minecraft.Conn
+	Dialer            DialerFunc
+	Registry          *handler.Registry
+	Bus               *event.Bus
+	Name              string
+	ServerHost        string
+	VenityCompat      bool // play.venity.net hub: aggressive chunk flood + ~30s session checks
+	NetherGamesCompat bool // play.nethergames.org/net: stricter login compatibility
+	RewindMovement    bool // server uses RewindHistorySize / CorrectPlayerMovePrediction
+	Language          string
+	StatePath         string
+	ProtoSkin         protocol.Skin
+	PlayerUUID        uuid.UUID
 
 	// AI and configuration
 	AiClient  *ai.NvidiaClient
@@ -135,15 +136,15 @@ type Bot struct {
 	// Internal bot messages tracked to prevent loops
 	RecentBotMessages map[string]time.Time
 
-	Mu         sync.Mutex
-	Pos        mgl32.Vec3
-	VelY       float32
+	Mu                  sync.Mutex
+	Pos                 mgl32.Vec3
+	VelY                float32
 	ServerTick          uint64 // monotonic input tick; synced from server packets when rewind
 	TickSynced          bool   // true after first server tick reference (UpdateAttributes/MovePlayer/etc.)
 	LastSentInputYaw    float32
 	LastSentInputPitch  float32
 	MovementSyncPending bool // send ClientMovementPredictionSync after next correction
-	ScaffoldingActive bool
+	ScaffoldingActive   bool
 }
 
 type DialerFunc func() (*minecraft.Conn, error)

@@ -2,12 +2,12 @@ package bot
 
 import (
 	"log/slog"
-	"strings"
 
 	"bedrock-ai/internal/ai"
 	"bedrock-ai/internal/config"
 	"bedrock-ai/internal/event"
 	"bedrock-ai/internal/handler"
+	"bedrock-ai/internal/servercompat"
 
 	"github.com/google/uuid"
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
@@ -48,8 +48,9 @@ func WithName(name string) Option {
 func WithServerHost(host string) Option {
 	return func(b *Bot) {
 		b.ServerHost = host
-		h := strings.ToLower(host)
-		b.VenityCompat = strings.Contains(h, "venity.net") || strings.Contains(h, "venity")
+		profile := servercompat.Detect(host)
+		b.VenityCompat = profile.Venity
+		b.NetherGamesCompat = profile.NetherGames
 	}
 }
 

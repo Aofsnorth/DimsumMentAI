@@ -8,7 +8,7 @@ import (
 	"github.com/google/uuid"
 )
 
-const deviceIdentityPath = "data/device_identity.json"
+var deviceIdentityPath = "data/device_identity.json"
 
 type persistedDevice struct {
 	ClientRandomID int64  `json:"client_random_id"`

@@ -2,7 +2,6 @@ package bot
 
 import (
 	"math"
-	"strings"
 	"time"
 
 	"bedrock-ai/internal/bot/entity"
@@ -19,7 +18,7 @@ func (b *Bot) FindPlayer(username string) (uint64, mgl32.Vec3, bool) {
 	defer b.Mu.Unlock()
 
 	for name, id := range b.PlayerEntityIDs {
-		if strings.EqualFold(name, username) {
+		if playerNameMatches(name, username) {
 			if pos, ok := b.PlayerPositions[id]; ok {
 				return id, pos, true
 			}
@@ -33,7 +32,7 @@ func (b *Bot) FindPlayerView(username string) (uint64, mgl32.Vec3, float32, floa
 	defer b.Mu.Unlock()
 
 	for name, id := range b.PlayerEntityIDs {
-		if strings.EqualFold(name, username) {
+		if playerNameMatches(name, username) {
 			pos, ok := b.PlayerPositions[id]
 			if !ok {
 				return 0, mgl32.Vec3{}, 0, 0, false
@@ -90,7 +89,15 @@ func (b *Bot) Close() error {
 func (b *Bot) GetEntities() map[uint64]*entity.Info {
 	b.Mu.Lock()
 	defer b.Mu.Unlock()
-	return b.Actors
+	snapshot := make(map[uint64]*entity.Info, len(b.Actors))
+	for id, info := range b.Actors {
+		if info == nil {
+			continue
+		}
+		cp := *info
+		snapshot[id] = &cp
+	}
+	return snapshot
 }
 
 func (b *Bot) GetHeldItemSlot() uint32 {
@@ -102,13 +109,21 @@ func (b *Bot) GetHeldItemSlot() uint32 {
 func (b *Bot) GetInventorySlots() map[uint32]protocol.ItemStack {
 	b.Mu.Lock()
 	defer b.Mu.Unlock()
-	return b.InventoryMap
+	snapshot := make(map[uint32]protocol.ItemStack, len(b.InventoryMap))
+	for slot, stack := range b.InventoryMap {
+		snapshot[slot] = stack
+	}
+	return snapshot
 }
 
 func (b *Bot) GetItemNames() map[int32]string {
 	b.Mu.Lock()
 	defer b.Mu.Unlock()
-	return b.ItemNames
+	snapshot := make(map[int32]string, len(b.ItemNames))
+	for id, name := range b.ItemNames {
+		snapshot[id] = name
+	}
+	return snapshot
 }
 
 func (b *Bot) SendChat(msg string) {

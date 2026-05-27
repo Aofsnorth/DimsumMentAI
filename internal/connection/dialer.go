@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 
 	"bedrock-ai/internal/config"
+	"bedrock-ai/internal/servercompat"
 
 	"github.com/sandertv/gophertunnel/minecraft"
 	"github.com/sandertv/gophertunnel/minecraft/auth"
@@ -25,10 +26,7 @@ func NewDialer(cfg config.ServerConfig, identityData login.IdentityData, clientD
 }
 
 func (d *Dialer) Dial() (*minecraft.Conn, error) {
-	dialer := minecraft.Dialer{
-		IdentityData: d.identityData,
-		ClientData:   mergeClientData(d.clientData),
-	}
+	dialer := d.newMinecraftDialer()
 
 	if !d.cfg.Offline {
 		tokenPath := "configs/token.json"
@@ -56,6 +54,14 @@ func (d *Dialer) Dial() (*minecraft.Conn, error) {
 	}
 
 	return conn, nil
+}
+
+func (d *Dialer) newMinecraftDialer() minecraft.Dialer {
+	profile := servercompat.Detect(d.cfg.Host)
+	return minecraft.Dialer{
+		IdentityData: d.identityData,
+		ClientData:   mergeClientData(d.clientData, profile),
+	}
 }
 
 func loadToken(path string) (*oauth2.Token, error) {

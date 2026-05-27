@@ -4,9 +4,9 @@
 
 # --- Server Settings ---
 server:
-  host: "play.venity.net"
+  host: "127.0.0.1"
   port: 19132
-  offline: false # true = no Xbox Live auth (local server)
+  offline: true # true = no Xbox Live auth (local server)
 
 # --- Bot Identity ---
 bot:
@@ -22,7 +22,7 @@ skin:
 # --- AI & LLM Settings ---
 ai:
   provider: "nvidia" # "nvidia" or "none"
-  model: "openai/gpt-oss-20b"
+  model: "openai/gpt-oss-120b"
   api_key: "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" # Leave empty to load from NVIDIA_API_KEY environment variable
   main_player: "OnyxStygian" # Primary player/owner username
   respond_only_to_linked_player: false

@@ -98,3 +98,22 @@ func (wc *WorldCache) ChunkCount() int {
 	defer wc.mu.RUnlock()
 	return len(wc.chunks)
 }
+
+// SetBlockRID updates a single cached block from a server UpdateBlock packet.
+func (wc *WorldCache) SetBlockRID(x, y, z int32, rid uint32) {
+	if int(y) < wc.r.Min() || int(y) > wc.r.Max() {
+		return
+	}
+
+	rid = wc.TranslateRuntimeID(rid)
+	pos := chunkPos{X: x >> 4, Z: z >> 4}
+
+	wc.mu.Lock()
+	c, ok := wc.chunks[pos]
+	if !ok {
+		c = chunk.New(wc.airRID, wc.r)
+		wc.chunks[pos] = c
+	}
+	c.SetBlock(uint8(x&0xf), int16(y), uint8(z&0xf), 0, rid)
+	wc.mu.Unlock()
+}

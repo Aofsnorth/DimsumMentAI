@@ -166,7 +166,7 @@ func (b *Bot) GetPlayerCoords(username string) (mgl32.Vec3, bool) {
 	defer b.Mu.Unlock()
 
 	for name, targetID := range b.PlayerEntityIDs {
-		if strings.EqualFold(name, username) {
+		if playerNameMatches(name, username) {
 			if pos, ok := b.PlayerPositions[targetID]; ok {
 				return pos, true
 			}

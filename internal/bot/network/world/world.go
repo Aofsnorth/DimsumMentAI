@@ -1,11 +1,13 @@
 package world
 
 import (
+	"math"
 	"sync/atomic"
 
 	"bedrock-ai/internal/bot"
 	"bedrock-ai/internal/debuglog"
 
+	"github.com/go-gl/mathgl/mgl32"
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
 	"github.com/sandertv/gophertunnel/minecraft/protocol/packet"
 )
@@ -40,8 +42,10 @@ func HandleWorldPacket(b *bot.Bot, pk packet.Packet) bool {
 			_ = b.Conn.Flush()
 		}
 
-		// Venity hub floods 400+ full chunks at spawn; skip decode to keep the read loop responsive.
-		if !b.VenityCompat {
+		// Venity hub floods 400+ full chunks at spawn. Decode only chunks
+		// near the bot/active target so pathfinding has local ground data
+		// without making the packet loop chew through the whole flood.
+		if shouldDecodeLevelChunk(b, p) {
 			pkCopy := *p
 			if len(p.RawPayload) > 0 {
 				pkCopy.RawPayload = append([]byte(nil), p.RawPayload...)
@@ -90,10 +94,46 @@ func HandleWorldPacket(b *bot.Bot, pk packet.Packet) bool {
 		return true
 
 	case *packet.UpdateBlock:
+		b.WorldCache.SetBlockRID(p.Position.X(), p.Position.Y(), p.Position.Z(), p.NewBlockRuntimeID)
 		isSolid := b.WorldCache.IsRIDSolid(p.NewBlockRuntimeID)
 		b.WorldModel.SetSolid(p.Position.X(), p.Position.Y(), p.Position.Z(), isSolid)
 		return true
 	}
 
 	return false
+}
+
+func shouldDecodeLevelChunk(b *bot.Bot, p *packet.LevelChunk) bool {
+	if !b.VenityCompat {
+		return true
+	}
+
+	b.Mu.Lock()
+	pos := b.Pos
+	target := b.TargetPos
+	movementState := b.MovementState
+	b.Mu.Unlock()
+
+	if chunkWithinRadius(p.Position, pos, 2) {
+		return true
+	}
+	if movementState != "idle" && chunkWithinRadius(p.Position, target, 2) {
+		return true
+	}
+	return false
+}
+
+func chunkWithinRadius(chunkPos [2]int32, pos mgl32.Vec3, radius int32) bool {
+	chunkX := int32(math.Floor(float64(pos.X()) / 16.0))
+	chunkZ := int32(math.Floor(float64(pos.Z()) / 16.0))
+	dx := abs32(chunkPos[0] - chunkX)
+	dz := abs32(chunkPos[1] - chunkZ)
+	return dx <= radius && dz <= radius
+}
+
+func abs32(v int32) int32 {
+	if v < 0 {
+		return -v
+	}
+	return v
 }

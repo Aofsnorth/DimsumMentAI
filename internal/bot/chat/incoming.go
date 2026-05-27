@@ -173,6 +173,12 @@ func HandleIncomingChat(ctx context.Context, b *bot.Bot, evt event.ChatEvent) {
 	for _, act := range parsed.Actions {
 		steps = append(steps, action.Step{Label: act.Label, Param: act.Param})
 	}
+	if len(steps) == 0 {
+		steps = fallbackMovementActions(msg)
+		if len(steps) > 0 {
+			b.Logger.Info("chat inferred movement action from message", slog.Any("steps", steps))
+		}
+	}
 	action.ExecutePlan(b, steps, evt.SourceName)
 }
 

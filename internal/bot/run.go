@@ -39,6 +39,7 @@ func (b *Bot) Run(ctx context.Context) error {
 		slog.String("address", conn.RemoteAddr().String()),
 		slog.String("server_host", b.ServerHost),
 		slog.Bool("venity_compat", b.VenityCompat),
+		slog.Bool("nether_games_compat", b.NetherGamesCompat),
 		slog.Bool("UseBlockNetworkIDHashes", conn.GameData().UseBlockNetworkIDHashes),
 	)
 
@@ -89,14 +90,15 @@ func (b *Bot) Run(ctx context.Context) error {
 	)
 	// #region agent log
 	debuglog.Log("F", "run.go:spawned", "bot spawned", map[string]any{
-		"clientCacheEnabled":  b.Conn.ClientCacheEnabled(),
-		"chunkRadius":         b.Conn.ChunkRadius(),
-		"venityCompat":        b.VenityCompat,
-		"rewindHistorySize":   gd.PlayerMovementSettings.RewindHistorySize,
-		"rewindMovement":      b.RewindMovement,
-		"worldTime":           gd.Time,
-		"serverTickInit":      0,
-		"runId":               "tick-fix",
+		"clientCacheEnabled": b.Conn.ClientCacheEnabled(),
+		"chunkRadius":        b.Conn.ChunkRadius(),
+		"venityCompat":       b.VenityCompat,
+		"netherGamesCompat":  b.NetherGamesCompat,
+		"rewindHistorySize":  gd.PlayerMovementSettings.RewindHistorySize,
+		"rewindMovement":     b.RewindMovement,
+		"worldTime":          gd.Time,
+		"serverTickInit":     0,
+		"runId":              "tick-fix",
 	})
 	// #endregion
 	if lastPos, ok := b.LoadLastStandingPosition(); ok {

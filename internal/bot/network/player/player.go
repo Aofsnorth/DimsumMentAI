@@ -91,6 +91,12 @@ func HandlePlayerPacket(b *bot.Bot, pk packet.Packet) bool {
 		b.Mu.Unlock()
 		return true
 
+	case *packet.TakeItemActor:
+		b.Mu.Lock()
+		delete(b.Actors, p.ItemEntityRuntimeID)
+		b.Mu.Unlock()
+		return true
+
 	case *packet.RemoveActor:
 		b.Mu.Lock()
 		if runtimeID, ok := b.UniqueIDToRuntimeID[p.EntityUniqueID]; ok {
