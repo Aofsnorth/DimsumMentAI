@@ -28,20 +28,20 @@ import (
 
 // Function pointers for dependency injection (resolving circular dependencies)
 var (
-	SendInputLoopFunc      func(ctx context.Context, b *Bot, gd minecraft.GameData)
-	PacketLoopFunc         func(ctx context.Context, b *Bot) error
-	ChunkRequesterLoopFunc func(ctx context.Context, b *Bot)
-	SendPlayerSkinFunc     func(b *Bot)
+	SendInputLoopFunc         func(ctx context.Context, b *Bot, gd minecraft.GameData)
+	PacketLoopFunc            func(ctx context.Context, b *Bot) error
+	ChunkRequesterLoopFunc    func(ctx context.Context, b *Bot)
+	SendPlayerSkinFunc        func(b *Bot)
 	SendLoadingScreenDoneFunc func(b *Bot)
-	RecalculatePathFunc    func(b *Bot)
-	NavigateToFunc         func(b *Bot, pos mgl32.Vec3)
-	StopMovementFunc       func(b *Bot)
-	NavigateToBlockFunc    func(b *Bot, x, y, z int32, tolerance float32) bool
-	LookAtFunc             func(b *Bot, pos mgl32.Vec3)
+	RecalculatePathFunc       func(b *Bot)
+	NavigateToFunc            func(b *Bot, pos mgl32.Vec3)
+	StopMovementFunc          func(b *Bot)
+	NavigateToBlockFunc       func(b *Bot, x, y, z int32, tolerance float32) bool
+	LookAtFunc                func(b *Bot, pos mgl32.Vec3)
 
 	// Chat listener and action execution hooks
-	InitChatListenerFunc   func(ctx context.Context, b *Bot)
-	ExecuteActionFunc      func(b *Bot, label, param, user string)
+	InitChatListenerFunc func(ctx context.Context, b *Bot)
+	ExecuteActionFunc    func(b *Bot, label, param, user string)
 )
 
 type Bot struct {
@@ -51,6 +51,8 @@ type Bot struct {
 	Registry   *handler.Registry
 	Bus        *event.Bus
 	Name       string
+	Language   string
+	StatePath  string
 	ProtoSkin  protocol.Skin
 	PlayerUUID uuid.UUID
 
@@ -63,6 +65,8 @@ type Bot struct {
 	PlayerEntityIDs map[string]uint64
 	PlayerUsernames map[uint64]string
 	PlayerPositions map[uint64]mgl32.Vec3
+	PlayerYaws      map[uint64]float32
+	PlayerPitches   map[uint64]float32
 	PlayerUUIDs     map[uuid.UUID]string
 
 	// Actor Tracking
@@ -80,11 +84,21 @@ type Bot struct {
 	MovementState    string // "idle", "walk_to", "follow"
 	TargetPos        mgl32.Vec3
 	TargetPlayerName string
+	LookTargetName   string
+	LookTargetUntil  time.Time
 	IsOnLadder       bool // shared ladder state between movement and network systems
+	IsGrounded       bool
+	ParkourUntil     time.Time
 
 	// Look angles
-	Yaw   float32
-	Pitch float32
+	Yaw                 float32
+	Pitch               float32
+	IdleLookTargetYaw   float32
+	IdleLookTargetPitch float32
+	IdleLookTargetType  string
+	IdleLookTargetID    uint64
+	IdleLookTargetPos   mgl32.Vec3
+	NextIdleLookChange  time.Time
 
 	// A* Pathfinding
 	WorldModel            *pathfinder.LocalWorldModel
@@ -101,10 +115,11 @@ type Bot struct {
 	Hunger int
 
 	// Inventory tracking
-	InventoryMap map[uint32]protocol.ItemStack
-	ItemNames    map[int32]string
-	Recipes      map[string]uint32
-	HeldSlot     uint32
+	InventoryMap   map[uint32]protocol.ItemStack
+	ItemNames      map[int32]string
+	Recipes        map[string]uint32
+	HeldSlot       uint32
+	StackRequestID int32
 
 	// Emotes / Animations state
 	EmoteState string
@@ -116,6 +131,7 @@ type Bot struct {
 	Mu   sync.Mutex
 	Pos  mgl32.Vec3
 	VelY float32
+	ScaffoldingActive bool
 }
 
 type DialerFunc func() (*minecraft.Conn, error)
@@ -125,9 +141,13 @@ func newBot(opts ...Option) (*Bot, error) {
 		PlayerEntityIDs:     make(map[string]uint64),
 		PlayerUsernames:     make(map[uint64]string),
 		PlayerPositions:     make(map[uint64]mgl32.Vec3),
+		PlayerYaws:          make(map[uint64]float32),
+		PlayerPitches:       make(map[uint64]float32),
 		PlayerUUIDs:         make(map[uuid.UUID]string),
 		RecentBotMessages:   make(map[string]time.Time),
 		MovementState:       "idle",
+		Language:            "Indonesian",
+		StatePath:           "data/bot_state.json",
 		InventoryMap:        make(map[uint32]protocol.ItemStack),
 		ItemNames:           make(map[int32]string),
 		Recipes:             make(map[string]uint32),

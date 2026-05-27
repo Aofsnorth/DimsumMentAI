@@ -72,6 +72,11 @@ func (tc *TickContext) resolveNextTarget() {
 	if tc.HasPath {
 		node := tc.B.CurrentPath[tc.B.PathIndex]
 		tc.NextTarget = mgl32.Vec3{float32(node.X) + 0.5, float32(node.Y), float32(node.Z) + 0.5}
+
+		if (node.Action == "mine" || node.Action == "place") && !tc.B.ScaffoldingActive {
+			tc.B.ScaffoldingActive = true
+			go ExecuteScaffoldAction(tc.B, node)
+		}
 	} else {
 		tc.NextTarget = tc.TPos
 	}

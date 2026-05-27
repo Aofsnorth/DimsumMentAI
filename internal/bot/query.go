@@ -1,10 +1,13 @@
 package bot
 
 import (
+	"math"
 	"strings"
+	"time"
 
 	"bedrock-ai/internal/bot/entity"
 
+	"github.com/df-mc/dragonfly/server/world/chunk"
 	"github.com/go-gl/mathgl/mgl32"
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
 	"github.com/sandertv/gophertunnel/minecraft/protocol/packet"
@@ -23,6 +26,51 @@ func (b *Bot) FindPlayer(username string) (uint64, mgl32.Vec3, bool) {
 		}
 	}
 	return 0, mgl32.Vec3{}, false
+}
+
+func (b *Bot) FindPlayerView(username string) (uint64, mgl32.Vec3, float32, float32, bool) {
+	b.Mu.Lock()
+	defer b.Mu.Unlock()
+
+	for name, id := range b.PlayerEntityIDs {
+		if strings.EqualFold(name, username) {
+			pos, ok := b.PlayerPositions[id]
+			if !ok {
+				return 0, mgl32.Vec3{}, 0, 0, false
+			}
+			return id, pos, b.PlayerYaws[id], b.PlayerPitches[id], true
+		}
+	}
+	return 0, mgl32.Vec3{}, 0, 0, false
+}
+
+func (b *Bot) LookAtPlayer(username string, duration time.Duration) bool {
+	_, _, ok := b.FindPlayer(username)
+	if !ok {
+		return false
+	}
+	if duration <= 0 {
+		duration = 4 * time.Second
+	}
+
+	b.Mu.Lock()
+	b.LookTargetName = username
+	b.LookTargetUntil = time.Now().Add(duration)
+	b.Mu.Unlock()
+
+	return true
+}
+
+func (b *Bot) GetBlockName(x, y, z int32) (string, bool) {
+	if b.WorldCache == nil {
+		return "", false
+	}
+	rid, ok := b.WorldCache.GetBlockRID(x, y, z)
+	if !ok {
+		return "", false
+	}
+	name, _, ok := chunk.RuntimeIDToState(rid)
+	return name, ok
 }
 
 // RecalculatePath computes the shortest path to targetPos using A* search.
@@ -129,4 +177,18 @@ func (b *Bot) LookAt(pos mgl32.Vec3) {
 	if LookAtFunc != nil {
 		LookAtFunc(b, pos)
 	}
+}
+
+func (b *Bot) playerApproachPosition(username string) (mgl32.Vec3, bool) {
+	_, pos, yaw, _, ok := b.FindPlayerView(username)
+	if !ok {
+		return mgl32.Vec3{}, false
+	}
+	yawWorldRad := float64(yaw+90) * math.Pi / 180
+	front := mgl32.Vec3{
+		float32(math.Cos(yawWorldRad)) * 1.6,
+		0,
+		float32(math.Sin(yawWorldRad)) * 1.6,
+	}
+	return pos.Add(front), true
 }

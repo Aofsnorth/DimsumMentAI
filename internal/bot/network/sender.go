@@ -19,7 +19,7 @@ func SendLoadingScreenDone(b *bot.Bot) {
 	_ = b.Conn.WritePacket(&packet.ServerBoundLoadingScreen{
 		Type: packet.LoadingScreenTypeEnd,
 	})
-	b.Logger.Info("sent loading screen packets")
+	b.Logger.Debug("sent loading screen packets")
 }
 
 func ChunkRequesterLoop(ctx context.Context, b *bot.Bot) {
@@ -115,7 +115,7 @@ func SendPlayerSkin(b *bot.Bot) {
 		UUID: targetUUID,
 		Skin: b.ProtoSkin,
 	})
-	b.Logger.Info("sent PlayerSkin packet",
+	b.Logger.Debug("sent PlayerSkin packet",
 		slog.String("uuid", targetUUID.String()),
 		slog.Int("skin_data_len", len(b.ProtoSkin.SkinData)),
 		slog.String("arm_size", b.ProtoSkin.ArmSize),

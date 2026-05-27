@@ -20,12 +20,15 @@ func (s ServerConfig) Address() string {
 }
 
 type BotConfig struct {
-	Name string `yaml:"name"`
+	Name      string `yaml:"name"`
+	Language  string `yaml:"language"`
+	LogLevel  string `yaml:"log_level"`
+	StatePath string `yaml:"state_path"`
 }
 
 type SkinConfig struct {
-	ImagePath    string `yaml:"image_path"`
-	ArmSize      string `yaml:"arm_size"`
+	ImagePath string `yaml:"image_path"`
+	ArmSize   string `yaml:"arm_size"`
 }
 
 type AIConfig struct {

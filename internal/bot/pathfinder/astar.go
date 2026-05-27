@@ -80,8 +80,13 @@ func FindPath(startNode, targetNode Node, world WorldModel) []Node {
 		delete(openMap, currentKey)
 		closedMap[currentKey] = true
 
-		if current.X == targetNode.X && current.Y == targetNode.Y && current.Z == targetNode.Z {
-			return reconstructPath(current)
+		if isTargetReached(current, targetNode) {
+			// If we reached adjacent node, make sure to add targetNode to path if it is passable
+			path := reconstructPath(current)
+			if !current.Equal(&targetNode) {
+				path = append(path, targetNode)
+			}
+			return path
 		}
 
 		dist := Distance(*current, targetNode)
@@ -147,4 +152,21 @@ func reconstructPath(endNode *Node) []Node {
 		path[i], path[j] = path[j], path[i]
 	}
 	return path
+}
+
+func isTargetReached(current *Node, target Node) bool {
+	if current.X == target.X && current.Y == target.Y && current.Z == target.Z {
+		return true
+	}
+	dx := abs32(current.X - target.X)
+	dy := abs32(current.Y - target.Y)
+	dz := abs32(current.Z - target.Z)
+	return dx <= 1 && dz <= 1 && dy <= 1
+}
+
+func abs32(val int32) int32 {
+	if val < 0 {
+		return -val
+	}
+	return val
 }

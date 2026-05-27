@@ -10,6 +10,17 @@ import (
 )
 
 func (tc *TickContext) performActiveSteering() {
+	tc.B.Mu.Lock()
+	scaffActive := tc.B.ScaffoldingActive
+	tc.B.Mu.Unlock()
+
+	if scaffActive {
+		tc.ShouldMove = false
+		tc.HasHorizontalMove = false
+		tc.MoveVec = mgl32.Vec2{0, 0}
+		return
+	}
+
 	tc.ShouldMove = tc.MState != "idle" && tc.AllowDirectSteering
 	tc.PlayerHeightDiff = 0.0
 	if tc.MState == "follow" && tc.TPlayer != "" {
@@ -27,12 +38,22 @@ func (tc *TickContext) performActiveSteering() {
 			tc.HasHorizontalMove = true
 
 			var advanceDist float32 = 0.8
+			segmentIsGap := false
 			if tc.IsLadderActive {
 				advanceDist = 0.25
 			} else if tc.HasPath {
 				tc.B.Mu.Lock()
 				if tc.B.PathIndex < len(tc.B.CurrentPath) {
 					currNode := tc.B.CurrentPath[tc.B.PathIndex]
+					if tc.B.PathIndex > 0 {
+						prevNode := tc.B.CurrentPath[tc.B.PathIndex-1]
+						dxGap := math.Abs(float64(currNode.X - prevNode.X))
+						dzGap := math.Abs(float64(currNode.Z - prevNode.Z))
+						if math.Max(dxGap, dzGap) > 1.5 {
+							segmentIsGap = true
+							advanceDist = 0.35
+						}
+					}
 					if currNode.Y != int32(math.Floor(float64(tc.CurrPos.Y()+0.1))) {
 						advanceDist = 0.5
 					} else if tc.B.PathIndex > 0 && tc.B.PathIndex+1 < len(tc.B.CurrentPath) {
@@ -54,7 +75,9 @@ func (tc *TickContext) performActiveSteering() {
 
 			maxHeightDiff := 2.5
 			if tc.IsLadderActive {
-				maxHeightDiff = 0.5
+				maxHeightDiff = 1.2
+			} else if segmentIsGap {
+				maxHeightDiff = 0.55
 			}
 
 			if tc.HasPath && tc.Dist < advanceDist {
@@ -69,7 +92,7 @@ func (tc *TickContext) performActiveSteering() {
 						tc.B.CurrentPath = nil
 						if tc.B.MovementState == "walk_to" {
 							tc.B.MovementState = "idle"
-							tc.B.Logger.Info("bot arrived at target destination", slog.Float64("x", float64(tc.TPos.X())), slog.Float64("z", float64(tc.TPos.Z())))
+							tc.B.Logger.Debug("bot arrived at target destination", slog.Float64("x", float64(tc.TPos.X())), slog.Float64("z", float64(tc.TPos.Z())))
 						}
 					}
 				}
@@ -79,7 +102,7 @@ func (tc *TickContext) performActiveSteering() {
 					tc.B.Mu.Lock()
 					tc.B.MovementState = "idle"
 					tc.B.Mu.Unlock()
-					tc.B.Logger.Info("bot arrived at target destination", slog.Float64("x", float64(tc.TPos.X())), slog.Float64("z", float64(tc.TPos.Z())))
+					tc.B.Logger.Debug("bot arrived at target destination", slog.Float64("x", float64(tc.TPos.X())), slog.Float64("z", float64(tc.TPos.Z())))
 				}
 			}
 
@@ -137,6 +160,9 @@ func (tc *TickContext) performActiveSteering() {
 
 			tc.ShouldJump = false
 			tc.JumpReason = ""
+			tc.B.Mu.Lock()
+			tc.IsParkourJump = parkourWindowActive(tc.B.ParkourUntil)
+			tc.B.Mu.Unlock()
 			if tc.HasPath {
 				tc.B.Mu.Lock()
 				if tc.B.PathIndex < len(tc.B.CurrentPath) {
@@ -155,18 +181,27 @@ func (tc *TickContext) performActiveSteering() {
 					}
 
 					isGapInPath := false
+					gapDistance := float32(0)
 					if tc.B.PathIndex > 0 {
 						prevNode := tc.B.CurrentPath[tc.B.PathIndex-1]
 						dxPath := math.Abs(float64(nextNode.X - prevNode.X))
 						dzPath := math.Abs(float64(nextNode.Z - prevNode.Z))
-						if dxPath > 1.5 || dzPath > 1.5 {
+						gapDistance = float32(math.Max(dxPath, dzPath))
+						if gapDistance > 1.5 && gapDistance <= 4.0 {
 							isGapInPath = true
 						}
 					}
 
-					if nextNode.Y == baseY && isGapInPath && tc.Dist < 2.5 && tc.Dist > 0.3 {
-						tc.ShouldJump = true
-						tc.JumpReason = "Jump Gap"
+					if nextNode.Y == baseY && isGapInPath && tc.Dist < gapDistance+0.55 && tc.Dist > 0.55 {
+						yawRad := math.Atan2(float64(tc.Dz), float64(tc.Dx))
+						idealYaw := float32(yawRad*180/math.Pi) - 90
+						yawDiff := math.Mod(float64(tc.B.Yaw-idealYaw+540), 360) - 180
+						if math.Abs(yawDiff) < 25.0 {
+							tc.ShouldJump = true
+							tc.IsParkourJump = true
+							tc.B.ParkourUntil = time.Now().Add(1800 * time.Millisecond)
+							tc.JumpReason = fmt.Sprintf("Parkour Gap: distance %.0f", gapDistance)
+						}
 					}
 				}
 				tc.B.Mu.Unlock()

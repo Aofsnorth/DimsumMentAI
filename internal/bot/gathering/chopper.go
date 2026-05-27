@@ -22,21 +22,24 @@ func NewTreeChopper(rg *ResourceGatherer, logger *slog.Logger) *TreeChopper {
 	}
 }
 
-func (tc *TreeChopper) GatherWood(ctx context.Context, targetCount int) {
+func (tc *TreeChopper) GatherWood(ctx context.Context, targetCount int, preferred string) {
 	bot := tc.rg.bot
 	botPos := bot.GetCoords()
 
-	tc.logger.Info("Starting wood gathering", "target", targetCount)
+	tc.logger.Debug("Starting wood gathering", "target", targetCount)
 	tc.rg.bot.SendChat("Aku cari pohon dulu ya!")
 
 	var logPos protocol.BlockPos
 	found := false
+	var fallbackLog protocol.BlockPos
+	hasFallback := false
 
 	bx := int32(math.Floor(float64(botPos.X())))
 	by := int32(math.Floor(float64(botPos.Y())))
 	bz := int32(math.Floor(float64(botPos.Z())))
 
-	// Search horizontal area
+	// Search horizontal area for actual logs only. Solid blocks such as dirt or
+	// grass are deliberately ignored so tree chopping never turns into digging.
 	for r := int32(1); r <= 16; r++ {
 		for dx := -r; dx <= r; dx++ {
 			for dz := -r; dz <= r; dz++ {
@@ -45,8 +48,15 @@ func (tc *TreeChopper) GatherWood(ctx context.Context, targetCount int) {
 				}
 				for dy := int32(-1); dy <= 5; dy++ {
 					tx, ty, tz := bx+dx, by+dy, bz+dz
-					world := tc.rg.bot.GetLocalWorldModel()
-					if world.IsSolid(tx, ty, tz) {
+					name, ok := tc.rg.bot.GetBlockName(tx, ty, tz)
+					if ok && isLogBlockName(name) {
+						if !hasFallback {
+							fallbackLog = protocol.BlockPos{tx, ty, tz}
+							hasFallback = true
+						}
+						if preferred != "" && !matchesPreferredLog(name, preferred) {
+							continue
+						}
 						logPos = protocol.BlockPos{tx, ty, tz}
 						found = true
 						break
@@ -66,15 +76,26 @@ func (tc *TreeChopper) GatherWood(ctx context.Context, targetCount int) {
 	}
 
 	if !found {
-		tc.logger.Warn("No solid blocks registered as logs nearby. Guessing coordinate in front of bot.")
-		logPos = protocol.BlockPos{bx + 2, by, bz}
+		if hasFallback {
+			logPos = fallbackLog
+			found = true
+		}
 	}
 
-	tc.ChopTreeAt(ctx, logPos)
+	if !found {
+		tc.logger.Warn("No log blocks found nearby")
+		tc.rg.bot.SendChat("Aku belum nemu pohon yang kebaca di sekitar sini.")
+		return
+	}
+
+	tc.ChopTreeAt(ctx, logPos, targetCount)
 }
 
-func (tc *TreeChopper) ChopTreeAt(ctx context.Context, startPos protocol.BlockPos) {
-	tc.logger.Info("Directed to chop tree", "pos", startPos)
+func (tc *TreeChopper) ChopTreeAt(ctx context.Context, startPos protocol.BlockPos, targetCount int) {
+	tc.logger.Debug("Directed to chop tree", "pos", startPos)
+	if targetCount <= 0 {
+		targetCount = 1
+	}
 
 	targetVec := mgl32.Vec3{float32(startPos.X()) + 0.5, float32(startPos.Y()), float32(startPos.Z()) + 0.5}
 	tc.rg.bot.LookAt(targetVec)
@@ -88,16 +109,16 @@ func (tc *TreeChopper) ChopTreeAt(ctx context.Context, startPos protocol.BlockPo
 	tc.rg.bot.StopMovement()
 
 	basePos := tc.traceToBase(startPos)
-	tc.chopTree(ctx, basePos)
+	tc.chopTree(ctx, basePos, targetCount)
 }
 
 func (tc *TreeChopper) traceToBase(pos protocol.BlockPos) protocol.BlockPos {
 	current := pos
-	world := tc.rg.bot.GetLocalWorldModel()
 
 	for i := 0; i < 15; i++ {
 		below := protocol.BlockPos{current.X(), current.Y() - 1, current.Z()}
-		if world.IsSolid(below.X(), below.Y(), below.Z()) {
+		name, ok := tc.rg.bot.GetBlockName(below.X(), below.Y(), below.Z())
+		if ok && isLogBlockName(name) {
 			current = below
 		} else {
 			break

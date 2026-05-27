@@ -11,9 +11,12 @@ import (
 	"github.com/sandertv/gophertunnel/minecraft/protocol/packet"
 )
 
-func (tc *TreeChopper) chopTree(ctx context.Context, basePos protocol.BlockPos) {
+func (tc *TreeChopper) chopTree(ctx context.Context, basePos protocol.BlockPos, targetCount int) {
 	bot := tc.rg.bot
 	world := bot.GetLocalWorldModel()
+	if targetCount <= 0 {
+		targetCount = 1
+	}
 
 	var queue []protocol.BlockPos
 	queue = append(queue, basePos)
@@ -23,10 +26,14 @@ func (tc *TreeChopper) chopTree(ctx context.Context, basePos protocol.BlockPos) 
 
 	var logBlocks []protocol.BlockPos
 
-	for len(queue) > 0 && len(logBlocks) < 80 {
+	for len(queue) > 0 && len(logBlocks) < targetCount {
 		curr := queue[0]
 		queue = queue[1:]
 
+		name, ok := bot.GetBlockName(curr.X(), curr.Y(), curr.Z())
+		if !ok || !isLogBlockName(name) {
+			continue
+		}
 		logBlocks = append(logBlocks, curr)
 
 		for dx := int32(-1); dx <= 1; dx++ {
@@ -56,7 +63,8 @@ func (tc *TreeChopper) chopTree(ctx context.Context, basePos protocol.BlockPos) 
 						continue
 					}
 
-					if world.IsSolid(next.X(), next.Y(), next.Z()) {
+					name, ok := bot.GetBlockName(next.X(), next.Y(), next.Z())
+					if ok && isLogBlockName(name) {
 						visited[key] = true
 						queue = append(queue, next)
 					}
@@ -65,7 +73,7 @@ func (tc *TreeChopper) chopTree(ctx context.Context, basePos protocol.BlockPos) 
 		}
 	}
 
-	tc.logger.Info("Collected log blocks via BFS", "count", len(logBlocks))
+	tc.logger.Debug("Collected log blocks via BFS", "count", len(logBlocks))
 
 	tc.equipBestAxe()
 
@@ -89,8 +97,8 @@ func (tc *TreeChopper) chopTree(ctx context.Context, basePos protocol.BlockPos) 
 		bot.LookAt(targetCenter)
 		time.Sleep(50 * time.Millisecond)
 
-		tc.logger.Info("Chopping log block", "pos", pos)
-		
+		tc.logger.Debug("Chopping log block", "pos", pos)
+
 		_ = bot.WritePacket(&packet.Animate{
 			ActionType:      packet.AnimateActionSwingArm,
 			EntityRuntimeID: bot.GetEntityRuntimeID(),
@@ -103,11 +111,24 @@ func (tc *TreeChopper) chopTree(ctx context.Context, basePos protocol.BlockPos) 
 			BlockFace:       1,
 		})
 
-		time.Sleep(1200 * time.Millisecond)
+		breakDeadline := time.Now().Add(1200 * time.Millisecond)
+		for time.Now().Before(breakDeadline) {
+			_ = bot.WritePacket(&packet.Animate{
+				ActionType:      packet.AnimateActionSwingArm,
+				EntityRuntimeID: bot.GetEntityRuntimeID(),
+			})
+			_ = bot.WritePacket(&packet.PlayerAction{
+				EntityRuntimeID: bot.GetEntityRuntimeID(),
+				ActionType:      protocol.PlayerActionCrackBreak,
+				BlockPosition:   pos,
+				BlockFace:       1,
+			})
+			time.Sleep(250 * time.Millisecond)
+		}
 
 		_ = bot.WritePacket(&packet.PlayerAction{
 			EntityRuntimeID: bot.GetEntityRuntimeID(),
-			ActionType:      protocol.PlayerActionCrackBreak,
+			ActionType:      protocol.PlayerActionStopBreak,
 			BlockPosition:   pos,
 			BlockFace:       1,
 		})
@@ -137,7 +158,7 @@ func (tc *TreeChopper) clearObstructions(ctx context.Context, targetPos protocol
 		time.Sleep(50 * time.Millisecond)
 
 		bot.LookAt(mgl32.Vec3{float32(checkPos.X()) + 0.5, float32(checkPos.Y()) + 0.5, float32(checkPos.Z()) + 0.5})
-		
+
 		_ = bot.WritePacket(&packet.Animate{
 			ActionType:      packet.AnimateActionSwingArm,
 			EntityRuntimeID: bot.GetEntityRuntimeID(),

@@ -44,6 +44,22 @@ func WithName(name string) Option {
 	}
 }
 
+func WithLanguage(language string) Option {
+	return func(b *Bot) {
+		if language != "" {
+			b.Language = language
+		}
+	}
+}
+
+func WithStatePath(path string) Option {
+	return func(b *Bot) {
+		if path != "" {
+			b.StatePath = path
+		}
+	}
+}
+
 func WithSkin(skin protocol.Skin, playerUUID uuid.UUID) Option {
 	return func(b *Bot) {
 		b.ProtoSkin = skin
@@ -62,4 +78,3 @@ func WithAI(client *ai.NvidiaClient, throttler *ai.MessageThrottler, cfg config.
 func New(opts ...Option) (*Bot, error) {
 	return newBot(opts...)
 }
-

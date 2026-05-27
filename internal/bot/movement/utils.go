@@ -2,6 +2,7 @@ package movement
 
 import (
 	"math"
+	"time"
 
 	"bedrock-ai/internal/bot"
 	"github.com/go-gl/mathgl/mgl32"
@@ -74,4 +75,12 @@ func LookAt(b *bot.Bot, pos mgl32.Vec3) {
 
 	pitchRad := -math.Atan2(float64(dy), distH)
 	b.Pitch = float32(pitchRad * 180 / math.Pi)
+
+	// Lock the idle look target so the movement loop doesn't
+	// immediately override the gaze on the next tick.
+	b.IdleLookTargetYaw = b.Yaw
+	b.IdleLookTargetPitch = b.Pitch
+	b.IdleLookTargetType = "block"
+	b.IdleLookTargetPos = pos
+	b.NextIdleLookChange = time.Now().Add(3 * time.Second)
 }

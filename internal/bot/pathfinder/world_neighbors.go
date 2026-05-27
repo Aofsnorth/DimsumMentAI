@@ -29,27 +29,66 @@ func (w *LocalWorldModel) GetNeighbors(node Node) []Node {
 		return false
 	}
 
-	// Helper: try to find a drop landing spot (max 3 blocks down)
+	const maxSafeStandDrop int32 = 3
+
+	// Helper: try to find a controlled step down. A one-block lower floor is
+	// at y-2 because y is the bot's current feet position.
 	// Returns (landingY, found)
 	tryDrop := func(x, y, z int32) (int32, bool) {
-		for dy := int32(1); dy <= 3; dy++ {
-			fallY := y - dy
+		for standDrop := int32(1); standDrop <= maxSafeStandDrop; standDrop++ {
+			landY := y - standDrop
+			floorY := landY - 1
 
-			if w.IsHazard(x, fallY, z) {
+			if w.IsHazard(x, landY, z) || w.IsHazard(x, landY+1, z) {
 				return 0, false
 			}
 
-			if w.IsSolid(x, fallY, z) {
-				// fallY is the floor, bot stands at fallY+1
-				landY := fallY + 1
-				// Ensure there's head room
-				if !w.IsSolid(x, landY+1, z) && !w.IsHazard(x, landY, z) {
+			if w.IsSolid(x, floorY, z) {
+				if w.IsHazard(x, floorY, z) {
+					return 0, false
+				}
+				if !w.IsSolid(x, landY, z) && !w.IsSolid(x, landY+1, z) {
 					return landY, true
 				}
-				return 0, false // Floor found but no head room
+				return 0, false
 			}
 		}
-		return 0, false // No floor found within 3 blocks = bottomless pit
+		return 0, false
+	}
+
+	const maxParkourLandingDistance int32 = 4
+
+	canParkourTo := func(dx, dz, distance int32) (Node, bool) {
+		if distance < 2 || distance > maxParkourLandingDistance {
+			return Node{}, false
+		}
+		if w.IsHazard(cx, cy-1, cz) || !w.IsSolid(cx, cy-1, cz) {
+			return Node{}, false
+		}
+		if w.IsSolid(cx, cy+1, cz) || w.IsSolid(cx, cy+2, cz) {
+			return Node{}, false
+		}
+
+		for step := int32(1); step < distance; step++ {
+			gx := cx + dx*step
+			gz := cz + dz*step
+			if w.IsHazard(gx, cy, gz) || w.IsHazard(gx, cy-1, gz) {
+				return Node{}, false
+			}
+			if w.IsSolid(gx, cy, gz) || w.IsSolid(gx, cy+1, gz) || w.IsSolid(gx, cy+2, gz) {
+				return Node{}, false
+			}
+			if w.IsSolid(gx, cy-1, gz) {
+				return Node{}, false
+			}
+		}
+
+		lx := cx + dx*distance
+		lz := cz + dz*distance
+		if !canStandAt(lx, cy, lz) {
+			return Node{}, false
+		}
+		return Node{X: lx, Y: cy, Z: lz, G: node.G + 4.5 + float32(distance)*0.8}, true
 	}
 
 	// Process vertical ladder climbing
@@ -62,6 +101,29 @@ func (w *LocalWorldModel) GetNeighbors(node Node) []Node {
 		if !w.IsSolid(cx, cy-1, cz) && !w.IsHazard(cx, cy-1, cz) {
 			if w.IsLadder(cx, cy-1, cz) || w.IsSolid(cx, cy-2, cz) { // Note: Y-1 of target is cy-2
 				neighbors = append(neighbors, Node{X: cx, Y: cy - 1, Z: cz, G: node.G + 0.8})
+			}
+		}
+	}
+
+	// Enter ladder from above: bot is standing on solid ground and the
+	// block at feet level (cy) or below (cy-1) is a ladder. This covers
+	// the common case of approaching a ladder from the top floor.
+	if !w.IsLadder(cx, cy, cz) {
+		// Check if we can step down into a ladder column directly below
+		if w.IsLadder(cx, cy-1, cz) && !w.IsHazard(cx, cy-1, cz) {
+			neighbors = append(neighbors, Node{X: cx, Y: cy - 1, Z: cz, G: node.G + 1.0})
+		}
+		// Check cardinal-adjacent ladder entries (e.g. ladder on a wall one block out)
+		for _, off := range cardinalOffsets {
+			lx, lz := cx+off.dx, cz+off.dz
+			if w.IsLadder(lx, cy, lz) && !w.IsSolid(lx, cy, lz) && !w.IsSolid(lx, cy+1, lz) &&
+				!w.IsHazard(lx, cy, lz) && !w.IsHazard(lx, cy+1, lz) {
+				neighbors = append(neighbors, Node{X: lx, Y: cy, Z: lz, G: node.G + 1.0})
+			}
+			// Adjacent block one level down has a ladder
+			if w.IsLadder(lx, cy-1, lz) && !w.IsSolid(lx, cy-1, lz) && !w.IsSolid(lx, cy, lz) &&
+				!w.IsHazard(lx, cy-1, lz) && !w.IsHazard(lx, cy, lz) {
+				neighbors = append(neighbors, Node{X: lx, Y: cy - 1, Z: lz, G: node.G + 1.2})
 			}
 		}
 	}
@@ -82,12 +144,11 @@ func (w *LocalWorldModel) GetNeighbors(node Node) []Node {
 				neighbors = append(neighbors, Node{X: tx, Y: landY, Z: tz, G: node.G + 1.0 + dropDist*0.3})
 			}
 
-			// Also try jump gap (2 blocks forward, same level)
-			if !w.IsSolid(tx, cy+2, tz) && !w.IsSolid(cx, cy+2, cz) {
-				lx := cx + off.dx*2
-				lz := cz + off.dz*2
-				if canStandAt(lx, cy, lz) {
-					neighbors = append(neighbors, Node{X: lx, Y: cy, Z: lz, G: node.G + 1.8})
+			// Also try conservative parkour with a known safe landing.
+			for distance := int32(2); distance <= maxParkourLandingDistance; distance++ {
+				if jumpNode, ok := canParkourTo(off.dx, off.dz, distance); ok {
+					neighbors = append(neighbors, jumpNode)
+					break
 				}
 			}
 		}
@@ -120,6 +181,40 @@ func (w *LocalWorldModel) GetNeighbors(node Node) []Node {
 			// 1. Diagonal flat walk
 			if canStandAt(tx, cy, tz) {
 				neighbors = append(neighbors, Node{X: tx, Y: cy, Z: tz, G: node.G + 1.414})
+			} else if !w.IsSolid(tx, cy, tz) && !w.IsSolid(tx, cy+1, tz) &&
+				!w.IsHazard(tx, cy, tz) && !w.IsHazard(tx, cy+1, tz) {
+				if landY, ok := tryDrop(tx, cy, tz); ok {
+					dropDist := float32(cy - landY)
+					neighbors = append(neighbors, Node{X: tx, Y: landY, Z: tz, G: node.G + 1.414 + dropDist*0.3})
+				}
+			}
+		}
+	}
+
+	// Process scaffolding and mining when AllowScaffold is enabled
+	if w.AllowScaffold {
+		// 1. Tower up in place
+		if !w.IsSolid(cx, cy+2, cz) && !w.IsHazard(cx, cy+2, cz) {
+			neighbors = append(neighbors, Node{X: cx, Y: cy + 1, Z: cz, G: node.G + 12.0, Action: "place"})
+		}
+
+		for _, off := range cardinalOffsets {
+			tx := cx + off.dx
+			tz := cz + off.dz
+
+			// 2. Mine forward
+			isTargetFeetSolid := w.IsSolid(tx, cy, tz)
+			isTargetHeadSolid := w.IsSolid(tx, cy+1, tz)
+			if (isTargetFeetSolid || isTargetHeadSolid) && w.IsSolid(tx, cy-1, tz) && !w.IsHazard(tx, cy-1, tz) {
+				if w.IsBreakable(tx, cy, tz) && w.IsBreakable(tx, cy+1, tz) {
+					neighbors = append(neighbors, Node{X: tx, Y: cy, Z: tz, G: node.G + 15.0, Action: "mine"})
+				}
+			}
+
+			// 3. Bridge forward
+			if !w.IsSolid(tx, cy-1, tz) && !w.IsSolid(tx, cy, tz) && !w.IsSolid(tx, cy+1, tz) &&
+				!w.IsHazard(tx, cy-1, tz) && !w.IsHazard(tx, cy, tz) && !w.IsHazard(tx, cy+1, tz) {
+				neighbors = append(neighbors, Node{X: tx, Y: cy, Z: tz, G: node.G + 10.0, Action: "place"})
 			}
 		}
 	}

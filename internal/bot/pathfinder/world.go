@@ -2,6 +2,7 @@ package pathfinder
 
 import (
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -31,9 +32,29 @@ type LocalWorldModel struct {
 	tempSolidBlocks map[string]time.Time // Temporary solid blocks to avoid stuck loops
 	chunkQuerier   ChunkQuerier
 
+	AllowScaffold  bool
+
 	hasBounds bool
 	startX, startY, startZ   int32
 	targetX, targetY, targetZ int32
+}
+
+func (w *LocalWorldModel) IsBreakable(x, y, z int32) bool {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+	if w.chunkQuerier != nil {
+		rid, loaded := w.chunkQuerier.GetBlockRID(x, y, z)
+		if loaded {
+			name, _, ok := chunk.RuntimeIDToState(rid)
+			if ok {
+				if name == "minecraft:bedrock" {
+					return false
+				}
+				return true
+			}
+		}
+	}
+	return true
 }
 
 func NewLocalWorldModel() *LocalWorldModel {
@@ -170,7 +191,7 @@ func (w *LocalWorldModel) IsLadder(x, y, z int32) bool {
 		if loaded {
 			name, _, ok := chunk.RuntimeIDToState(rid)
 			if ok {
-				return name == "minecraft:ladder"
+				return name == "minecraft:ladder" || strings.Contains(name, "vine") || name == "minecraft:scaffolding"
 			}
 		}
 	}

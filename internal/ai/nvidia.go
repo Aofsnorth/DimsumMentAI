@@ -24,12 +24,13 @@ type ChatCompletionResponse struct {
 }
 
 type NvidiaClient struct {
-	apiKey    string
-	model     string
-	client    *http.Client
-	History   *MessageHistory
-	persona   string
-	rules     string
+	apiKey   string
+	model    string
+	client   *http.Client
+	History  *MessageHistory
+	persona  string
+	rules    string
+	language string
 }
 
 func NewNvidiaClient(apiKey, model string) *NvidiaClient {
@@ -41,12 +42,13 @@ func NewNvidiaClient(apiKey, model string) *NvidiaClient {
 	}
 
 	return &NvidiaClient{
-		apiKey:  apiKey,
-		model:   model,
-		client:  &http.Client{Timeout: 30 * time.Second},
-		History: NewMessageHistory(20),
-		persona: PromptCharacter,
-		rules:   BedrockSystemRules,
+		apiKey:   apiKey,
+		model:    model,
+		client:   &http.Client{Timeout: 30 * time.Second},
+		History:  NewMessageHistory(20),
+		persona:  PromptCharacter,
+		rules:    BedrockSystemRules,
+		language: "Indonesian",
 	}
 }
 
@@ -60,9 +62,17 @@ func (nc *NvidiaClient) SetRules(rules string) {
 	nc.rules = rules
 }
 
+func (nc *NvidiaClient) SetLanguage(language string) {
+	if language == "" {
+		language = "Indonesian"
+	}
+	nc.language = language
+}
+
 // BuildSystemPrompt constructs the system prompt dynamically with real-time environment variables
 func (nc *NvidiaClient) BuildSystemPrompt(botName, botCoords, playerCoords, heldItem, inventoryText string) string {
 	prompt := nc.persona + "\n" + nc.rules
+	prompt += GetLanguageInstruction(nc.language)
 
 	// Coordinates
 	if botCoords != "" {

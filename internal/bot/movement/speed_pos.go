@@ -37,7 +37,7 @@ func (tc *TickContext) calculateMovementSpeedAndPosition() {
 		tc.B.Mu.Unlock()
 
 		needsStepUp := false
-		isMidJump := tc.VelY > 0.05
+		isMidJump := !tc.IsGrounded || tc.VelY > 0.05
 		if tc.HasPath {
 			tc.B.Mu.Lock()
 			if tc.B.PathIndex < len(tc.B.CurrentPath) {
@@ -73,6 +73,9 @@ func (tc *TickContext) calculateMovementSpeedAndPosition() {
 		if tc.IsLadderActive {
 			speed = 0.12
 		}
+		if tc.IsParkourJump {
+			speed = 0.34
+		}
 
 		if absYawDiff > 15.0 {
 			factor := float32(1.0 - (absYawDiff-15.0)/75.0)
@@ -93,6 +96,18 @@ func (tc *TickContext) calculateMovementSpeedAndPosition() {
 
 		targetX := tc.CurrPos.X() + stepX
 		targetZ := tc.CurrPos.Z() + stepZ
+		baseY := int32(math.Floor(float64(tc.CurrPos.Y() + 0.1)))
+		descentTargetY, descentDrop, plannedDescent := tc.plannedDescent(baseY)
+		hasSameLevelSupport := tc.hasGroundSupportAt(targetX, targetZ, baseY)
+		if !needsStepUp && !tc.IsLadderActive && !tc.IsParkourJump && !isMidJump && !plannedDescent && !hasSameLevelSupport {
+			targetX = tc.CurrPos.X()
+			targetZ = tc.CurrPos.Z()
+			tc.HasHorizontalMove = false
+		}
+		if plannedDescent && !hasSameLevelSupport && !tc.IsLadderActive && !tc.IsParkourJump {
+			tc.NextY, tc.VelY = controlledDescentY(tc.CurrPos.Y(), tc.NextY, float32(descentTargetY), descentDrop)
+			tc.IsGrounded = true
+		}
 
 		hasWall := false
 		wallCheckMinY := tc.NextY + 0.1
@@ -165,4 +180,51 @@ func (tc *TickContext) calculateMovementSpeedAndPosition() {
 
 	tc.CurrPos = predictedPos
 	tc.LastPredictedY = predictedPos.Y()
+}
+
+func (tc *TickContext) plannedDescent(baseY int32) (int32, int32, bool) {
+	if !tc.HasPath {
+		return 0, 0, false
+	}
+	tc.B.Mu.Lock()
+	defer tc.B.Mu.Unlock()
+	if tc.B.PathIndex >= len(tc.B.CurrentPath) {
+		return 0, 0, false
+	}
+	nextNode := tc.B.CurrentPath[tc.B.PathIndex]
+	drop := baseY - nextNode.Y
+	return nextNode.Y, drop, drop > 0 && drop <= 3
+}
+
+func controlledDescentY(currentY, physicsNextY, targetY float32, drop int32) (float32, float32) {
+	if currentY <= targetY {
+		return targetY, 0
+	}
+	step := 0.16 + float32(drop)*0.08
+	if step > 0.42 {
+		step = 0.42
+	}
+	nextY := currentY - step
+	if physicsNextY < nextY {
+		nextY = physicsNextY
+	}
+	if nextY < targetY {
+		nextY = targetY
+	}
+	return nextY, nextY - currentY
+}
+
+func (tc *TickContext) hasGroundSupportAt(x, z float32, feetY int32) bool {
+	supportY := feetY - 1
+	offsets := []float32{0, -0.25, 0.25}
+	for _, dx := range offsets {
+		for _, dz := range offsets {
+			bx := int32(math.Floor(float64(x + dx)))
+			bz := int32(math.Floor(float64(z + dz)))
+			if tc.B.WorldModel.IsSolid(bx, supportY, bz) && !tc.B.WorldModel.IsHazard(bx, supportY, bz) {
+				return true
+			}
+		}
+	}
+	return false
 }

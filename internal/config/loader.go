@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -17,12 +18,27 @@ func Load(path string) (*Config, error) {
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		return nil, fmt.Errorf("parse config file: %w", err)
 	}
+	applyDefaults(&cfg)
 
 	if err := validate(&cfg); err != nil {
 		return nil, fmt.Errorf("validate config: %w", err)
 	}
 
 	return &cfg, nil
+}
+
+func applyDefaults(cfg *Config) {
+	if cfg.Bot.Language == "" {
+		cfg.Bot.Language = "Indonesian"
+	}
+	if cfg.Bot.LogLevel == "" {
+		cfg.Bot.LogLevel = "info"
+	}
+	cfg.Bot.LogLevel = strings.ToLower(strings.TrimSpace(cfg.Bot.LogLevel))
+	cfg.Bot.Language = strings.TrimSpace(cfg.Bot.Language)
+	if cfg.Bot.StatePath == "" {
+		cfg.Bot.StatePath = "data/bot_state.json"
+	}
 }
 
 func validate(cfg *Config) error {
@@ -40,6 +56,11 @@ func validate(cfg *Config) error {
 	}
 	if cfg.Skin.ArmSize != "slim" && cfg.Skin.ArmSize != "wide" {
 		return fmt.Errorf("skin.arm_size must be 'slim' or 'wide'")
+	}
+	switch cfg.Bot.LogLevel {
+	case "debug", "info", "warn", "error":
+	default:
+		return fmt.Errorf("bot.log_level must be one of: debug, info, warn, error")
 	}
 	if cfg.AI.Provider == "nvidia" {
 		if cfg.AI.ApiKey == "" && os.Getenv("NVIDIA_API_KEY") == "" {

@@ -13,9 +13,39 @@ func (b *Bot) WalkTo(pos mgl32.Vec3) {
 	b.Mu.Lock()
 	b.MovementState = "walk_to"
 	b.TargetPos = pos
-	b.Logger.Info("WalkTo initiated", "x", pos.X(), "y", pos.Y(), "z", pos.Z())
+	b.TargetPlayerName = ""
+	b.LookTargetName = ""
+	b.LookTargetUntil = time.Time{}
+	b.Logger.Debug("WalkTo initiated", "x", pos.X(), "y", pos.Y(), "z", pos.Z())
 	b.Mu.Unlock()
 	b.RecalculatePath()
+}
+
+func (b *Bot) ComeToPlayer(username string) bool {
+	target, ok := b.playerApproachPosition(username)
+	if !ok {
+		if _, pos, found := b.FindPlayer(username); found {
+			target = pos
+			ok = true
+		}
+	}
+	if !ok {
+		b.Logger.Warn("Player not found for come", "username", username)
+		return false
+	}
+
+	b.Mu.Lock()
+	b.MovementState = "walk_to"
+	b.TargetPlayerName = ""
+	b.TargetPos = target
+	b.LookTargetName = username
+	b.LookTargetUntil = time.Now().Add(12 * time.Second)
+	b.LastPathRecalcTime = time.Now()
+	b.Mu.Unlock()
+
+	b.RecalculatePath()
+	b.Logger.Debug("ComeToPlayer initiated", "username", username, "target", target)
+	return true
 }
 
 // FollowPlayer directs the bot to follow a player
@@ -23,7 +53,9 @@ func (b *Bot) FollowPlayer(username string) {
 	b.Mu.Lock()
 	b.MovementState = "follow"
 	b.TargetPlayerName = username
-	b.Logger.Info("FollowPlayer initiated", "username", username)
+	b.LookTargetName = username
+	b.LookTargetUntil = time.Now().Add(24 * time.Hour)
+	b.Logger.Debug("FollowPlayer initiated", "username", username)
 	b.Mu.Unlock()
 
 	if _, pos, ok := b.FindPlayer(username); ok {
@@ -32,7 +64,7 @@ func (b *Bot) FollowPlayer(username string) {
 		b.LastPathRecalcTime = time.Now()
 		b.Mu.Unlock()
 		b.RecalculatePath()
-		b.Logger.Info("Player found for follow, setting target position", "username", username, "pos", pos)
+		b.Logger.Debug("Player found for follow, setting target position", "username", username, "pos", pos)
 	} else {
 		b.Logger.Warn("Player not found for follow", "username", username)
 	}
@@ -44,16 +76,26 @@ func (b *Bot) Stop() {
 	defer b.Mu.Unlock()
 	b.MovementState = "idle"
 	b.CurrentPath = nil
-	b.Logger.Info("Bot movement stopped")
+	b.TargetPlayerName = ""
+	b.LookTargetName = ""
+	b.LookTargetUntil = time.Time{}
+	b.Logger.Debug("Bot movement stopped")
 }
 
 // TriggerEmote triggers a custom bot animation
 func (b *Bot) TriggerEmote(name string) {
+	b.TriggerEmoteFor(name, 40)
+}
+
+func (b *Bot) TriggerEmoteFor(name string, ticks int) {
+	if ticks <= 0 {
+		ticks = 40
+	}
 	b.Mu.Lock()
 	defer b.Mu.Unlock()
 	b.EmoteState = name
-	b.EmoteTicks = 40 // 2 seconds duration at 20 ticks/sec
-	b.Logger.Info("Emote triggered", "name", name)
+	b.EmoteTicks = ticks
+	b.Logger.Debug("Emote triggered", "name", name)
 }
 
 // GetInventorySummary returns a human-readable list of items in the inventory
@@ -123,9 +165,11 @@ func (b *Bot) GetPlayerCoords(username string) (mgl32.Vec3, bool) {
 	b.Mu.Lock()
 	defer b.Mu.Unlock()
 
-	if targetID, ok := b.PlayerEntityIDs[username]; ok {
-		if pos, ok := b.PlayerPositions[targetID]; ok {
-			return pos, true
+	for name, targetID := range b.PlayerEntityIDs {
+		if strings.EqualFold(name, username) {
+			if pos, ok := b.PlayerPositions[targetID]; ok {
+				return pos, true
+			}
 		}
 	}
 	return mgl32.Vec3{}, false

@@ -66,6 +66,7 @@ func (b *Bot) Run(ctx context.Context) error {
 
 	b.Mu.Lock()
 	actualPos := b.Pos
+	b.IsGrounded = true
 	b.Mu.Unlock()
 	b.Logger.Info("spawned in world",
 		slog.String("name", b.Name),
@@ -73,6 +74,15 @@ func (b *Bot) Run(ctx context.Context) error {
 		slog.Float64("y", float64(actualPos.Y())),
 		slog.Float64("z", float64(actualPos.Z())),
 	)
+	if lastPos, ok := b.LoadLastStandingPosition(); ok {
+		b.Logger.Debug("loaded last standing position",
+			slog.Float64("x", float64(lastPos.X())),
+			slog.Float64("y", float64(lastPos.Y())),
+			slog.Float64("z", float64(lastPos.Z())),
+		)
+	}
+	b.SaveLastStandingPosition()
+	defer b.SaveLastStandingPosition()
 
 	// Initialize subsystems
 	b.WorldCache.SetLogger(b.Logger)
@@ -101,6 +111,7 @@ func (b *Bot) Run(ctx context.Context) error {
 	if SendInputLoopFunc != nil {
 		go SendInputLoopFunc(ctx, b, gd)
 	}
+	go b.StartPositionSaver(ctx.Done())
 
 	// Start combat and threat detector loops
 	go func() {

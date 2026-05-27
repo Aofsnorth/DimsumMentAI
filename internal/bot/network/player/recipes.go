@@ -40,10 +40,12 @@ func handlePlayerList(b *bot.Bot, p *packet.PlayerList) {
 				if id, hasID := b.PlayerEntityIDs[username]; hasID {
 					delete(b.PlayerUsernames, id)
 					delete(b.PlayerPositions, id)
+					delete(b.PlayerYaws, id)
+					delete(b.PlayerPitches, id)
 				}
 				delete(b.PlayerEntityIDs, username)
 				delete(b.PlayerUUIDs, entry.UUID)
-				b.Logger.Info("tracked player disconnected", slog.String("username", username))
+				b.Logger.Debug("tracked player disconnected", slog.String("username", username))
 			}
 			b.Mu.Unlock()
 		}
@@ -78,7 +80,7 @@ func handleCraftingData(b *bot.Bot, p *packet.CraftingData) {
 		}
 	}
 	b.Mu.Unlock()
-	b.Logger.Info("Crafting recipes cached", "count", len(b.Recipes))
+	b.Logger.Debug("Crafting recipes cached", "count", len(b.Recipes))
 }
 
 func handleUpdateAttributes(b *bot.Bot, p *packet.UpdateAttributes) {

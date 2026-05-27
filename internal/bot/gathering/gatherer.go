@@ -31,8 +31,8 @@ type Bot interface {
 	GetEntityRuntimeID() uint64
 	GetLocalWorldModel() entity.WorldModel
 	DropItem(name string, count int) error
+	GetBlockName(x, y, z int32) (string, bool)
 }
-
 
 type ResourceGatherer struct {
 	bot              Bot
@@ -40,12 +40,12 @@ type ResourceGatherer struct {
 	isGathering      bool
 	choppedPositions map[string]bool
 	mu               sync.Mutex
-	
+
 	// Sub-components
-	chopper   *TreeChopper
-	miner     *BlockMiner
-	looter    *Looter
-	scaffold  *Scaffolder
+	chopper  *TreeChopper
+	miner    *BlockMiner
+	looter   *Looter
+	scaffold *Scaffolder
 }
 
 func NewResourceGatherer(bot Bot, logger *slog.Logger) *ResourceGatherer {
@@ -83,7 +83,7 @@ func (rg *ResourceGatherer) EnsureInventorySpace(ctx context.Context) bool {
 	rg.logger.Info("Inventory full, trying to drop junk items")
 	// Try to drop common junk items: seeds, cobblestone (if excessive), dirt (if excessive)
 	junkTypes := []string{"seed", "seeds", "wheat_seeds", "beetroot_seeds", "melon_seeds", "pumpkin_seeds"}
-	
+
 	names := rg.bot.GetItemNames()
 	for slot, item := range inv {
 		if item.Count <= 0 {
@@ -104,6 +104,10 @@ func (rg *ResourceGatherer) EnsureInventorySpace(ctx context.Context) bool {
 }
 
 func (rg *ResourceGatherer) GatherWood(ctx context.Context, targetCount int) {
+	rg.GatherWoodType(ctx, "", targetCount)
+}
+
+func (rg *ResourceGatherer) GatherWoodType(ctx context.Context, preferred string, targetCount int) {
 	rg.SetGathering(true)
 	defer rg.SetGathering(false)
 
@@ -112,7 +116,7 @@ func (rg *ResourceGatherer) GatherWood(ctx context.Context, targetCount int) {
 		return
 	}
 
-	rg.chopper.GatherWood(ctx, targetCount)
+	rg.chopper.GatherWood(ctx, targetCount, preferred)
 }
 
 func (rg *ResourceGatherer) GatherBlock(ctx context.Context, blockName string, targetCount int) {
@@ -137,4 +141,29 @@ func (rg *ResourceGatherer) CollectAllDrops(ctx context.Context, maxDist float32
 func (rg *ResourceGatherer) Stop() {
 	rg.SetGathering(false)
 	rg.bot.StopMovement()
+}
+
+func (rg *ResourceGatherer) TowerUp(ctx context.Context, height int) {
+	if height <= 0 {
+		return
+	}
+	pos := rg.bot.GetCoords()
+	rg.scaffold.TowerUpTo(ctx, pos.Y()+float32(height))
+}
+
+func (rg *ResourceGatherer) DigDown(ctx context.Context, depth int) {
+	if depth <= 0 {
+		return
+	}
+	pos := rg.bot.GetCoords()
+	targetY := pos.Y() - float32(depth)
+	rg.scaffold.DescendFromTower(ctx, targetY)
+}
+
+func (rg *ResourceGatherer) FindScaffoldItem() (uint32, protocol.ItemStack, bool) {
+	return rg.scaffold.FindScaffoldItem()
+}
+
+func (rg *ResourceGatherer) TowerUpTo(ctx context.Context, targetY float32) {
+	rg.scaffold.TowerUpTo(ctx, targetY)
 }

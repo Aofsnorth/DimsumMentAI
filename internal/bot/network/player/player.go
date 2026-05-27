@@ -16,10 +16,12 @@ func HandlePlayerPacket(b *bot.Bot, pk packet.Packet) bool {
 		b.Mu.Lock()
 		b.PlayerEntityIDs[p.Username] = p.EntityRuntimeID
 		b.PlayerUsernames[p.EntityRuntimeID] = p.Username
-		b.PlayerPositions[p.EntityRuntimeID] = p.Position
+		b.PlayerPositions[p.EntityRuntimeID] = trackedPlayerFeetPosition(p.Position)
+		b.PlayerYaws[p.EntityRuntimeID] = p.Yaw
+		b.PlayerPitches[p.EntityRuntimeID] = p.Pitch
 		b.PlayerUUIDs[p.UUID] = p.Username
 		b.Mu.Unlock()
-		b.Logger.Info("tracked player spawned", slog.String("username", p.Username), slog.Uint64("runtime_id", p.EntityRuntimeID))
+		b.Logger.Debug("tracked player spawned", slog.String("username", p.Username), slog.Uint64("runtime_id", p.EntityRuntimeID))
 		return true
 
 	case *packet.MovePlayer:
@@ -33,7 +35,7 @@ func HandlePlayerPacket(b *bot.Bot, pk packet.Packet) bool {
 	case *packet.Respawn:
 		b.Mu.Lock()
 		b.Pos = p.Position.Sub(mgl32.Vec3{0, 1.62, 0})
-		b.Logger.Info("bot respawned/teleported by server",
+		b.Logger.Debug("bot respawned/teleported by server",
 			slog.Float64("x", float64(b.Pos.X())),
 			slog.Float64("y", float64(b.Pos.Y())),
 			slog.Float64("z", float64(b.Pos.Z())),
@@ -56,7 +58,25 @@ func HandlePlayerPacket(b *bot.Bot, pk packet.Packet) bool {
 		}
 		b.UniqueIDToRuntimeID[p.EntityUniqueID] = p.EntityRuntimeID
 		b.Mu.Unlock()
-		b.Logger.Info("tracked actor spawned", slog.String("type", p.EntityType), slog.Uint64("runtime_id", p.EntityRuntimeID))
+		b.Logger.Debug("tracked actor spawned", slog.String("type", p.EntityType), slog.Uint64("runtime_id", p.EntityRuntimeID))
+		return true
+
+	case *packet.AddItemActor:
+		b.Mu.Lock()
+		itemName := "minecraft:item"
+		if nameVal, ok := b.ItemNames[p.Item.Stack.NetworkID]; ok {
+			itemName = nameVal
+		}
+		b.Actors[p.EntityRuntimeID] = &entity.Info{
+			ID:       p.EntityRuntimeID,
+			Type:     "minecraft:item",
+			Name:     itemName,
+			Position: p.Position,
+			Health:   1,
+		}
+		b.UniqueIDToRuntimeID[p.EntityUniqueID] = p.EntityRuntimeID
+		b.Mu.Unlock()
+		b.Logger.Debug("tracked item drop spawned", slog.String("name", itemName), slog.Uint64("runtime_id", p.EntityRuntimeID))
 		return true
 
 	case *packet.CraftingData:
@@ -82,13 +102,24 @@ func HandlePlayerPacket(b *bot.Bot, pk packet.Packet) bool {
 			delete(b.PlayerEntityIDs, username)
 			delete(b.PlayerUsernames, id)
 			delete(b.PlayerPositions, id)
-			b.Logger.Info("tracked player left view distance", slog.String("username", username))
+			delete(b.PlayerYaws, id)
+			delete(b.PlayerPitches, id)
+			b.Logger.Debug("tracked player left view distance", slog.String("username", username))
 		}
 		b.Mu.Unlock()
 		return true
 
 	case *packet.InventoryContent:
-		if p.WindowID == 0 {
+		isPlayerInv := isPlayerInventoryContent(p)
+		var containerID byte
+		containerID = p.Container.ContainerID
+		b.Logger.Info("received InventoryContent",
+			slog.Uint64("window_id", uint64(p.WindowID)),
+			slog.Uint64("container_id", uint64(containerID)),
+			slog.Bool("is_player_inv", isPlayerInv),
+			slog.Int("items_count", len(p.Content)),
+		)
+		if isPlayerInv {
 			b.Mu.Lock()
 			b.InventoryMap = make(map[uint32]protocol.ItemStack)
 			for slot, item := range p.Content {
@@ -101,7 +132,19 @@ func HandlePlayerPacket(b *bot.Bot, pk packet.Packet) bool {
 		return true
 
 	case *packet.InventorySlot:
-		if p.WindowID == 0 {
+		isPlayerInv := isPlayerInventorySlot(p)
+		var containerID byte
+		if container, ok := p.Container.Value(); ok {
+			containerID = container.ContainerID
+		}
+		b.Logger.Info("received InventorySlot",
+			slog.Uint64("window_id", uint64(p.WindowID)),
+			slog.Uint64("container_id", uint64(containerID)),
+			slog.Bool("is_player_inv", isPlayerInv),
+			slog.Uint64("slot", uint64(p.Slot)),
+			slog.Int("count", int(p.NewItem.Stack.Count)),
+		)
+		if isPlayerInv {
 			b.Mu.Lock()
 			if p.NewItem.Stack.Count > 0 && p.NewItem.Stack.NetworkID != 0 {
 				b.InventoryMap[p.Slot] = p.NewItem.Stack

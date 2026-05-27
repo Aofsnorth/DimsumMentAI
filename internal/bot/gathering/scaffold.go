@@ -45,7 +45,7 @@ func (s *Scaffolder) FindScaffoldItem() (uint32, protocol.ItemStack, bool) {
 
 func (s *Scaffolder) TowerUpTo(ctx context.Context, targetY float32) {
 	bot := s.rg.bot
-	s.logger.Info("Towering up", "target_y", targetY)
+	s.logger.Debug("Towering up", "target_y", targetY)
 
 	for {
 		select {
@@ -91,7 +91,7 @@ func (s *Scaffolder) TowerUpTo(ctx context.Context, targetY float32) {
 		}
 
 		_ = bot.WritePacket(tx)
-		
+
 		world := bot.GetLocalWorldModel()
 		world.SetSolid(refPos.X(), refPos.Y()+1, refPos.Z(), true)
 
@@ -101,7 +101,7 @@ func (s *Scaffolder) TowerUpTo(ctx context.Context, targetY float32) {
 
 func (s *Scaffolder) DescendFromTower(ctx context.Context, targetY float32) {
 	bot := s.rg.bot
-	s.logger.Info("Descending from tower", "target_y", targetY)
+	s.logger.Debug("Descending from tower", "target_y", targetY)
 
 	for {
 		select {

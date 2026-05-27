@@ -59,6 +59,9 @@ server:
 # --- Bot Identity ---
 bot:
   name: "Luna" # In-game display name
+  language: "Indonesian" # AI reply language, e.g. "English", "Indonesian", "Japanese"
+  log_level: "info" # debug, info, warn, or error
+  state_path: "data/bot_state.json" # Saves last standing position per server/name
 
 # --- Skin & Geometry ---
 skin:

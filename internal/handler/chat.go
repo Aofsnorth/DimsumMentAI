@@ -24,6 +24,10 @@ func (h *ChatHandler) Handle(_ context.Context, pk packet.Packet) error {
 	if !ok {
 		return nil
 	}
+	if p.TextType != packet.TextTypeChat && p.TextType != packet.TextTypeWhisper && p.TextType != packet.TextTypeAnnouncement {
+		h.logger.Debug("ignored non-chat text packet", slog.Int("type", int(p.TextType)))
+		return nil
+	}
 
 	sourceName := p.SourceName
 	message := p.Message
@@ -45,7 +49,7 @@ func (h *ChatHandler) Handle(_ context.Context, pk packet.Packet) error {
 		}
 	}
 
-	h.logger.Info("chat packet received",
+	h.logger.Debug("chat packet received",
 		slog.String("source", cleanSource),
 		slog.String("message", cleanMessage),
 		slog.Int("type", int(p.TextType)),

@@ -31,7 +31,7 @@ func (bm *BlockMiner) GatherBlock(ctx context.Context, blockName string, targetC
 	world := bot.GetLocalWorldModel()
 
 	resolvedName := bm.resolveFuzzyName(blockName)
-	bm.logger.Info("Starting block gathering", "name", blockName, "resolved", resolvedName, "target", targetCount)
+	bm.logger.Debug("Starting block gathering", "name", blockName, "resolved", resolvedName, "target", targetCount)
 
 	mined := 0
 	failedAttempts := 0
@@ -72,12 +72,16 @@ func (bm *BlockMiner) GatherBlock(ctx context.Context, blockName string, targetC
 					if !world.IsSolid(tx, ty, tz) {
 						continue
 					}
+					name, ok := bot.GetBlockName(tx, ty, tz)
+					if !ok || !blockNameMatches(name, resolvedName) {
+						continue
+					}
 
 					dist := bm.distance(botPos, mgl32.Vec3{float32(tx), float32(ty), float32(tz)})
 					isExposed := !world.IsSolid(tx, ty+1, tz)
 					exposureBonus := float32(0.0)
 					if !isExposed {
-						exposureBonus = 100.0
+						exposureBonus = 3.0
 					}
 
 					score := dist + exposureBonus
@@ -92,12 +96,8 @@ func (bm *BlockMiner) GatherBlock(ctx context.Context, blockName string, targetC
 		}
 
 		if !foundCandidate {
-			bestBlock = protocol.BlockPos{bx + 2, by - 1, bz}
-			tcName := fmt.Sprintf("%d,%d,%d", bestBlock.X(), bestBlock.Y(), bestBlock.Z())
-			if dugPositions[tcName] {
-				break
-			}
-			foundCandidate = true
+			bm.logger.Warn("No matching block found nearby", "name", resolvedName)
+			break
 		}
 
 		dist := bm.distance(botPos, mgl32.Vec3{float32(bestBlock.X()), float32(bestBlock.Y()), float32(bestBlock.Z())})
@@ -117,11 +117,6 @@ func (bm *BlockMiner) GatherBlock(ctx context.Context, blockName string, targetC
 		bot.LookAt(targetCenter)
 		time.Sleep(100 * time.Millisecond)
 
-		_ = bot.WritePacket(&packet.Animate{
-			ActionType:      packet.AnimateActionSwingArm,
-			EntityRuntimeID: bot.GetEntityRuntimeID(),
-		})
-
 		_ = bot.WritePacket(&packet.PlayerAction{
 			EntityRuntimeID: bot.GetEntityRuntimeID(),
 			ActionType:      protocol.PlayerActionStartBreak,
@@ -133,7 +128,25 @@ func (bm *BlockMiner) GatherBlock(ctx context.Context, blockName string, targetC
 		if strings.Contains(resolvedName, "stone") || strings.Contains(resolvedName, "ore") {
 			breakTime = 1500 * time.Millisecond
 		}
-		time.Sleep(breakTime)
+
+		// Continuously swing arm and re-lock gaze during the break
+		// so the bot visibly mines the block the entire time.
+		elapsed := time.Duration(0)
+		swingInterval := 300 * time.Millisecond
+		for elapsed < breakTime {
+			_ = bot.WritePacket(&packet.Animate{
+				ActionType:      packet.AnimateActionSwingArm,
+				EntityRuntimeID: bot.GetEntityRuntimeID(),
+			})
+			bot.LookAt(targetCenter)
+
+			wait := swingInterval
+			if elapsed+wait > breakTime {
+				wait = breakTime - elapsed
+			}
+			time.Sleep(wait)
+			elapsed += wait
+		}
 
 		_ = bot.WritePacket(&packet.PlayerAction{
 			EntityRuntimeID: bot.GetEntityRuntimeID(),
@@ -154,8 +167,8 @@ func (bm *BlockMiner) GatherBlock(ctx context.Context, blockName string, targetC
 		failedAttempts = 0
 
 		time.Sleep(150 * time.Millisecond)
+		bm.rg.looter.CollectAllDrops(ctx, 6.0)
 	}
 
-	bm.rg.looter.CollectAllDrops(ctx, 6.0)
 	bot.SendChat(fmt.Sprintf("Selesai ngumpulin %s! Aku dapet %d block.", blockName, mined))
 }

@@ -132,8 +132,13 @@ func (b *Bot) InjectAIEvent(msg string) {
 }
 
 func (b *Bot) CraftItem(recipeNetID uint32, count int) error {
+	b.Mu.Lock()
+	b.StackRequestID++
+	requestID := b.StackRequestID
+	b.Mu.Unlock()
+
 	req := protocol.ItemStackRequest{
-		RequestID: 1, // standard ID
+		RequestID: requestID,
 		Actions: []protocol.StackRequestAction{
 			&protocol.AutoCraftRecipeStackRequestAction{
 				RecipeNetworkID: recipeNetID,

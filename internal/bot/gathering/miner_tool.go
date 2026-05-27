@@ -8,7 +8,9 @@ import (
 )
 
 func (bm *BlockMiner) resolveFuzzyName(name string) string {
-	name = strings.ToLower(name)
+	name = strings.ToLower(strings.TrimSpace(name))
+	name = strings.ReplaceAll(name, " ", "_")
+	name = strings.TrimPrefix(name, "minecraft:")
 	fuzzyMap := map[string]string{
 		"grass":  "grass_block",
 		"stone":  "stone",
@@ -25,19 +27,34 @@ func (bm *BlockMiner) resolveFuzzyName(name string) string {
 	return name
 }
 
+func blockNameMatches(blockName, requested string) bool {
+	blockName = strings.ToLower(strings.TrimPrefix(blockName, "minecraft:"))
+	requested = strings.ToLower(strings.TrimPrefix(requested, "minecraft:"))
+	if blockName == requested {
+		return true
+	}
+	if strings.Contains(blockName, requested) {
+		return true
+	}
+	if requested == "oak_log" {
+		return isLogBlockName(blockName)
+	}
+	return false
+}
+
 func (bm *BlockMiner) equipBestTool(resolvedName string) {
 	bot := bm.rg.bot
 	inv := bot.GetInventorySlots()
 	names := bot.GetItemNames()
 
 	var requiredType string
-	if strings.Contains(resolvedName, "stone") || strings.Contains(resolvedName, "ore") || 
+	if strings.Contains(resolvedName, "stone") || strings.Contains(resolvedName, "ore") ||
 		strings.Contains(resolvedName, "brick") || strings.Contains(resolvedName, "cobble") {
 		requiredType = "pickaxe"
-	} else if strings.Contains(resolvedName, "dirt") || strings.Contains(resolvedName, "sand") || 
+	} else if strings.Contains(resolvedName, "dirt") || strings.Contains(resolvedName, "sand") ||
 		strings.Contains(resolvedName, "gravel") || strings.Contains(resolvedName, "clay") {
 		requiredType = "shovel"
-	} else if strings.Contains(resolvedName, "log") || strings.Contains(resolvedName, "wood") || 
+	} else if strings.Contains(resolvedName, "log") || strings.Contains(resolvedName, "wood") ||
 		strings.Contains(resolvedName, "plank") {
 		requiredType = "axe"
 	}

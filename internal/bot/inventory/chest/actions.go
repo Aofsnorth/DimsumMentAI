@@ -6,7 +6,6 @@ import (
 	"strings"
 	"time"
 
-	"bedrock-ai/internal/bot/entity"
 	"github.com/go-gl/mathgl/mgl32"
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
 	"github.com/sandertv/gophertunnel/minecraft/protocol/packet"
@@ -14,27 +13,21 @@ import (
 
 func (ic *Container) GiveItem(ctx context.Context, itemName string, playerName string, count int32) bool {
 	botPos := ic.bot.GetCoords()
-	entities := ic.bot.GetEntities()
 
-	var targetPlayer *entity.Info
-	for _, entity := range entities {
-		if entity.Type == "player" && strings.EqualFold(entity.Name, playerName) {
-			targetPlayer = entity
-			break
-		}
-	}
-
-	if targetPlayer == nil {
+	// Use FindPlayer which searches the proper player tracking system
+	// (PlayerEntityIDs/PlayerPositions), not the Actors map.
+	_, playerPos, found := ic.bot.FindPlayer(playerName)
+	if !found {
 		ic.logger.Warn("GiveItem: target player not found", "name", playerName)
 		return false
 	}
 
-	dist := ic.distance(botPos, targetPlayer.Position)
+	dist := ic.distance(botPos, playerPos)
 	if dist > 3.0 {
 		reached := ic.bot.NavigateToBlock(
-			int32(math.Floor(float64(targetPlayer.Position.X()))),
-			int32(math.Floor(float64(targetPlayer.Position.Y()))),
-			int32(math.Floor(float64(targetPlayer.Position.Z()))),
+			int32(math.Floor(float64(playerPos.X()))),
+			int32(math.Floor(float64(playerPos.Y()))),
+			int32(math.Floor(float64(playerPos.Z()))),
 			2.5,
 		)
 		if !reached {
@@ -44,14 +37,14 @@ func (ic *Container) GiveItem(ctx context.Context, itemName string, playerName s
 		ic.bot.StopMovement()
 	}
 
-	ic.bot.LookAt(targetPlayer.Position.Add(mgl32.Vec3{0, 1.6, 0}))
+	ic.bot.LookAt(playerPos.Add(mgl32.Vec3{0, 1.6, 0}))
 	time.Sleep(200 * time.Millisecond)
 
 	inv := ic.bot.GetInventorySlots()
 	names := ic.bot.GetItemNames()
 
 	var targetSlot uint32
-	found := false
+	foundItem := false
 	for slot, item := range inv {
 		if item.Count <= 0 {
 			continue
@@ -59,7 +52,7 @@ func (ic *Container) GiveItem(ctx context.Context, itemName string, playerName s
 		name := names[item.NetworkID]
 		if strings.Contains(strings.ToLower(name), strings.ToLower(itemName)) {
 			targetSlot = slot
-			found = true
+			foundItem = true
 			if count <= 0 || count > int32(item.Count) {
 				count = int32(item.Count)
 			}
@@ -67,7 +60,7 @@ func (ic *Container) GiveItem(ctx context.Context, itemName string, playerName s
 		}
 	}
 
-	if !found {
+	if !foundItem {
 		ic.logger.Warn("GiveItem: item not found in inventory", "name", itemName)
 		return false
 	}

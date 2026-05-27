@@ -17,7 +17,7 @@ func Init(ctx context.Context, b *bot.Bot) {
 		}
 		go HandleIncomingChat(ctx, b, chatEvt)
 	})
-	b.Logger.Info("Chat listener successfully registered on event bus")
+	b.Logger.Debug("Chat listener registered on event bus")
 }
 
 // Simple internal math helper for floats

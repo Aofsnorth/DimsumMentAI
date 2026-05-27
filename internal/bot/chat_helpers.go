@@ -61,7 +61,7 @@ func (b *Bot) SendSafeChat(msg string) {
 			PlatformChatID:   "",
 		}
 		_ = b.Conn.WritePacket(pk)
-		b.Logger.Info("sent chat message", "message", chunk)
+		b.Logger.Debug("sent chat message", "message", chunk)
 		time.Sleep(300 * time.Millisecond) // brief delay to prevent packet flooding
 	}
 }

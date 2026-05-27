@@ -34,6 +34,7 @@ type Bot interface {
 	GetEntityRuntimeID() uint64
 	GetLocalWorldModel() entity.WorldModel
 	DropItem(name string, count int) error
+	FindPlayer(username string) (uint64, mgl32.Vec3, bool)
 }
 
 type ChestData struct {

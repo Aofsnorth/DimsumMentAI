@@ -41,9 +41,13 @@ func main() {
 		logger.Error("failed to load config", slog.String("error", err.Error()))
 		os.Exit(1)
 	}
+	logger = slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
+		Level: parseLogLevel(cfg.Bot.LogLevel),
+	}))
+	slog.SetDefault(logger)
 
 	// --- Skin ---
-	logger.Info("loading skin",
+	logger.Debug("loading skin",
 		slog.String("image", cfg.Skin.ImagePath),
 		slog.String("arm_size", cfg.Skin.ArmSize),
 	)
@@ -58,7 +62,7 @@ func main() {
 	clientData := assets.ClientData
 	skinBytes, _ := base64.StdEncoding.DecodeString(clientData.SkinData)
 	patchBytes, _ := base64.StdEncoding.DecodeString(clientData.SkinResourcePatch)
-	logger.Info("skin data prepared",
+	logger.Debug("skin data prepared",
 		slog.Int("rgba_bytes", len(skinBytes)),
 		slog.Int("width", clientData.SkinImageWidth),
 		slog.Int("height", clientData.SkinImageHeight),
@@ -74,7 +78,7 @@ func main() {
 		Identity:    playerUUID.String(),
 		DisplayName: cfg.Bot.Name,
 	}
-	logger.Info("identity set",
+	logger.Debug("identity set",
 		slog.String("display_name", identityData.DisplayName),
 		slog.String("uuid", identityData.Identity),
 	)
@@ -103,6 +107,7 @@ func main() {
 			slog.String("model", cfg.AI.Model),
 		)
 		aiClient = ai.NewNvidiaClient(cfg.AI.ApiKey, cfg.AI.Model)
+		aiClient.SetLanguage(cfg.Bot.Language)
 		if cfg.AI.CustomPersonality != "" {
 			aiClient.SetPersona(cfg.AI.CustomPersonality)
 		}
@@ -132,6 +137,8 @@ func main() {
 		bot.WithRegistry(registry),
 		bot.WithEventBus(bus),
 		bot.WithName(cfg.Bot.Name),
+		bot.WithLanguage(cfg.Bot.Language),
+		bot.WithStatePath(cfg.Bot.StatePath),
 		bot.WithSkin(assets.ProtocolSkin, playerUUID),
 		bot.WithAI(aiClient, throttler, cfg.AI),
 	)
@@ -154,4 +161,17 @@ func main() {
 	}
 
 	logger.Info("bot shut down gracefully")
+}
+
+func parseLogLevel(level string) slog.Level {
+	switch level {
+	case "debug":
+		return slog.LevelDebug
+	case "warn":
+		return slog.LevelWarn
+	case "error":
+		return slog.LevelError
+	default:
+		return slog.LevelInfo
+	}
 }

@@ -11,6 +11,8 @@ server:
 # --- Bot Identity ---
 bot:
   name: "Luna" # In-game display name
+  language: "Indonesian" # AI reply language, e.g. "English", "Indonesian", "Japanese"
+  log_level: "info" # debug, info, warn, or error
 
 # --- Skin & Geometry ---
 skin:
@@ -20,7 +22,7 @@ skin:
 # --- AI & LLM Settings ---
 ai:
   provider: "nvidia" # "nvidia" or "none"
-  model: "openai/gpt-oss-120b"
+  model: "openai/gpt-oss-20b"
   api_key: "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" # Leave empty to load from NVIDIA_API_KEY environment variable
   main_player: "OnyxStygian" # Primary player/owner username
   respond_only_to_linked_player: true

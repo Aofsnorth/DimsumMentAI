@@ -5,6 +5,7 @@ type Node struct {
 	G, H, F float32
 	Parent  *Node
 	Index   int // index in the priority queue
+	Action  string
 }
 
 func (n *Node) Equal(other *Node) bool {

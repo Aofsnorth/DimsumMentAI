@@ -89,7 +89,7 @@ func HandleIncomingChat(ctx context.Context, b *bot.Bot, evt event.ChatEvent) {
 	// 6. Deduplication filter immediately
 	allowed, _ := b.Throttler.Filter(msg)
 	if !allowed {
-		b.Logger.Info("Throttled duplicate or rate-limited message", "msg", msg)
+		b.Logger.Debug("Throttled duplicate or rate-limited message", "msg", msg)
 		return
 	}
 
@@ -118,7 +118,7 @@ func HandleIncomingChat(ctx context.Context, b *bot.Bot, evt event.ChatEvent) {
 		return
 	}
 
-	b.Logger.Info("Nvidia LLM raw response received", "raw", reply)
+	b.Logger.Debug("Nvidia LLM raw response received", "raw", reply)
 
 	// 9. Parse actions and clean reply
 	parsed := ai.Parse(reply)
@@ -133,7 +133,7 @@ func HandleIncomingChat(ctx context.Context, b *bot.Bot, evt event.ChatEvent) {
 		}
 	}
 
-	if isSilent {
+	if isSilent && len(parsed.Actions) == 1 {
 		handleSilentResponse(b, evt.SourceName, systemPrompt, parsed.Actions)
 		return
 	}
@@ -143,10 +143,12 @@ func HandleIncomingChat(ctx context.Context, b *bot.Bot, evt event.ChatEvent) {
 		b.SendSafeChat(parsed.CleanReply)
 	}
 
-	// 11. Dispatch action labels
+	// 11. Dispatch action labels. Multiple tags are treated as a small plan.
+	steps := make([]action.Step, 0, len(parsed.Actions))
 	for _, act := range parsed.Actions {
-		action.Execute(b, act.Label, act.Param, evt.SourceName)
+		steps = append(steps, action.Step{Label: act.Label, Param: act.Param})
 	}
+	action.ExecutePlan(b, steps, evt.SourceName)
 }
 
 func handleSilentResponse(b *bot.Bot, sourceName string, systemPrompt string, actions []ai.Action) {
@@ -156,7 +158,7 @@ func handleSilentResponse(b *bot.Bot, sourceName string, systemPrompt string, ac
 			newHp, newHunger, newBotCoords := b.GetStatusDetails()
 			newInvSummary := b.GetInventorySummary()
 			followPrompt := fmt.Sprintf("[SYSTEM: Status bot — HP: %d/20, Hunger: %d/20, Posisi: %s. Inventory: %s. Laporkan status ini ke %s secara natural. JANGAN sertakan label [status] lagi di balasan ini.]", newHp, newHunger, newBotCoords, newInvSummary, sourceName)
-			
+
 			reply2, err := b.AiClient.Ask(sourceName, systemPrompt, followPrompt)
 			if err == nil {
 				parsed2 := ai.Parse(reply2)
@@ -165,7 +167,7 @@ func handleSilentResponse(b *bot.Bot, sourceName string, systemPrompt string, ac
 		} else if label == "inventory" {
 			newInvSummary := b.GetInventorySummary()
 			followPrompt := fmt.Sprintf("[SYSTEM: Isi inventory saat ini: %s. Beritahu %s apa saja yang kamu punya. JANGAN sertakan label [inventory] lagi di balasan ini.]", newInvSummary, sourceName)
-			
+
 			reply2, err := b.AiClient.Ask(sourceName, systemPrompt, followPrompt)
 			if err == nil {
 				parsed2 := ai.Parse(reply2)

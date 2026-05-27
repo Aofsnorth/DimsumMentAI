@@ -37,9 +37,15 @@ func handleMovePlayer(b *bot.Bot, p *packet.MovePlayer) {
 			b.VelY = 0.0
 		}
 	} else {
-		b.PlayerPositions[p.EntityRuntimeID] = p.Position
+		b.PlayerPositions[p.EntityRuntimeID] = trackedPlayerFeetPosition(p.Position)
+		b.PlayerYaws[p.EntityRuntimeID] = p.Yaw
+		b.PlayerPitches[p.EntityRuntimeID] = p.Pitch
 	}
 	b.Mu.Unlock()
+}
+
+func trackedPlayerFeetPosition(pos mgl32.Vec3) mgl32.Vec3 {
+	return pos.Sub(mgl32.Vec3{0, 1.62, 0})
 }
 
 func handleCorrectPrediction(b *bot.Bot, p *packet.CorrectPlayerMovePrediction) {
