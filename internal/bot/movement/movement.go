@@ -8,6 +8,7 @@ import (
 	"bedrock-ai/internal/bot"
 	"github.com/go-gl/mathgl/mgl32"
 	"github.com/sandertv/gophertunnel/minecraft"
+	"github.com/sandertv/gophertunnel/minecraft/protocol/packet"
 )
 
 type TickContext struct {
@@ -130,6 +131,13 @@ func SendInputLoop(ctx context.Context, b *bot.Bot, gd minecraft.GameData) {
 			tc.updateLookDirection()
 			tc.calculateMovementSpeedAndPosition()
 			tc.writePlayerAuthInputPacket()
+
+			if tick%20 == 0 {
+				_ = b.Conn.WritePacket(&packet.NetworkStackLatency{
+					Timestamp:     time.Now().UnixNano(),
+					NeedsResponse: true,
+				})
+			}
 
 			lastPredictedY = tc.LastPredictedY
 			tick++

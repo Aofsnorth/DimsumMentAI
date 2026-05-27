@@ -74,7 +74,7 @@ func ChunkRequesterLoop(ctx context.Context, b *bot.Bot) {
 			for tc := range uniqueTargets {
 				k := fmt.Sprintf("%d,%d", tc.x, tc.z)
 
-				if lastReq, ok := requested[k]; ok && time.Since(lastReq) < 5*time.Second {
+				if _, ok := requested[k]; ok {
 					continue
 				}
 
