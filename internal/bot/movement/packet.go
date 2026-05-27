@@ -135,7 +135,7 @@ func (tc *TickContext) writePlayerAuthInputPacket() {
 		HeadYaw:            tc.Yaw,
 		MoveVector:         tc.MoveVec,
 		InputData:          inputData,
-		InputMode:          packet.InputModeMouse,
+		InputMode:          packet.InputModeTouch,
 		PlayMode:           packet.PlayModeNormal,
 		InteractionModel:   packet.InteractionModelClassic,
 		Tick:               tc.Tick,

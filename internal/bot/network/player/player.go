@@ -166,6 +166,15 @@ func HandlePlayerPacket(b *bot.Bot, pk packet.Packet) bool {
 	case *packet.UpdateAttributes:
 		handleUpdateAttributes(b, p)
 		return true
+
+	case *packet.NetworkStackLatency:
+		if p.NeedsResponse {
+			_ = b.Conn.WritePacket(&packet.NetworkStackLatency{
+				Timestamp:     p.Timestamp,
+				NeedsResponse: false,
+			})
+		}
+		return true
 	}
 	return false
 }

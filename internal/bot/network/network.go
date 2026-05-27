@@ -11,6 +11,7 @@ import (
 	"bedrock-ai/internal/bot/network/world"
 	"bedrock-ai/internal/event"
 	"github.com/sandertv/gophertunnel/minecraft"
+	"github.com/sandertv/gophertunnel/minecraft/protocol/packet"
 )
 
 func PacketLoop(ctx context.Context, b *bot.Bot) error {
@@ -38,13 +39,17 @@ func PacketLoop(ctx context.Context, b *bot.Bot) error {
 		// Delegate packets to world or player handlers
 		handled := world.HandleWorldPacket(b, pk)
 		if !handled {
-			player.HandlePlayerPacket(b, pk)
+			handled = player.HandlePlayerPacket(b, pk)
 		}
 
 		if handleErr := b.Registry.Handle(ctx, pk); handleErr != nil {
 			b.Logger.Error("handle packet",
 				slog.String("error", handleErr.Error()),
 			)
+		}
+		
+		if !handled && pk.ID() != packet.IDUpdateBlock && pk.ID() != packet.IDMoveActorDelta && pk.ID() != packet.IDSetActorData && pk.ID() != packet.IDSetTime {
+			b.Logger.Debug("unhandled packet", slog.Uint64("id", uint64(pk.ID())), slog.String("type", fmt.Sprintf("%T", pk)))
 		}
 	}
 }
