@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"bedrock-ai/internal/bot"
+	"bedrock-ai/internal/debuglog"
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
 	"github.com/sandertv/gophertunnel/minecraft/protocol/packet"
 )
@@ -19,6 +20,7 @@ func SendLoadingScreenDone(b *bot.Bot) {
 	_ = b.Conn.WritePacket(&packet.ServerBoundLoadingScreen{
 		Type: packet.LoadingScreenTypeEnd,
 	})
+	_ = b.Conn.Flush()
 	b.Logger.Debug("sent loading screen packets")
 }
 
@@ -34,6 +36,10 @@ func ChunkRequesterLoop(ctx context.Context, b *bot.Bot) {
 			return
 		case <-ticker.C:
 			b.Mu.Lock()
+			if !b.SubChunkRequestMode {
+				b.Mu.Unlock()
+				continue
+			}
 			pos := b.Pos
 			mState := b.MovementState
 			tPlayer := b.TargetPlayerName
@@ -71,6 +77,7 @@ func ChunkRequesterLoop(ctx context.Context, b *bot.Bot) {
 				uniqueTargets[tc] = true
 			}
 
+			sent := 0
 			for tc := range uniqueTargets {
 				k := fmt.Sprintf("%d,%d", tc.x, tc.z)
 
@@ -94,6 +101,17 @@ func ChunkRequesterLoop(ctx context.Context, b *bot.Bot) {
 					},
 					Offsets: offsets,
 				})
+				sent++
+			}
+			if sent > 0 {
+				// #region agent log
+				debuglog.Log("A", "sender.go:ChunkRequesterLoop", "subchunk requests sent", map[string]any{
+					"chunks":        sent,
+					"offsetsPerReq": 30,
+					"totalWrites":   sent,
+					"runId":         "post-fix",
+				})
+				// #endregion
 			}
 		}
 	}

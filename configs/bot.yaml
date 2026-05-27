@@ -4,7 +4,7 @@
 
 # --- Server Settings ---
 server:
-  host: "play.venity.net"
+  host: "127.0.0.1"
   port: 19132
   offline: false # true = no Xbox Live auth (local server)
 
@@ -12,7 +12,7 @@ server:
 bot:
   name: "Luna" # In-game display name
   language: "Indonesian" # AI reply language, e.g. "English", "Indonesian", "Japanese"
-  log_level: "info" # debug, info, warn, or error
+  log_level: "info" # debug = also writes logs/debug-090ce4.log; info, warn, or error
 
 # --- Skin & Geometry ---
 skin:

@@ -5,7 +5,10 @@ import (
 	"math"
 
 	"bedrock-ai/internal/bot"
+	"bedrock-ai/internal/debuglog"
+
 	"github.com/go-gl/mathgl/mgl32"
+	"github.com/sandertv/gophertunnel/minecraft/protocol"
 	"github.com/sandertv/gophertunnel/minecraft/protocol/packet"
 )
 
@@ -42,6 +45,19 @@ func handleMovePlayer(b *bot.Bot, p *packet.MovePlayer) {
 		b.PlayerPitches[p.EntityRuntimeID] = p.Pitch
 	}
 	b.Mu.Unlock()
+	if isSelf {
+		// #region agent log
+		if p.Tick > 0 {
+			debuglog.Log("O", "move.go:handleMovePlayer", "self MovePlayer tick", map[string]any{
+				"serverTick": p.Tick,
+				"runId":      "tick-fix-v3",
+			})
+		}
+		// #endregion
+		if p.Tick > 0 {
+			syncServerTick(b, p.Tick, "MovePlayer")
+		}
+	}
 }
 
 func trackedPlayerFeetPosition(pos mgl32.Vec3) mgl32.Vec3 {
@@ -74,4 +90,45 @@ func handleCorrectPrediction(b *bot.Bot, p *packet.CorrectPlayerMovePrediction) 
 		}
 	}
 	b.Mu.Unlock()
+
+	syncServerTick(b, p.Tick, "CorrectPlayerMovePrediction")
+	b.Mu.Lock()
+	prevTick := b.ServerTick
+	b.MovementSyncPending = b.RewindMovement
+	entityID := b.Conn.GameData().EntityUniqueID
+	b.Mu.Unlock()
+	// #region agent log
+	debuglog.Log("H", "move.go:handleCorrectPrediction", "synced server tick", map[string]any{
+		"prevTick":   prevTick,
+		"serverTick": p.Tick,
+		"newTick":    p.Tick + 1,
+		"runId":      "tick-fix-v2",
+	})
+	// #endregion
+	if b.RewindMovement && !b.VenityCompat {
+		sendMovementPredictionSync(b, entityID)
+	}
+}
+
+func sendMovementPredictionSync(b *bot.Bot, entityUniqueID int64) {
+	pk := &packet.ClientMovementPredictionSync{
+		ActorFlags:            protocol.NewBitset(protocol.EntityDataFlagCount),
+		EntityUniqueID:        entityUniqueID,
+		BoundingBoxWidth:      0.6,
+		BoundingBoxHeight:     1.8,
+		MovementSpeed:         0.1,
+	}
+	if err := b.Conn.WritePacket(pk); err != nil {
+		b.Logger.Warn("ClientMovementPredictionSync write failed", slog.String("error", err.Error()))
+		return
+	}
+	b.Mu.Lock()
+	b.MovementSyncPending = false
+	b.Mu.Unlock()
+	// #region agent log
+	debuglog.Log("M", "move.go:sendMovementPredictionSync", "sent movement prediction sync", map[string]any{
+		"entityUniqueID": entityUniqueID,
+		"runId":          "tick-fix",
+	})
+	// #endregion
 }

@@ -207,7 +207,7 @@ func (tc *TickContext) performActiveSteering() {
 				tc.B.Mu.Unlock()
 			}
 
-			if !tc.ShouldJump && tc.Dist > 0.1 && tc.MState != "idle" {
+			if !tc.ShouldJump && !tc.pathAheadIsLevelOrDown() && tc.Dist > 0.1 && tc.MState != "idle" {
 				moveDirX := tc.Dx / tc.Dist
 				moveDirZ := tc.Dz / tc.Dist
 
@@ -230,4 +230,21 @@ func (tc *TickContext) performActiveSteering() {
 			}
 		}
 	}
+}
+
+// pathAheadIsLevelOrDown is true when no remaining path node requires climbing higher.
+// Used to stop step-up / auto-jump at the top of block stairs.
+func (tc *TickContext) pathAheadIsLevelOrDown() bool {
+	tc.B.Mu.Lock()
+	defer tc.B.Mu.Unlock()
+	if !tc.HasPath || tc.B.PathIndex >= len(tc.B.CurrentPath) {
+		return true
+	}
+	feetY := int32(math.Floor(float64(tc.CurrPos.Y() + 0.1)))
+	for i := tc.B.PathIndex + 1; i < len(tc.B.CurrentPath); i++ {
+		if tc.B.CurrentPath[i].Y > feetY {
+			return false
+		}
+	}
+	return true
 }

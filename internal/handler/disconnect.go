@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 
+	"bedrock-ai/internal/debuglog"
 	"bedrock-ai/internal/event"
 
 	"github.com/sandertv/gophertunnel/minecraft"
@@ -25,6 +26,12 @@ func (h *DisconnectHandler) Handle(_ context.Context, pk packet.Packet) error {
 	if !ok {
 		return nil
 	}
+
+	// #region agent log
+	debuglog.Log("D", "disconnect.go:Handle", "server disconnect packet", map[string]any{
+		"message": p.Message,
+	})
+	// #endregion
 
 	var disc minecraft.DisconnectError
 	if errors.As(errors.New(p.Message), &disc) {

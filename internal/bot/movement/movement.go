@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"bedrock-ai/internal/bot"
+	"bedrock-ai/internal/debuglog"
 	"github.com/go-gl/mathgl/mgl32"
 	"github.com/sandertv/gophertunnel/minecraft"
 )
@@ -57,13 +58,17 @@ func SendInputLoop(ctx context.Context, b *bot.Bot, gd minecraft.GameData) {
 	
 	var lastPredictedY float32 = initPos.Y()
 	prevPos := initPos
-	tick := uint64(gd.Time)
 
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+			b.Mu.Lock()
+			tick := b.ServerTick
+			b.ServerTick++
+			b.Mu.Unlock()
+
 			tc := &TickContext{
 				B:              b,
 				Tick:           tick,
@@ -121,15 +126,34 @@ func SendInputLoop(ctx context.Context, b *bot.Bot, gd minecraft.GameData) {
 			tc.updateDistanceToPlayer()
 			tc.updateTargetPositionIfFollowing()
 			tc.resolveNextTarget()
-			tc.performActiveSteering()
-			tc.runPhysicsAndCollisions()
+			venityIdle := tc.B.VenityCompat && tc.MState == "idle"
+			if !venityIdle {
+				tc.performActiveSteering()
+				tc.runPhysicsAndCollisions()
+			}
 			tc.updateLookDirection()
-			tc.calculateMovementSpeedAndPosition()
+			if !venityIdle {
+				tc.calculateMovementSpeedAndPosition()
+			} else {
+				tc.B.Mu.Lock()
+				tc.B.Yaw = tc.Yaw
+				tc.B.Pitch = tc.Pitch
+				tc.B.Mu.Unlock()
+			}
 			tc.writePlayerAuthInputPacket()
+			if tick > 0 && tick%200 == 0 {
+				// #region agent log
+				debuglog.Log("C", "movement/movement.go:SendInputLoop", "input loop alive", map[string]any{
+					"tick": tick,
+					"x":    tc.CurrPos.X(),
+					"y":    tc.CurrPos.Y(),
+					"z":    tc.CurrPos.Z(),
+				})
+				// #endregion
+			}
 
 			lastPredictedY = tc.LastPredictedY
 			prevPos = tc.CurrPos
-			tick++
 		}
 	}
 }

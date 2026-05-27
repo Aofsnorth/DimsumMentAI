@@ -24,7 +24,7 @@ func (h *ChatHandler) Handle(_ context.Context, pk packet.Packet) error {
 	if !ok {
 		return nil
 	}
-	if p.TextType != packet.TextTypeChat && p.TextType != packet.TextTypeWhisper && p.TextType != packet.TextTypeAnnouncement {
+	if !isRoutableChatText(p.TextType) {
 		h.logger.Debug("ignored non-chat text packet", slog.Int("type", int(p.TextType)))
 		return nil
 	}
@@ -32,11 +32,9 @@ func (h *ChatHandler) Handle(_ context.Context, pk packet.Packet) error {
 	sourceName := p.SourceName
 	message := p.Message
 
-	// Strip color codes for routing checks
 	cleanSource := StripColorCodes(sourceName)
 	cleanMessage := StripColorCodes(message)
 
-	// Geyser compatibility fallback: extract name if sourceName is empty
 	if cleanSource == "" && cleanMessage != "" {
 		if strings.Contains(cleanMessage, ":") {
 			parts := strings.SplitN(cleanMessage, ":", 2)
@@ -49,13 +47,18 @@ func (h *ChatHandler) Handle(_ context.Context, pk packet.Packet) error {
 		}
 	}
 
-	h.logger.Debug("chat packet received",
+	h.logger.Info("chat packet received",
 		slog.String("source", cleanSource),
 		slog.String("message", cleanMessage),
-		slog.Int("type", int(p.TextType)),
+		slog.Int("text_type", int(p.TextType)),
+		slog.String("raw_source", sourceName),
 	)
 
-	// Publish ChatEvent with cleaned names/messages
+	if cleanMessage == "" {
+		h.logger.Info("chat ignored: empty message after parse")
+		return nil
+	}
+
 	h.bus.Publish(event.ChatEvent{
 		Message:    cleanMessage,
 		SourceName: cleanSource,
@@ -65,6 +68,19 @@ func (h *ChatHandler) Handle(_ context.Context, pk packet.Packet) error {
 	return nil
 }
 
+func isRoutableChatText(textType byte) bool {
+	switch textType {
+	case packet.TextTypeChat,
+		packet.TextTypeWhisper,
+		packet.TextTypeAnnouncement,
+		packet.TextTypeRaw,
+		packet.TextTypeSystem:
+		return true
+	default:
+		return false
+	}
+}
+
 // StripColorCodes removes Minecraft § formatting codes from a string
 func StripColorCodes(s string) string {
 	var res strings.Builder
@@ -72,7 +88,7 @@ func StripColorCodes(s string) string {
 	for i := 0; i < len(runes); i++ {
 		if runes[i] == '§' {
 			if i+1 < len(runes) {
-				i++ // skip color character
+				i++
 				continue
 			}
 		}

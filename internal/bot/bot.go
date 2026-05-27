@@ -31,6 +31,7 @@ var (
 	SendInputLoopFunc         func(ctx context.Context, b *Bot, gd minecraft.GameData)
 	PacketLoopFunc            func(ctx context.Context, b *Bot) error
 	ChunkRequesterLoopFunc    func(ctx context.Context, b *Bot)
+	VenityCompatLoopFunc      func(ctx context.Context, b *Bot)
 	SendPlayerSkinFunc        func(b *Bot)
 	SendLoadingScreenDoneFunc func(b *Bot)
 	RecalculatePathFunc       func(b *Bot)
@@ -50,9 +51,12 @@ type Bot struct {
 	Dialer     DialerFunc
 	Registry   *handler.Registry
 	Bus        *event.Bus
-	Name       string
-	Language   string
-	StatePath  string
+	Name         string
+	ServerHost   string
+	VenityCompat   bool // play.venity.net hub: aggressive chunk flood + ~30s session checks
+	RewindMovement bool // server uses RewindHistorySize / CorrectPlayerMovePrediction
+	Language     string
+	StatePath    string
 	ProtoSkin  protocol.Skin
 	PlayerUUID uuid.UUID
 
@@ -100,6 +104,9 @@ type Bot struct {
 	IdleLookTargetPos   mgl32.Vec3
 	NextIdleLookChange  time.Time
 
+	// World loading: true only after server sends LevelChunk in sub-chunk request mode.
+	SubChunkRequestMode bool
+
 	// A* Pathfinding
 	WorldModel            *pathfinder.LocalWorldModel
 	WorldCache            *world.WorldCache
@@ -128,9 +135,14 @@ type Bot struct {
 	// Internal bot messages tracked to prevent loops
 	RecentBotMessages map[string]time.Time
 
-	Mu   sync.Mutex
-	Pos  mgl32.Vec3
-	VelY float32
+	Mu         sync.Mutex
+	Pos        mgl32.Vec3
+	VelY       float32
+	ServerTick          uint64 // monotonic input tick; synced from server packets when rewind
+	TickSynced          bool   // true after first server tick reference (UpdateAttributes/MovePlayer/etc.)
+	LastSentInputYaw    float32
+	LastSentInputPitch  float32
+	MovementSyncPending bool // send ClientMovementPredictionSync after next correction
 	ScaffoldingActive bool
 }
 

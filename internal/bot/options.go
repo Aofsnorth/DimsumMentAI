@@ -2,6 +2,7 @@ package bot
 
 import (
 	"log/slog"
+	"strings"
 
 	"bedrock-ai/internal/ai"
 	"bedrock-ai/internal/config"
@@ -41,6 +42,14 @@ func WithEventBus(bus *event.Bus) Option {
 func WithName(name string) Option {
 	return func(b *Bot) {
 		b.Name = name
+	}
+}
+
+func WithServerHost(host string) Option {
+	return func(b *Bot) {
+		b.ServerHost = host
+		h := strings.ToLower(host)
+		b.VenityCompat = strings.Contains(h, "venity.net") || strings.Contains(h, "venity")
 	}
 }
 

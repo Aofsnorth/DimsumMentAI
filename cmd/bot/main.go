@@ -18,6 +18,7 @@ import (
 	"bedrock-ai/internal/bot/network"
 	"bedrock-ai/internal/config"
 	"bedrock-ai/internal/connection"
+	"bedrock-ai/internal/debuglog"
 	"bedrock-ai/internal/event"
 	"bedrock-ai/internal/handler"
 	"bedrock-ai/internal/skin"
@@ -45,6 +46,10 @@ func main() {
 		Level: parseLogLevel(cfg.Bot.LogLevel),
 	}))
 	slog.SetDefault(logger)
+	debuglog.SetEnabled(cfg.Bot.LogLevel == "debug")
+	if debuglog.Enabled() {
+		logger.Info("debug session logging enabled", slog.String("file", "logs/debug-090ce4.log"))
+	}
 
 	// --- Skin ---
 	logger.Debug("loading skin",
@@ -118,6 +123,7 @@ func main() {
 	bot.SendInputLoopFunc = movement.SendInputLoop
 	bot.PacketLoopFunc = network.PacketLoop
 	bot.ChunkRequesterLoopFunc = network.ChunkRequesterLoop
+	bot.VenityCompatLoopFunc = network.VenityCompatLoop
 	bot.SendPlayerSkinFunc = network.SendPlayerSkin
 	bot.SendLoadingScreenDoneFunc = network.SendLoadingScreenDone
 	bot.RecalculatePathFunc = movement.RecalculatePath
@@ -137,6 +143,7 @@ func main() {
 		bot.WithRegistry(registry),
 		bot.WithEventBus(bus),
 		bot.WithName(cfg.Bot.Name),
+		bot.WithServerHost(cfg.Server.Host),
 		bot.WithLanguage(cfg.Bot.Language),
 		bot.WithStatePath(cfg.Bot.StatePath),
 		bot.WithSkin(assets.ProtocolSkin, playerUUID),

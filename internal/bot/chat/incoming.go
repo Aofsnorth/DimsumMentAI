@@ -3,6 +3,7 @@ package chat
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strings"
 
 	"bedrock-ai/internal/ai"
@@ -15,6 +16,7 @@ import (
 func HandleIncomingChat(ctx context.Context, b *bot.Bot, evt event.ChatEvent) {
 	msg := strings.TrimSpace(evt.Message)
 	if msg == "" {
+		b.Logger.Info("chat ignored: empty message")
 		return
 	}
 
@@ -22,18 +24,29 @@ func HandleIncomingChat(ctx context.Context, b *bot.Bot, evt event.ChatEvent) {
 	botName := b.Name
 	b.Mu.Unlock()
 
+	b.Logger.Info("chat event received",
+		slog.String("source", evt.SourceName),
+		slog.String("message", msg),
+		slog.String("bot_name", botName),
+	)
+
 	// 1. Skip bot's own echoes
 	if strings.EqualFold(evt.SourceName, botName) {
+		b.Logger.Info("chat ignored: own message", slog.String("source", evt.SourceName))
 		return
 	}
 	if b.IsBotEcho(msg) {
+		b.Logger.Info("chat ignored: bot echo detected")
 		return
 	}
 
 	// 2. Validate linked player whitelist
 	if b.AiCfg.RespondOnlyToLinkedPlayer && b.AiCfg.MainPlayer != "" {
 		if !strings.EqualFold(evt.SourceName, b.AiCfg.MainPlayer) {
-			b.Logger.Debug("Ignoring message from unlinked player", "source", evt.SourceName, "linked", b.AiCfg.MainPlayer)
+			b.Logger.Info("chat ignored: not linked main player",
+				slog.String("source", evt.SourceName),
+				slog.String("main_player", b.AiCfg.MainPlayer),
+			)
 			return
 		}
 	}
@@ -47,7 +60,10 @@ func HandleIncomingChat(ctx context.Context, b *bot.Bot, evt event.ChatEvent) {
 			tagged = true
 		}
 		if !tagged {
-			b.Logger.Debug("Ignoring message: bot not tagged", "msg", msg, "botName", botName)
+			b.Logger.Info("chat ignored: bot not tagged in message",
+				slog.String("msg", msg),
+				slog.String("bot_name", botName),
+			)
 			return
 		}
 	}
@@ -56,7 +72,7 @@ func HandleIncomingChat(ctx context.Context, b *bot.Bot, evt event.ChatEvent) {
 	if b.AiCfg.MainPlayer == "" {
 		pCoords, ok := b.GetPlayerCoords(evt.SourceName)
 		if !ok {
-			b.Logger.Debug("Ignoring player (no coordinates tracked)", "player", evt.SourceName)
+			b.Logger.Info("chat ignored: player position unknown", slog.String("player", evt.SourceName))
 			return
 		}
 		botCoords := b.GetCoords()
@@ -65,7 +81,10 @@ func HandleIncomingChat(ctx context.Context, b *bot.Bot, evt event.ChatEvent) {
 		dz := pCoords.Z() - botCoords.Z()
 		dist := float32(mathSqrt(float64(dx*dx + dy*dy + dz*dz)))
 		if dist > 10.0 {
-			b.Logger.Debug("Ignoring player (too far)", "player", evt.SourceName, "distance", dist)
+			b.Logger.Info("chat ignored: player too far",
+				slog.String("player", evt.SourceName),
+				slog.Float64("distance", float64(dist)),
+			)
 			return
 		}
 	}
@@ -78,6 +97,7 @@ func HandleIncomingChat(ctx context.Context, b *bot.Bot, evt event.ChatEvent) {
 
 	// 5. Query AI (NVIDIA NIM) if enabled
 	if b.AiClient == nil {
+		b.Logger.Info("chat ignored: AI client not configured")
 		return
 	}
 
@@ -89,9 +109,11 @@ func HandleIncomingChat(ctx context.Context, b *bot.Bot, evt event.ChatEvent) {
 	// 6. Deduplication filter immediately
 	allowed, _ := b.Throttler.Filter(msg)
 	if !allowed {
-		b.Logger.Debug("Throttled duplicate or rate-limited message", "msg", msg)
+		b.Logger.Info("chat ignored: throttled or duplicate", slog.String("msg", msg))
 		return
 	}
+
+	b.Logger.Info("chat processing: querying AI", slog.String("from", evt.SourceName))
 
 	// 7. Synthesize real-time context
 	hp, hunger, botCoords := b.GetStatusDetails()
@@ -140,7 +162,10 @@ func HandleIncomingChat(ctx context.Context, b *bot.Bot, evt event.ChatEvent) {
 
 	// 10. Send the main reply
 	if parsed.CleanReply != "" {
+		b.Logger.Info("chat reply sending", slog.String("reply", parsed.CleanReply))
 		b.SendSafeChat(parsed.CleanReply)
+	} else {
+		b.Logger.Info("chat: AI returned no visible reply text")
 	}
 
 	// 11. Dispatch action labels. Multiple tags are treated as a small plan.

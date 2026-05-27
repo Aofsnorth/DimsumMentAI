@@ -17,8 +17,9 @@ type chunkPos struct {
 type WorldCache struct {
 	mu        sync.RWMutex
 	chunks    map[chunkPos]*chunk.Chunk
-	airRID    uint32     // runtime ID that represents air
-	r         cube.Range // vertical range of the world (usually [-64, 319])
+	blobs     map[uint64][]byte // client blob cache payloads from ClientCacheMissResponse
+	airRID    uint32            // runtime ID that represents air
+	r         cube.Range        // vertical range of the world (usually [-64, 319])
 	logger    *slog.Logger
 	hashToRID map[uint32]uint32
 	useHashes bool
@@ -74,6 +75,21 @@ func (wc *WorldCache) TranslateRuntimeID(rid uint32) uint32 {
 		return realRID
 	}
 	return rid
+}
+
+// StoreBlobs saves blob payloads from ClientCacheMissResponse.
+func (wc *WorldCache) StoreBlobs(blobs map[uint64][]byte) {
+	if len(blobs) == 0 {
+		return
+	}
+	wc.mu.Lock()
+	if wc.blobs == nil {
+		wc.blobs = make(map[uint64][]byte, len(blobs))
+	}
+	for h, payload := range blobs {
+		wc.blobs[h] = payload
+	}
+	wc.mu.Unlock()
 }
 
 // ChunkCount returns the number of chunks currently cached.

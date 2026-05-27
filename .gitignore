@@ -16,3 +16,10 @@ import.worktrees/
 configs/token.json
 
 configs/bot.yaml
+
+# Debug session logs
+logs/
+debug-090ce4.log
+
+# Persistent device identity (per install)
+data/device_identity.json

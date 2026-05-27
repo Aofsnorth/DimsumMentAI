@@ -10,6 +10,7 @@ import (
 	"bedrock-ai/internal/bot/combat"
 	"bedrock-ai/internal/bot/gathering"
 	"bedrock-ai/internal/bot/inventory"
+	"bedrock-ai/internal/debuglog"
 	"bedrock-ai/internal/event"
 
 	"github.com/go-gl/mathgl/mgl32"
@@ -24,12 +25,20 @@ func (b *Bot) Run(ctx context.Context) error {
 	b.Conn = conn
 	defer b.Conn.Close()
 
+	go func() {
+		<-ctx.Done()
+		b.Logger.Info("shutdown requested, closing connection")
+		_ = b.Conn.Close()
+	}()
+
 	if parsedUUID, err := uuid.Parse(conn.IdentityData().Identity); err == nil {
 		b.PlayerUUID = parsedUUID
 	}
 
 	b.Logger.Info("connected to server",
 		slog.String("address", conn.RemoteAddr().String()),
+		slog.String("server_host", b.ServerHost),
+		slog.Bool("venity_compat", b.VenityCompat),
 		slog.Bool("UseBlockNetworkIDHashes", conn.GameData().UseBlockNetworkIDHashes),
 	)
 
@@ -67,13 +76,29 @@ func (b *Bot) Run(ctx context.Context) error {
 	b.Mu.Lock()
 	actualPos := b.Pos
 	b.IsGrounded = true
+	b.RewindMovement = gd.PlayerMovementSettings.RewindHistorySize > 0
+	// gd.Time is world day-time, not the server tick used by PlayerAuthInput / rewind.
+	b.ServerTick = 0
 	b.Mu.Unlock()
 	b.Logger.Info("spawned in world",
 		slog.String("name", b.Name),
 		slog.Float64("x", float64(actualPos.X())),
 		slog.Float64("y", float64(actualPos.Y())),
 		slog.Float64("z", float64(actualPos.Z())),
+		slog.Bool("client_cache_enabled", b.Conn.ClientCacheEnabled()),
 	)
+	// #region agent log
+	debuglog.Log("F", "run.go:spawned", "bot spawned", map[string]any{
+		"clientCacheEnabled":  b.Conn.ClientCacheEnabled(),
+		"chunkRadius":         b.Conn.ChunkRadius(),
+		"venityCompat":        b.VenityCompat,
+		"rewindHistorySize":   gd.PlayerMovementSettings.RewindHistorySize,
+		"rewindMovement":      b.RewindMovement,
+		"worldTime":           gd.Time,
+		"serverTickInit":      0,
+		"runId":               "tick-fix",
+	})
+	// #endregion
 	if lastPos, ok := b.LoadLastStandingPosition(); ok {
 		b.Logger.Debug("loaded last standing position",
 			slog.Float64("x", float64(lastPos.X())),
@@ -99,6 +124,9 @@ func (b *Bot) Run(ctx context.Context) error {
 	// Tell the server we finished loading
 	if SendLoadingScreenDoneFunc != nil {
 		SendLoadingScreenDoneFunc(b)
+	}
+	if b.VenityCompat && VenityCompatLoopFunc != nil {
+		go VenityCompatLoopFunc(ctx, b)
 	}
 
 	// Register chat listener via registered function pointer

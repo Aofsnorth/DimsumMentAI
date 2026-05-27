@@ -3,13 +3,29 @@ package movement
 import (
 	"math"
 
+	"bedrock-ai/internal/debuglog"
 	"github.com/go-gl/mathgl/mgl32"
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
 	"github.com/sandertv/gophertunnel/minecraft/protocol/packet"
 )
 
 func (tc *TickContext) writePlayerAuthInputPacket() {
+	venityLookOnly := tc.B.VenityCompat && tc.MState == "idle" && !tc.HasHorizontalMove && !tc.ShouldJump
+	if venityLookOnly {
+		tc.B.Mu.Lock()
+		dyaw := math.Abs(float64(tc.Yaw - tc.B.LastSentInputYaw))
+		dpitch := math.Abs(float64(tc.Pitch - tc.B.LastSentInputPitch))
+		tc.B.Mu.Unlock()
+		if dyaw < 1.0 && dpitch < 1.0 {
+			return
+		}
+	}
+
 	tc.MoveDelta = tc.CurrPos.Sub(tc.PrevPos)
+	if venityLookOnly {
+		tc.MoveDelta = mgl32.Vec3{}
+		tc.MoveVec = mgl32.Vec2{}
+	}
 
 	yawWorldRad := float64(tc.Yaw+90) * math.Pi / 180
 	forwardX := float32(math.Cos(yawWorldRad))
@@ -51,6 +67,7 @@ func (tc *TickContext) writePlayerAuthInputPacket() {
 	inputData := protocol.NewBitset(packet.PlayerAuthInputBitsetSize)
 	if tc.IsGrounded {
 		inputData.Set(packet.InputFlagVerticalCollision)
+		inputData.Set(packet.InputFlagHorizontalCollision)
 	}
 	if tc.ShouldJump {
 		inputData.Set(packet.InputFlagJumping)
@@ -75,6 +92,13 @@ func (tc *TickContext) writePlayerAuthInputPacket() {
 		inputData.Set(packet.InputFlagSprinting)
 	}
 
+	tc.B.Mu.Lock()
+	// Venity rewind rejects ClientAck without a real server tick reference (logs: ~30s kick).
+	clientAck := tc.B.RewindMovement && tc.B.TickSynced && !tc.B.VenityCompat
+	tc.B.Mu.Unlock()
+	if clientAck {
+		inputData.Set(packet.InputFlagClientAckServerData)
+	}
 	tc.B.Mu.Lock()
 	if tc.B.EmoteTicks > 0 {
 		tc.B.EmoteTicks--
@@ -135,9 +159,9 @@ func (tc *TickContext) writePlayerAuthInputPacket() {
 		HeadYaw:            tc.Yaw,
 		MoveVector:         tc.MoveVec,
 		InputData:          inputData,
-		InputMode:          packet.InputModeMouse,
+		InputMode:          packet.InputModeTouch,
 		PlayMode:           packet.PlayModeNormal,
-		InteractionModel:   packet.InteractionModelCrosshair,
+		InteractionModel:   packet.InteractionModelTouch,
 		InteractPitch:      tc.Pitch,
 		InteractYaw:        tc.Yaw,
 		Tick:               tc.Tick,
@@ -145,8 +169,33 @@ func (tc *TickContext) writePlayerAuthInputPacket() {
 		AnalogueMoveVector: tc.MoveVec,
 		RawMoveVector:      tc.MoveVec,
 	}
+	if tc.Tick < 5 || tc.Tick%200 == 0 {
+		tc.B.Mu.Lock()
+		tickSyncedLog := tc.B.TickSynced
+		tc.B.Mu.Unlock()
+		// #region agent log
+		debuglog.Log("M", "movement/packet.go:writePlayerAuthInput", "PlayerAuthInput tick", map[string]any{
+			"tick":           tc.Tick,
+			"rewindMovement": tc.B.RewindMovement,
+			"clientAck":      clientAck,
+			"tickSynced":     tickSyncedLog,
+			"runId":          "tick-fix-v4",
+			"venityLookOnly": venityLookOnly,
+		})
+		// #endregion
+	}
 	if err := tc.B.Conn.WritePacket(pk); err != nil {
 		tc.B.Logger.Warn("SendInputLoop: connection closed or write failed", "error", err.Error())
+		// #region agent log
+		debuglog.Log("C", "movement/packet.go:writePlayerAuthInput", "PlayerAuthInput write failed", map[string]any{
+			"error": err.Error(),
+			"tick":  tc.Tick,
+		})
+		// #endregion
 		return
 	}
+	tc.B.Mu.Lock()
+	tc.B.LastSentInputYaw = tc.Yaw
+	tc.B.LastSentInputPitch = tc.Pitch
+	tc.B.Mu.Unlock()
 }

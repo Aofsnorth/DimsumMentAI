@@ -115,7 +115,11 @@ func (tc *TickContext) resolveNextTarget() {
 			hDiffToTarget = float32(math.Abs(float64(tc.TPos.Y() - tc.CurrPos.Y())))
 		}
 
-		if distanceToTarget < 8.0 && hDiffToTarget < 1.5 {
+		if tc.MState == "walk_to" {
+			if distanceToTarget < 16.0 {
+				tc.AllowDirectSteering = true
+			}
+		} else if distanceToTarget < 8.0 && hDiffToTarget < 1.5 {
 			tc.AllowDirectSteering = true
 		}
 	}

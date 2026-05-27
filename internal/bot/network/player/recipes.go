@@ -85,6 +85,9 @@ func handleCraftingData(b *bot.Bot, p *packet.CraftingData) {
 
 func handleUpdateAttributes(b *bot.Bot, p *packet.UpdateAttributes) {
 	if p.EntityRuntimeID == b.Conn.GameData().EntityRuntimeID {
+		if p.Tick > 0 {
+			syncServerTick(b, p.Tick, "UpdateAttributes")
+		}
 		b.Mu.Lock()
 		prevHealth := b.Health
 		for _, attr := range p.Attributes {

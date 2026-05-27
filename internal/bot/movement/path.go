@@ -13,10 +13,9 @@ import (
 )
 
 // RecalculatePath computes the shortest path to targetPos using A* search.
+// A* runs without holding b.Mu so SendInputLoop is not blocked for the whole search.
 func RecalculatePath(b *bot.Bot) {
 	b.Mu.Lock()
-	defer b.Mu.Unlock()
-
 	start := pathfinder.Node{
 		X: int32(math.Floor(float64(b.Pos.X()))),
 		Y: int32(math.Floor(float64(b.Pos.Y() + 0.1))),
@@ -28,11 +27,14 @@ func RecalculatePath(b *bot.Bot) {
 		Y: int32(math.Floor(float64(targetY))),
 		Z: int32(math.Floor(float64(b.TargetPos.Z()))),
 	}
+	movementState := b.MovementState
+	lastTickPos := b.Pos
+	b.Mu.Unlock()
 
 	b.Logger.Debug("recalculating path using A*",
 		"start_x", start.X, "start_y", start.Y, "start_z", start.Z,
 		"target_x", target.X, "target_y", target.Y, "target_z", target.Z,
-		"movement_state", b.MovementState,
+		"movement_state", movementState,
 	)
 
 	if standTarget, ok := nearestStandableNode(b, start, target, 2); ok {
@@ -70,6 +72,8 @@ func RecalculatePath(b *bot.Bot) {
 		b.WorldModel.AllowScaffold = false
 	}
 
+	b.Mu.Lock()
+	defer b.Mu.Unlock()
 	if len(path) > 0 {
 		b.CurrentPath = path
 		if len(path) > 1 {
@@ -78,19 +82,19 @@ func RecalculatePath(b *bot.Bot) {
 			b.PathIndex = 0
 		}
 		b.TicksStuck = 0
-		b.LastTickPos = b.Pos
+		b.LastTickPos = lastTickPos
 		b.LastPathRecalcTime = time.Now()
 		b.ConsecutiveStuckCount = 0
 		nodeCoords := make([]string, len(path))
 		for i, n := range path {
 			nodeCoords[i] = fmt.Sprintf("(%d,%d,%d)", n.X, n.Y, n.Z)
 		}
-		b.Logger.Debug("A* pathfinding completed", "nodes", len(path), "path", strings.Join(nodeCoords, " -> "), "movement_state", b.MovementState)
+		b.Logger.Debug("A* pathfinding completed", "nodes", len(path), "path", strings.Join(nodeCoords, " -> "), "movement_state", movementState)
 	} else {
 		b.CurrentPath = nil
 		b.LastPathRecalcTime = time.Now()
 		b.Logger.Warn("A* pathfinding failed to resolve walkable path to destination",
-			"start", start, "target", target, "movement_state", b.MovementState)
+			"start", start, "target", target, "movement_state", movementState)
 	}
 }
 
