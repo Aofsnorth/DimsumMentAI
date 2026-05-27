@@ -51,19 +51,13 @@ type TickContext struct {
 func SendInputLoop(ctx context.Context, b *bot.Bot, gd minecraft.GameData) {
 	ticker := time.NewTicker(time.Second / 20) // 20 ticks/sec
 	defer ticker.Stop()
-	tick := uint64(0)
-
 	b.Mu.Lock()
-	initYaw := b.Yaw
-	initPitch := b.Pitch
 	initPos := b.Pos
 	b.Mu.Unlock()
-
-	_ = initYaw
-	_ = initPitch
-
+	
 	var lastPredictedY float32 = initPos.Y()
 	prevPos := initPos
+	tick := uint64(gd.Time)
 
 	for {
 		select {
