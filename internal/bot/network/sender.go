@@ -19,10 +19,7 @@ func SendLoadingScreenDone(b *bot.Bot) {
 	_ = b.Conn.WritePacket(&packet.ServerBoundLoadingScreen{
 		Type: packet.LoadingScreenTypeEnd,
 	})
-	_ = b.Conn.WritePacket(&packet.SetLocalPlayerAsInitialised{
-		EntityRuntimeID: b.Conn.GameData().EntityRuntimeID,
-	})
-	b.Logger.Debug("sent loading screen and player initialized packets")
+	b.Logger.Debug("sent loading screen packets")
 }
 
 func ChunkRequesterLoop(ctx context.Context, b *bot.Bot) {

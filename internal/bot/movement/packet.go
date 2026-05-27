@@ -129,7 +129,7 @@ func (tc *TickContext) writePlayerAuthInputPacket() {
 	tc.B.Mu.Unlock()
 
 	pk := &packet.PlayerAuthInput{
-		Position:           tc.CurrPos.Add(mgl32.Vec3{0, 1.62, 0}),
+		Position:           tc.CurrPos,
 		Pitch:              tc.Pitch,
 		Yaw:                tc.Yaw,
 		HeadYaw:            tc.Yaw,

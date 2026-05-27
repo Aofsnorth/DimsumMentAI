@@ -14,7 +14,6 @@ import (
 
 	"github.com/go-gl/mathgl/mgl32"
 	"github.com/google/uuid"
-	"github.com/sandertv/gophertunnel/minecraft/protocol/packet"
 )
 
 func (b *Bot) Run(ctx context.Context) error {
@@ -101,11 +100,6 @@ func (b *Bot) Run(ctx context.Context) error {
 	if SendLoadingScreenDoneFunc != nil {
 		SendLoadingScreenDoneFunc(b)
 	}
-
-	// Some proxies require ClientCacheStatus after spawn to avoid "Network timed out" kick
-	_ = b.Conn.WritePacket(&packet.ClientCacheStatus{
-		Enabled: false,
-	})
 
 	// Register chat listener via registered function pointer
 	if InitChatListenerFunc != nil {

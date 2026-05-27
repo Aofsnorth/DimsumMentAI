@@ -63,6 +63,7 @@ func SendInputLoop(ctx context.Context, b *bot.Bot, gd minecraft.GameData) {
 	_ = initPitch
 
 	var lastPredictedY float32 = initPos.Y()
+	prevPos := initPos
 
 	for {
 		select {
@@ -73,6 +74,7 @@ func SendInputLoop(ctx context.Context, b *bot.Bot, gd minecraft.GameData) {
 				B:              b,
 				Tick:           tick,
 				LastPredictedY: lastPredictedY,
+				PrevPos:        prevPos,
 			}
 
 			b.Mu.Lock()
@@ -132,6 +134,7 @@ func SendInputLoop(ctx context.Context, b *bot.Bot, gd minecraft.GameData) {
 			tc.writePlayerAuthInputPacket()
 
 			lastPredictedY = tc.LastPredictedY
+			prevPos = tc.CurrPos
 			tick++
 		}
 	}
