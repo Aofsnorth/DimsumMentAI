@@ -11,10 +11,10 @@ import (
 // mergeClientData takes skin-related fields and merges them with default device/game info
 func mergeClientData(skinData login.ClientData) login.ClientData {
 	skinData.ClientRandomID = int64(time.Now().UnixNano())
-	skinData.CurrentInputMode = 1 // Keyboard & Mouse
-	skinData.DefaultInputMode = 1
-	skinData.DeviceModel = "Custom"
-	skinData.DeviceOS = 7 // Windows 10/11
+	skinData.CurrentInputMode = 2 // Touch
+	skinData.DefaultInputMode = 2
+	skinData.DeviceModel = "SM-G973F"
+	skinData.DeviceOS = 1 // Android
 	skinData.DeviceID = login.DeviceID(uuid.New().String())
 	skinData.GameVersion = protocol.CurrentVersion // Match current gophertunnel protocol version
 	skinData.LanguageCode = "en_US"

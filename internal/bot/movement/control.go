@@ -37,8 +37,9 @@ func (tc *TickContext) updateLookDirection() {
 
 	if wantsToMove {
 		if tc.Dist > 0.1 && tc.HasHorizontalMove {
-			targetLookPos := tc.NextTarget.Add(mgl32.Vec3{0, 1.0, 0})
-			tc.TargetYaw, tc.TargetPitch = naturalLookAngles(tc.CurrPos, targetLookPos, tc.Yaw)
+			yawRad := math.Atan2(float64(tc.Dz), float64(tc.Dx))
+			tc.TargetYaw = float32(yawRad*180/math.Pi) - 90
+			tc.TargetPitch = 0
 		} else {
 			tc.TargetYaw = tc.Yaw
 			tc.TargetPitch = tc.Pitch
