@@ -129,15 +129,15 @@ func (tc *TickContext) writePlayerAuthInputPacket() {
 	tc.B.Mu.Unlock()
 
 	pk := &packet.PlayerAuthInput{
-		Position:           tc.CurrPos,
+		Position:           tc.CurrPos.Add(mgl32.Vec3{0, 1.62, 0}),
 		Pitch:              tc.Pitch,
 		Yaw:                tc.Yaw,
 		HeadYaw:            tc.Yaw,
 		MoveVector:         tc.MoveVec,
 		InputData:          inputData,
-		InputMode:          packet.InputModeTouch,
+		InputMode:          packet.InputModeMouse,
 		PlayMode:           packet.PlayModeNormal,
-		InteractionModel:   packet.InteractionModelClassic,
+		InteractionModel:   packet.InteractionModelCrosshair,
 		InteractPitch:      tc.Pitch,
 		InteractYaw:        tc.Yaw,
 		Tick:               tc.Tick,
