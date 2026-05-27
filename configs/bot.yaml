@@ -26,5 +26,5 @@ ai:
   api_key: "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" # Leave empty to load from NVIDIA_API_KEY environment variable
   main_player: "OnyxStygian" # Primary player/owner username
   respond_only_to_linked_player: false
-  respond_only_when_tagged: true # true = only respond when tagged/named in chat (e.g. Luna or @Luna)
+  respond_only_when_tagged: false # true = only respond when tagged/named in chat (e.g. Luna or @Luna)
   custom_personality: "" # Custom LLM personality prompt override (leave empty to use default)

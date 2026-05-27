@@ -168,8 +168,13 @@ func HandlePlayerPacket(b *bot.Bot, pk packet.Packet) bool {
 		return true
 
 	case *packet.NetworkStackLatency:
+		b.Logger.Debug("received ping from server", slog.Int64("timestamp", p.Timestamp), slog.Bool("needs_response", p.NeedsResponse))
 		if p.NeedsResponse {
-			_ = b.Conn.WritePacket(p)
+			_ = b.Conn.WritePacket(&packet.NetworkStackLatency{
+				Timestamp:     p.Timestamp,
+				NeedsResponse: false,
+			})
+			b.Logger.Debug("sent pong back to server", slog.Int64("timestamp", p.Timestamp))
 		}
 		return true
 	}
