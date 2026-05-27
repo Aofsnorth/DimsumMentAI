@@ -37,6 +37,9 @@ func StartServer(b *bot.Bot) {
 	mux.HandleFunc("/api/blocks", s.handleBlocks)
 	mux.HandleFunc("/api/path/preview", s.handlePathPreview)
 	mux.HandleFunc("/api/walk", s.handleWalk)
+	mux.HandleFunc("/api/debug/break", s.handleDebugBreak)
+	mux.HandleFunc("/api/debug/place", s.handleDebugPlace)
+	mux.HandleFunc("/api/debug/inventory", s.handleDebugInventory)
 
 	handler := func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
@@ -115,6 +118,7 @@ type statePayload struct {
 	Blocks        []BlockData        `json:"blocks,omitempty"`
 	BlocksRadius  int                `json:"blocks_radius"`
 	ServerTick    uint64             `json:"server_tick"`
+	Debug         bool               `json:"debug"`
 }
 
 func (s *Server) broadcastLoop() {
@@ -145,6 +149,7 @@ func (s *Server) broadcastLoop() {
 func (s *Server) buildState(includeBlocks bool) statePayload {
 	radius := 18
 	s.b.Mu.Lock()
+	debugEnabled := s.b.Debug
 	payload := statePayload{
 		Type:          "state_update",
 		Timestamp:     time.Now().UnixMilli(),
@@ -163,6 +168,7 @@ func (s *Server) buildState(includeBlocks bool) statePayload {
 		PathIndex:    s.b.PathIndex,
 		BlocksRadius: radius,
 		ServerTick:   s.b.ServerTick,
+		Debug:        debugEnabled,
 	}
 	for _, n := range s.b.CurrentPath {
 		payload.Path = append(payload.Path, NodeData{
@@ -310,5 +316,102 @@ func (s *Server) handleWalk(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]any{
 		"ok":     true,
 		"target": map[string]float32{"x": dest.X(), "y": dest.Y(), "z": dest.Z()},
+	})
+}
+
+func (s *Server) handleDebugBreak(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "POST only", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req coordRequest
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		http.Error(w, "read body", http.StatusBadRequest)
+		return
+	}
+	if err := json.Unmarshal(body, &req); err != nil {
+		http.Error(w, "invalid JSON", http.StatusBadRequest)
+		return
+	}
+
+	x, y, z := int32(req.X), int32(req.Y), int32(req.Z)
+	s.b.Mu.Lock()
+	s.b.WorldModel.SetSolid(x, y, z, false)
+	isGrounded := s.b.IsGrounded
+	s.b.Mu.Unlock()
+
+	if isGrounded {
+		feetsX := int32(s.b.Pos.X())
+		feetsY := int32(s.b.Pos.Y())
+		feetsZ := int32(s.b.Pos.Z())
+		s.b.Mu.Lock()
+		s.b.WorldModel.SetBodyClearance(feetsX, feetsY, feetsZ)
+		s.b.WorldModel.SetBodyClearance(feetsX, feetsY+1, feetsZ)
+		s.b.WorldModel.SetBodyClearance(feetsX, feetsY+2, feetsZ)
+		s.b.Mu.Unlock()
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{"ok": true})
+}
+
+func (s *Server) handleDebugPlace(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "POST only", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req coordRequest
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		http.Error(w, "read body", http.StatusBadRequest)
+		return
+	}
+	if err := json.Unmarshal(body, &req); err != nil {
+		http.Error(w, "invalid JSON", http.StatusBadRequest)
+		return
+	}
+
+	x, y, z := int32(req.X), int32(req.Y), int32(req.Z)
+	s.b.Mu.Lock()
+	s.b.WorldModel.SetSolid(x, y, z, true)
+	s.b.Mu.Unlock()
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{"ok": true})
+}
+
+func (s *Server) handleDebugInventory(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "GET only", http.StatusMethodNotAllowed)
+		return
+	}
+
+	s.b.Mu.Lock()
+	inv := s.b.InventoryMap
+	names := s.b.ItemNames
+	heldSlot := s.b.HeldSlot
+	s.b.Mu.Unlock()
+
+	type slotInfo struct {
+		Slot  uint32 `json:"slot"`
+		Name  string `json:"name"`
+		Count int    `json:"count"`
+	}
+
+	slots := make([]slotInfo, 0, len(inv))
+	for slot, stack := range inv {
+		if stack.Count > 0 {
+			name := names[stack.NetworkID]
+			slots = append(slots, slotInfo{Slot: slot, Name: name, Count: int(stack.Count)})
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{
+		"held_slot": heldSlot,
+		"slots":     slots,
 	})
 }

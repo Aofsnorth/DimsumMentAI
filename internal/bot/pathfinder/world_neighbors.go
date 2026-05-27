@@ -1,5 +1,11 @@
 package pathfinder
 
+import (
+	"strings"
+
+	"github.com/df-mc/dragonfly/server/world/chunk"
+)
+
 // GetNeighbors mengembalikan node-node tetangga yang valid untuk dilalui bot.
 func (w *LocalWorldModel) GetNeighbors(node Node) []Node {
 	var neighbors []Node
@@ -20,6 +26,12 @@ func (w *LocalWorldModel) GetNeighbors(node Node) []Node {
 		if !w.IsSolid(x, y, z) && !w.IsSolid(x, y+1, z) &&
 			!w.IsHazard(x, y, z) && !w.IsHazard(x, y+1, z) {
 			if w.IsSolid(x, y-1, z) && !w.IsHazard(x, y-1, z) {
+				if w.isClimbableSurface(x, y-1, z) {
+					return true
+				}
+				if w.isHalfBlock(x, y-1, z) {
+					return false
+				}
 				return true
 			}
 			if w.IsLadder(x, y, z) {
@@ -117,11 +129,23 @@ func (w *LocalWorldModel) GetNeighbors(node Node) []Node {
 		if !w.IsSolid(tx, ty-1, tz) || w.IsHazard(tx, ty-1, tz) {
 			return Node{}, false
 		}
-		if w.IsSolid(tx, ty, tz) || w.IsSolid(tx, ty+1, tz) {
-			return Node{}, false
-		}
-		if w.IsHazard(tx, ty, tz) || w.IsHazard(tx, ty+1, tz) {
-			return Node{}, false
+		// If target floor is a half-block (slab/stairs), we can stand on top of it at y+1
+		// Otherwise require full block clearance
+		if !w.isHalfBlock(tx, ty-1, tz) {
+			if w.IsSolid(tx, ty, tz) || w.IsSolid(tx, ty+1, tz) {
+				return Node{}, false
+			}
+			if w.IsHazard(tx, ty, tz) || w.IsHazard(tx, ty+1, tz) {
+				return Node{}, false
+			}
+		} else {
+			// Half-block floor: check head clearance at y+2 (one above half-block)
+			if w.IsSolid(tx, ty+1, tz) || w.IsSolid(tx, ty+2, tz) {
+				return Node{}, false
+			}
+			if w.IsHazard(tx, ty+1, tz) || w.IsHazard(tx, ty+2, tz) {
+				return Node{}, false
+			}
 		}
 
 		// Check intermediate gap blocks
@@ -319,4 +343,49 @@ func (w *LocalWorldModel) GetNeighbors(node Node) []Node {
 	}
 
 	return neighbors
+}
+
+func (w *LocalWorldModel) isHalfBlock(x, y, z int32) bool {
+	if w.chunkQuerier == nil {
+		return false
+	}
+	rid, loaded := w.chunkQuerier.GetBlockRID(x, y, z)
+	if !loaded {
+		return false
+	}
+	name, properties, ok := chunk.RuntimeIDToState(rid)
+	if !ok {
+		return false
+	}
+	if strings.HasSuffix(name, "_slab") || strings.HasSuffix(name, "_stairs") || strings.HasSuffix(name, "_step") {
+		return true
+	}
+	if strings.Contains(name, "stair") && strings.Contains(name, "outer") ||
+		strings.Contains(name, "stair") && strings.Contains(name, "inner") {
+		return true
+	}
+	if properties != nil {
+		if half, ok := properties["half"]; ok {
+			if half == "top" || half == "bottom" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (w *LocalWorldModel) isClimbableSurface(x, y, z int32) bool {
+	if w.chunkQuerier == nil {
+		return false
+	}
+	rid, loaded := w.chunkQuerier.GetBlockRID(x, y, z)
+	if !loaded {
+		return false
+	}
+	name, _, ok := chunk.RuntimeIDToState(rid)
+	if !ok {
+		return false
+	}
+	return name == "minecraft:ladder" || name == "minecraft:scaffolding" ||
+		strings.Contains(name, "vine") || strings.Contains(name, "rope")
 }

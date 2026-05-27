@@ -13,6 +13,7 @@ bot:
   name: "Luna" # In-game display name
   language: "Indonesian" # AI reply language, e.g. "English", "Indonesian", "Japanese"
   log_level: "info" # debug, info, warn, or error
+  debug: true # Enable visualizer debug features (break, place, inventory buttons)
 
 # --- Skin & Geometry ---
 skin:

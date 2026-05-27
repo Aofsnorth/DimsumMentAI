@@ -58,6 +58,7 @@ type Bot struct {
 	RewindMovement    bool // server uses RewindHistorySize / CorrectPlayerMovePrediction
 	Language          string
 	StatePath         string
+	Debug             bool
 	ProtoSkin         protocol.Skin
 	PlayerUUID        uuid.UUID
 

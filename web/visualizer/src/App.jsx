@@ -1,5 +1,5 @@
-import { useState, useEffect, useMemo, useRef, useCallback } from 'react'
-import { Canvas, useFrame } from '@react-three/fiber'
+import { useState, useEffect, useMemo, useRef, useCallback, forwardRef } from 'react'
+import { Canvas, useThree, useFrame } from '@react-three/fiber'
 import { OrbitControls, Box, Cylinder, Line, Grid, Html } from '@react-three/drei'
 import * as THREE from 'three'
 
@@ -106,53 +106,29 @@ const PathRenderer = ({ path, currentIndex, variant = 'live' }) => {
   )
 }
 
-const BlocksInstanced = ({ blocks }) => {
-  const meshRef = useRef()
+const BlocksInstanced = forwardRef(function BlocksInstanced({ blocks }, ref) {
   const dummy = useMemo(() => new THREE.Object3D(), [])
 
   useEffect(() => {
-    if (!meshRef.current || !blocks?.length) return
+    if (!ref?.current || !blocks?.length) return
     blocks.forEach((block, i) => {
       dummy.position.set(block.x + 0.5, block.y + 0.5, block.z + 0.5)
       dummy.updateMatrix()
-      meshRef.current.setMatrixAt(i, dummy.matrix)
+      ref.current.setMatrixAt(i, dummy.matrix)
     })
-    meshRef.current.count = blocks.length
-    meshRef.current.instanceMatrix.needsUpdate = true
-  }, [blocks, dummy])
+    ref.current.count = blocks.length
+    ref.current.instanceMatrix.needsUpdate = true
+  }, [blocks, dummy, ref])
 
   if (!blocks?.length) return null
 
   return (
-    <instancedMesh ref={meshRef} args={[null, null, blocks.length]} frustumCulled={false}>
+    <instancedMesh ref={ref} args={[null, null, blocks.length]} frustumCulled={false}>
       <boxGeometry args={[0.98, 0.98, 0.98]} />
       <meshStandardMaterial color="#374151" roughness={0.85} metalness={0.1} transparent opacity={0.72} />
     </instancedMesh>
   )
-}
-
-function ClickPlane({ enabled, yLevel, center, onPick }) {
-  if (!enabled || center == null) return null
-  const planeY = yLevel + 0.02
-
-  return (
-    <mesh
-      rotation={[-Math.PI / 2, 0, 0]}
-      position={[center.x, planeY, center.z]}
-      onPointerDown={(e) => {
-        e.stopPropagation()
-        onPick({
-          x: Math.floor(e.point.x),
-          y: yLevel,
-          z: Math.floor(e.point.z),
-        })
-      }}
-    >
-      <planeGeometry args={[128, 128]} />
-      <meshBasicMaterial visible={false} />
-    </mesh>
-  )
-}
+})
 
 function SmoothOrbit({ target, follow }) {
   const controlsRef = useRef()
@@ -177,15 +153,9 @@ function SmoothOrbit({ target, follow }) {
   return <OrbitControls ref={controlsRef} makeDefault dampingFactor={0.08} minDistance={4} maxDistance={80} />
 }
 
-function Scene({
-  state,
-  blocks,
-  debugTarget,
-  previewPath,
-  debugMode,
-  pickY,
-  onPick,
-}) {
+function Scene({ state, blocks, debugTarget, previewPath, debugMode, onPick }) {
+  const blocksRef = useRef()
+  const { camera, gl } = useThree()
   const botPos = state.bot_pos
   const gridY = botPos ? Math.floor(botPos.y) : 0
   const cameraTarget = useMemo(() => {
@@ -196,6 +166,39 @@ function Scene({
   const debugMarker = debugTarget
     ? { x: debugTarget.x + 0.5, y: debugTarget.y + 0.5, z: debugTarget.z + 0.5 }
     : null
+
+  const handlePointerDown = useCallback(
+    (e) => {
+      if (!debugMode) return
+      e.stopPropagation()
+      const raycaster = new THREE.Raycaster()
+      raycaster.setFromCamera(e.pointer, camera)
+      const mesh = blocksRef.current
+      if (mesh) {
+        const hits = raycaster.intersectObject(mesh)
+        if (hits.length > 0 && hits[0].instanceId != null) {
+          const block = blocks[hits[0].instanceId]
+          if (block) {
+            onPick({ x: block.x, y: block.y, z: block.z })
+            return
+          }
+        }
+      }
+      const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -gridY)
+      const point = new THREE.Vector3()
+      if (raycaster.ray.intersectPlane(plane, point)) {
+        onPick({ x: Math.floor(point.x), y: Math.floor(point.y), z: Math.floor(point.z) })
+      }
+    },
+    [blocks, camera, debugMode, gridY, onPick],
+  )
+
+  useEffect(() => {
+    if (!debugMode) return undefined
+    const el = gl.domElement
+    el.addEventListener('pointerdown', handlePointerDown)
+    return () => el.removeEventListener('pointerdown', handlePointerDown)
+  }, [debugMode, gl.domElement, handlePointerDown])
 
   return (
     <>
@@ -217,19 +220,12 @@ function Scene({
         sectionThickness={0.9}
       />
 
-      <BlocksInstanced blocks={blocks} />
+      <BlocksInstanced ref={blocksRef} blocks={blocks} />
       <PathRenderer path={state.path} currentIndex={state.path_index} variant="live" />
       <PathRenderer path={previewPath} variant="preview" />
       <BotEntity position={botPos} />
       <Marker position={state.target_pos} color="#f97316" label="target" wireframe />
       <Marker position={debugMarker} color="#22d3ee" label="debug click" />
-
-      <ClickPlane
-        enabled={debugMode}
-        yLevel={pickY}
-        center={botPos || { x: 0, y: 0, z: 0 }}
-        onPick={onPick}
-      />
     </>
   )
 }
@@ -288,51 +284,51 @@ async function walkTo(coord) {
   return res.json()
 }
 
+async function debugAction(path, coord) {
+  const res = await fetch(`${API}${path}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(coord),
+  })
+  if (!res.ok) throw new Error(await res.text())
+  return res.json()
+}
+
 function App() {
   const [state, setState] = useState({ followCamera: true })
   const [blocks, setBlocks] = useState([])
   const [connected, setConnected] = useState(false)
-  const [debugMode, setDebugMode] = useState(true)
   const [debugTarget, setDebugTarget] = useState(null)
   const [previewPath, setPreviewPath] = useState(null)
   const [previewMeta, setPreviewMeta] = useState(null)
-  const [pickY, setPickY] = useState(0)
   const [loadingPreview, setLoadingPreview] = useState(false)
   const [lastSync, setLastSync] = useState(null)
+  const [inventoryOpen, setInventoryOpen] = useState(false)
+  const [inventoryData, setInventoryData] = useState(null)
+
+  const debugMode = state.debug !== false
 
   useBotSocket(setState, setBlocks, setConnected)
-
-  useEffect(() => {
-    if (state.bot_pos) {
-      setPickY((y) => {
-        if (y === 0 && state.bot_pos) return Math.floor(state.bot_pos.y)
-        return y
-      })
-    }
-  }, [state.bot_pos?.y])
 
   useEffect(() => {
     if (state.lastUpdate) setLastSync(new Date(state.lastUpdate))
   }, [state.lastUpdate])
 
-  const handlePick = useCallback(
-    async (coord) => {
-      setDebugTarget(coord)
-      setLoadingPreview(true)
-      try {
-        const preview = await previewPathAt(coord)
-        setPreviewPath(preview.path)
-        setPreviewMeta(preview)
-      } catch (e) {
-        console.error(e)
-        setPreviewPath(null)
-        setPreviewMeta({ found: false, error: String(e) })
-      } finally {
-        setLoadingPreview(false)
-      }
-    },
-    [],
-  )
+  const handlePick = useCallback(async (coord) => {
+    setDebugTarget(coord)
+    setLoadingPreview(true)
+    try {
+      const preview = await previewPathAt(coord)
+      setPreviewPath(preview.path)
+      setPreviewMeta(preview)
+    } catch (e) {
+      console.error(e)
+      setPreviewPath(null)
+      setPreviewMeta({ found: false, error: String(e) })
+    } finally {
+      setLoadingPreview(false)
+    }
+  }, [])
 
   const handleWalk = async () => {
     if (!debugTarget) return
@@ -343,24 +339,54 @@ function App() {
     }
   }
 
+  const blockActionPos = debugTarget
+    ? { x: debugTarget.x, y: debugTarget.y - 1, z: debugTarget.z }
+    : null
+
+  const handleBreak = async () => {
+    if (!blockActionPos) return
+    try {
+      await debugAction('/api/debug/break', blockActionPos)
+    } catch (e) {
+      console.error(e)
+    }
+  }
+
+  const handlePlace = async () => {
+    if (!debugTarget) return
+    try {
+      await debugAction('/api/debug/place', debugTarget)
+    } catch (e) {
+      console.error(e)
+    }
+  }
+
+  const handleInventory = async () => {
+    try {
+      const data = await fetch(`${API}/api/debug/inventory`).then((r) => r.json())
+      setInventoryData(data)
+      setInventoryOpen(true)
+    } catch (e) {
+      console.error(e)
+    }
+  }
+
   const syncAge = lastSync ? `${Math.max(0, Math.round((Date.now() - lastSync.getTime()) / 1000))}s ago` : '—'
 
   return (
     <div className="w-screen h-screen bg-[#0c0b0a] overflow-hidden relative select-none">
-      {/* Header */}
       <div className="absolute top-0 left-0 right-0 z-20 flex items-center justify-between px-5 py-4 pointer-events-none">
         <div className="pointer-events-auto flex items-center gap-4">
           <h1 className="text-lg font-semibold text-[#f5f3ef] tracking-tight" style={{ fontFamily: 'Georgia, serif' }}>
-            Pathfinder Debug
+            Debug
           </h1>
           <StatusBadge connected={connected} movement={state.movement_state} />
         </div>
         <div className="pointer-events-auto text-xs text-[#8a8680] font-mono">
-          sync {syncAge} · {blocks.length} blocks · tick {state.server_tick ?? '—'}
+          sync {syncAge} · {blocks.length} blocks · rev {state.block_revision ?? '—'}
         </div>
       </div>
 
-      {/* Left sidebar */}
       <div className="absolute top-20 left-5 z-10 flex flex-col gap-3 w-72 max-h-[calc(100vh-6rem)] overflow-y-auto pointer-events-auto">
         <Panel title="Bot">
           <div className="space-y-2 text-sm font-mono">
@@ -370,36 +396,19 @@ function App() {
           </div>
         </Panel>
 
-        <Panel title="Debug pathfinder">
-          <label className="flex items-center gap-2 text-sm mb-3 cursor-pointer">
-            <input
-              type="checkbox"
-              checked={debugMode}
-              onChange={(e) => setDebugMode(e.target.checked)}
-              className="rounded accent-cyan-500"
-            />
-            <span>Click-to-preview mode</span>
-          </label>
-
-          <div className="mb-3">
-            <label className="text-xs text-[#8a8680] block mb-1">Click Y level (block)</label>
-            <input
-              type="number"
-              value={pickY}
-              onChange={(e) => setPickY(parseInt(e.target.value, 10) || 0)}
-              className="w-full px-3 py-2 rounded-lg bg-black/40 border border-white/10 text-sm font-mono"
-            />
-          </div>
-
+        <Panel title="Debug">
+          {debugMode && (
+            <>
           <p className="text-xs text-[#8a8680] mb-3 leading-relaxed">
-            Klik pada grid untuk simulasi path dari posisi bot sekarang. Garis <span className="text-cyan-400">cyan</span>{' '}
-            = preview, <span className="text-purple-400">ungu</span> = path aktif bot.
+            Klik blok terdepan di dunia (Y otomatis dari blok paling atas yang terkena ray). Garis{' '}
+            <span className="text-cyan-400">cyan</span> = preview, <span className="text-purple-400">ungu</span> = path
+            aktif.
           </p>
 
           {debugTarget && (
             <div className="mb-3 p-3 rounded-lg bg-cyan-500/10 border border-cyan-500/20 text-sm">
               <div className="text-cyan-300 font-mono mb-1">
-                {debugTarget.x}, {debugTarget.y}, {debugTarget.z}
+                feet {debugTarget.x}, {debugTarget.y}, {debugTarget.z}
               </div>
               {loadingPreview ? (
                 <span className="text-[#8a8680]">Menghitung path…</span>
@@ -412,6 +421,32 @@ function App() {
               ) : null}
             </div>
           )}
+
+          <div className="grid grid-cols-2 gap-2 mb-2">
+            <button
+              type="button"
+              disabled={!blockActionPos}
+              onClick={handleBreak}
+              className="py-2 rounded-lg bg-red-600/70 hover:bg-red-500 text-sm disabled:opacity-40"
+            >
+              Break
+            </button>
+            <button
+              type="button"
+              disabled={!debugTarget}
+              onClick={handlePlace}
+              className="py-2 rounded-lg bg-amber-600/70 hover:bg-amber-500 text-sm disabled:opacity-40"
+            >
+              Place block
+            </button>
+            <button
+              type="button"
+              onClick={handleInventory}
+              className="col-span-2 py-2 rounded-lg bg-white/10 hover:bg-white/15 text-sm"
+            >
+              Inventory
+            </button>
+          </div>
 
           <div className="flex gap-2">
             <button
@@ -431,6 +466,24 @@ function App() {
               Walk here
             </button>
           </div>
+
+          {inventoryOpen && (
+            <div className="mt-3 p-3 rounded-lg bg-black/40 border border-white/10 text-xs max-h-40 overflow-y-auto">
+              <div className="flex justify-between mb-2">
+                <span className="text-[#8a8680]">Hotbar slot {inventoryData?.held_slot ?? state.held_slot ?? '—'}</span>
+                <button type="button" className="text-[#8a8680] hover:text-white" onClick={() => setInventoryOpen(false)}>
+                  tutup
+                </button>
+              </div>
+              {(inventoryData?.slots ?? state.inventory ?? []).map((s) => (
+                <div key={s.slot} className="font-mono text-[#c9c5be]">
+                  [{s.slot}] {s.name || '?'} ×{s.count}
+                </div>
+              ))}
+            </div>
+          )}
+            </>
+          )}
         </Panel>
 
         <Panel title="Legend">
@@ -441,15 +494,10 @@ function App() {
                 <span className="text-[#a19e99]">{k}</span>
               </li>
             ))}
-            <li className="flex items-center gap-2 pt-1 border-t border-white/5">
-              <span className="w-3 h-3 rounded-sm bg-cyan-400" />
-              <span className="text-[#a19e99]">preview path</span>
-            </li>
           </ul>
         </Panel>
       </div>
 
-      {/* Right controls */}
       <div className="absolute top-20 right-5 z-10 pointer-events-auto">
         <Panel>
           <label className="flex items-center gap-2 text-sm cursor-pointer">
@@ -464,10 +512,9 @@ function App() {
         </Panel>
       </div>
 
-      {/* Hint */}
       {debugMode && (
         <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-10 px-4 py-2 rounded-full bg-black/60 border border-white/10 text-xs text-[#a19e99] pointer-events-none">
-          Klik di dunia untuk preview path · Walk here untuk kirim bot
+          Klik blok untuk preview · Walk here untuk kirim bot
         </div>
       )}
 
@@ -478,7 +525,6 @@ function App() {
           debugTarget={debugTarget}
           previewPath={previewPath}
           debugMode={debugMode}
-          pickY={pickY}
           onPick={handlePick}
         />
       </Canvas>

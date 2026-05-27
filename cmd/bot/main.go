@@ -147,6 +147,7 @@ func main() {
 		bot.WithServerHost(cfg.Server.Host),
 		bot.WithLanguage(cfg.Bot.Language),
 		bot.WithStatePath(cfg.Bot.StatePath),
+		bot.WithDebug(cfg.Bot.Debug),
 		bot.WithSkin(assets.ProtocolSkin, playerUUID),
 		bot.WithAI(aiClient, throttler, cfg.AI),
 	)

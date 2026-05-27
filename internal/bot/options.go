@@ -70,6 +70,12 @@ func WithStatePath(path string) Option {
 	}
 }
 
+func WithDebug(debug bool) Option {
+	return func(b *Bot) {
+		b.Debug = debug
+	}
+}
+
 func WithSkin(skin protocol.Skin, playerUUID uuid.UUID) Option {
 	return func(b *Bot) {
 		b.ProtoSkin = skin

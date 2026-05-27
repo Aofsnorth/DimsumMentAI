@@ -106,12 +106,15 @@ func (tc *TickContext) performActiveSteering() {
 					}
 				}
 				tc.B.Mu.Unlock()
-			} else if !tc.HasPath && tc.Dist < 1.5 {
-				if tc.MState == "walk_to" {
+			} else if !tc.HasPath && tc.MState == "walk_to" {
+				// For walk_to, consider arrived if within 2 blocks in XZ and 2 blocks in Y
+				dyTarget := tc.CurrPos.Y() - tc.TPos.Y()
+				distXZ := float32(math.Sqrt(float64(tc.Dx*tc.Dx + tc.Dz*tc.Dz)))
+				if distXZ < 2.0 && math.Abs(float64(dyTarget)) < 2.0 {
 					tc.B.Mu.Lock()
 					tc.B.MovementState = "idle"
 					tc.B.Mu.Unlock()
-					tc.B.Logger.Debug("bot arrived at target destination", slog.Float64("x", float64(tc.TPos.X())), slog.Float64("z", float64(tc.TPos.Z())))
+					tc.B.Logger.Debug("bot arrived at target destination (within 2 blocks)", slog.Float64("x", float64(tc.TPos.X())), slog.Float64("y", float64(tc.TPos.Y())), slog.Float64("z", float64(tc.TPos.Z())))
 				}
 			}
 

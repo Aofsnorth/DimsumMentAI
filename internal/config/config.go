@@ -24,6 +24,7 @@ type BotConfig struct {
 	Language  string `yaml:"language"`
 	LogLevel  string `yaml:"log_level"`
 	StatePath string `yaml:"state_path"`
+	Debug     bool   `yaml:"debug"`
 }
 
 type SkinConfig struct {
