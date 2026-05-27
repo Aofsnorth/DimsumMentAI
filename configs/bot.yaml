@@ -12,7 +12,7 @@ server:
 bot:
   name: "Luna" # In-game display name
   language: "Indonesian" # AI reply language, e.g. "English", "Indonesian", "Japanese"
-  log_level: "debug" # debug, info, warn, or error
+  log_level: "info" # debug, info, warn, or error
 
 # --- Skin & Geometry ---
 skin:
