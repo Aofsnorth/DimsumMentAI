@@ -35,7 +35,7 @@ func (l *Looter) CollectMatchingDrops(ctx context.Context, maxDist float32, item
 func (l *Looter) collectDrops(ctx context.Context, maxDist float32, itemName string) int {
 	collected := 0
 	l.logger.Info("Starting item sweep", "max_distance", maxDist, "item", itemName)
-	deadline := time.Now().Add(2200 * time.Millisecond)
+	deadline := time.Now().Add(4500 * time.Millisecond)
 	attempted := make(map[uint64]bool)
 
 	for {

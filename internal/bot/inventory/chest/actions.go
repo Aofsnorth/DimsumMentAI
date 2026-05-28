@@ -38,7 +38,24 @@ func (ic *Container) GiveItem(ctx context.Context, itemName string, playerName s
 	}
 
 	ic.bot.LookAt(playerPos.Add(mgl32.Vec3{0, 1.6, 0}))
-	time.Sleep(200 * time.Millisecond)
+
+	targetHead := playerPos.Add(mgl32.Vec3{0, 1.6, 0})
+	dx := targetHead.X() - (botPos.X())
+	dy := targetHead.Y() - (botPos.Y() + 1.62)
+	dz := targetHead.Z() - (botPos.Z())
+	distH := math.Sqrt(float64(dx*dx + dz*dz))
+	yaw := float32(math.Atan2(float64(dz), float64(dx))*180/math.Pi) - 90
+	for yaw < 0 {
+		yaw += 360
+	}
+	pitch := float32(-math.Atan2(float64(dy), distH) * 180 / math.Pi)
+	ic.bot.SetLookAngles(yaw, pitch)
+
+	// Block until the movement tick actually transmits this yaw to the server.
+	// Dropped items use the player's last-known facing on the server side, so
+	// the drop transaction must come AFTER the PlayerAuthInput with the new
+	// yaw — otherwise the item flies in whatever direction was sent last tick.
+	ic.bot.WaitForYawSync(yaw, 250*time.Millisecond)
 
 	inv := ic.bot.GetInventorySlots()
 	names := ic.bot.GetItemNames()

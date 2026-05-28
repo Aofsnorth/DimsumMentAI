@@ -194,6 +194,35 @@ func (b *Bot) LookAt(pos mgl32.Vec3) {
 	}
 }
 
+func (b *Bot) SetLookAngles(yaw, pitch float32) {
+	b.Mu.Lock()
+	b.Yaw = yaw
+	b.Pitch = pitch
+	b.Mu.Unlock()
+}
+
+// WaitForYawSync polls until the movement tick has actually sent a
+// PlayerAuthInput carrying the target yaw to the server, or the timeout
+// elapses. Returns true when sync confirmed. Used before drop transactions
+// so item drop direction matches the bot's intended camera direction.
+func (b *Bot) WaitForYawSync(targetYaw float32, timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		b.Mu.Lock()
+		sent := b.LastSentInputYaw
+		b.Mu.Unlock()
+		diff := math.Abs(float64(targetYaw - sent))
+		if diff > 180 {
+			diff = 360 - diff
+		}
+		if diff < 2.0 {
+			return true
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	return false
+}
+
 func (b *Bot) playerApproachPosition(username string) (mgl32.Vec3, bool) {
 	_, pos, yaw, _, ok := b.FindPlayerView(username)
 	if !ok {

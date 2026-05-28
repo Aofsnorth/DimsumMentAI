@@ -55,6 +55,7 @@ func handlePlayerList(b *bot.Bot, p *packet.PlayerList) {
 func handleCraftingData(b *bot.Bot, p *packet.CraftingData) {
 	b.Mu.Lock()
 	b.Recipes = make(map[string]uint32)
+	b.RecipesByNetID = make(map[uint32]bot.RecipeInfo)
 	for _, r := range p.Recipes {
 		switch recipe := r.(type) {
 		case *protocol.ShapelessRecipe:
@@ -66,6 +67,11 @@ func handleCraftingData(b *bot.Bot, p *packet.CraftingData) {
 					cleanName := strings.TrimPrefix(name, "minecraft:")
 					b.Recipes[strings.ToLower(cleanName)] = recipe.RecipeNetworkID
 				}
+				b.RecipesByNetID[recipe.RecipeNetworkID] = bot.RecipeInfo{
+					Ingredients: recipe.Input,
+					Output:      outItem,
+					Block:       recipe.Block,
+				}
 			}
 		case *protocol.ShapedRecipe:
 			if len(recipe.Output) > 0 {
@@ -75,6 +81,11 @@ func handleCraftingData(b *bot.Bot, p *packet.CraftingData) {
 					b.Recipes[strings.ToLower(name)] = recipe.RecipeNetworkID
 					cleanName := strings.TrimPrefix(name, "minecraft:")
 					b.Recipes[strings.ToLower(cleanName)] = recipe.RecipeNetworkID
+				}
+				b.RecipesByNetID[recipe.RecipeNetworkID] = bot.RecipeInfo{
+					Ingredients: recipe.Input,
+					Output:      outItem,
+					Block:       recipe.Block,
 				}
 			}
 		}

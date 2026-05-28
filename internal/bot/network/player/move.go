@@ -86,7 +86,7 @@ func handleCorrectPrediction(b *bot.Bot, p *packet.CorrectPlayerMovePrediction) 
 		"runId":      "tick-fix-v2",
 	})
 	// #endregion
-	if b.RewindMovement && !b.VenityCompat {
+	if b.RewindMovement {
 		sendMovementPredictionSync(b, entityID)
 	}
 }

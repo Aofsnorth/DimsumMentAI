@@ -33,6 +33,8 @@ type Bot interface {
 	GetLocalWorldModel() entity.WorldModel
 	DropItem(name string, count int) error
 	FindPlayer(username string) (uint64, mgl32.Vec3, bool)
+	SetLookAngles(yaw, pitch float32)
+	WaitForYawSync(targetYaw float32, timeout time.Duration) bool
 }
 
 type InventoryManager struct {

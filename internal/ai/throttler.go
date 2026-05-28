@@ -7,10 +7,14 @@ import (
 )
 
 type HistoryEntry struct {
+	Source    string
 	Text      string
 	Timestamp time.Time
 }
 
+// MessageThrottler filters incoming chat to prevent duplicate/floods.
+// Duplicate detection is per-source (so player A's message does not block an
+// identical message from player B). Rate limiting is global.
 type MessageThrottler struct {
 	mu                   sync.Mutex
 	duplicateWindow      time.Duration
@@ -20,6 +24,15 @@ type MessageThrottler struct {
 }
 
 func NewMessageThrottler(duplicateWindow, rateLimitWindow time.Duration, maxMessagesPerWindow int) *MessageThrottler {
+	if duplicateWindow <= 0 {
+		duplicateWindow = 3 * time.Second
+	}
+	if rateLimitWindow <= 0 {
+		rateLimitWindow = 10 * time.Second
+	}
+	if maxMessagesPerWindow <= 0 {
+		maxMessagesPerWindow = 100
+	}
 	return &MessageThrottler{
 		duplicateWindow:      duplicateWindow,
 		rateLimitWindow:      rateLimitWindow,
@@ -28,83 +41,37 @@ func NewMessageThrottler(duplicateWindow, rateLimitWindow time.Duration, maxMess
 	}
 }
 
-// DefaultThrottler returns a throttler configured with standard values (5s duplicate window, 10s rate limit window for max 100 messages)
+// DefaultThrottler returns a throttler configured with sane defaults.
 func DefaultThrottler() *MessageThrottler {
-	return NewMessageThrottler(5*time.Second, 10*time.Second, 100)
+	return NewMessageThrottler(3*time.Second, 10*time.Second, 100)
 }
 
-// IsDuplicate checks if the exact same message was processed within the duplicate window
-func (mt *MessageThrottler) IsDuplicate(message string) bool {
+// Filter checks if a message from source should be allowed. When allowed, the
+// message is recorded in history. Callers MUST call Rollback(source, message)
+// if the work the message triggered fails before completing, otherwise the
+// failed attempt will block legitimate retries.
+func (mt *MessageThrottler) Filter(source, message string) (bool, string) {
 	mt.mu.Lock()
 	defer mt.mu.Unlock()
 
 	mt.cleanup()
 
 	now := time.Now()
+	cleanSource := strings.ToLower(strings.TrimSpace(source))
 	cleanMsg := strings.TrimSpace(strings.ToLower(message))
 
 	for _, entry := range mt.history {
-		if now.Sub(entry.Timestamp) < mt.duplicateWindow {
-			if strings.TrimSpace(strings.ToLower(entry.Text)) == cleanMsg {
-				return true
-			}
+		if now.Sub(entry.Timestamp) >= mt.duplicateWindow {
+			continue
+		}
+		if strings.ToLower(strings.TrimSpace(entry.Source)) != cleanSource {
+			continue
+		}
+		if strings.TrimSpace(strings.ToLower(entry.Text)) == cleanMsg {
+			return false, ""
 		}
 	}
 
-	return false
-}
-
-// IsRateLimited checks if the message count in the rate limit window exceeds the maximum allowed
-func (mt *MessageThrottler) IsRateLimited() bool {
-	mt.mu.Lock()
-	defer mt.mu.Unlock()
-
-	mt.cleanup()
-
-	now := time.Now()
-	count := 0
-
-	for _, entry := range mt.history {
-		if now.Sub(entry.Timestamp) < mt.rateLimitWindow {
-			count++
-		}
-	}
-
-	return count >= mt.maxMessagesPerWindow
-}
-
-// Add adds a message to the history logs
-func (mt *MessageThrottler) Add(message string) {
-	mt.mu.Lock()
-	defer mt.mu.Unlock()
-
-	mt.history = append(mt.history, HistoryEntry{
-		Text:      message,
-		Timestamp: time.Now(),
-	})
-	mt.cleanup()
-}
-
-// Filter checks if a message should be allowed (neither duplicate nor rate-limited)
-func (mt *MessageThrottler) Filter(message string) (bool, string) {
-	mt.mu.Lock()
-	defer mt.mu.Unlock()
-
-	mt.cleanup()
-
-	now := time.Now()
-	cleanMsg := strings.TrimSpace(strings.ToLower(message))
-
-	// Check duplicates (using aggressive 10s check for repetitive bot replies)
-	for _, entry := range mt.history {
-		if now.Sub(entry.Timestamp) < 10*time.Second {
-			if strings.TrimSpace(strings.ToLower(entry.Text)) == cleanMsg {
-				return false, ""
-			}
-		}
-	}
-
-	// Check rate limit
 	count := 0
 	for _, entry := range mt.history {
 		if now.Sub(entry.Timestamp) < mt.rateLimitWindow {
@@ -115,8 +82,8 @@ func (mt *MessageThrottler) Filter(message string) (bool, string) {
 		return false, ""
 	}
 
-	// Allowed! Append to history
 	mt.history = append(mt.history, HistoryEntry{
+		Source:    source,
 		Text:      message,
 		Timestamp: now,
 	})
@@ -124,33 +91,42 @@ func (mt *MessageThrottler) Filter(message string) (bool, string) {
 	return true, message
 }
 
-// cleanup removes history entries older than the longest window (must be called inside locked mutex)
+// Rollback removes the most recent matching (source, message) entry. Use after
+// downstream work fails so the same player can immediately retry.
+func (mt *MessageThrottler) Rollback(source, message string) {
+	mt.mu.Lock()
+	defer mt.mu.Unlock()
+
+	cleanSource := strings.ToLower(strings.TrimSpace(source))
+	cleanMsg := strings.TrimSpace(strings.ToLower(message))
+
+	for i := len(mt.history) - 1; i >= 0; i-- {
+		entry := mt.history[i]
+		if strings.ToLower(strings.TrimSpace(entry.Source)) != cleanSource {
+			continue
+		}
+		if strings.TrimSpace(strings.ToLower(entry.Text)) != cleanMsg {
+			continue
+		}
+		mt.history = append(mt.history[:i], mt.history[i+1:]...)
+		return
+	}
+}
+
+// cleanup removes history entries older than the longest tracking window.
+// Caller must hold mt.mu.
 func (mt *MessageThrottler) cleanup() {
 	now := time.Now()
 	maxWindow := mt.duplicateWindow
 	if mt.rateLimitWindow > maxWindow {
 		maxWindow = mt.rateLimitWindow
 	}
-	if 10*time.Second > maxWindow {
-		maxWindow = 10 * time.Second
-	}
 
-	validIndex := 0
-	for i, entry := range mt.history {
+	filtered := mt.history[:0]
+	for _, entry := range mt.history {
 		if now.Sub(entry.Timestamp) < maxWindow {
-			validIndex = i
-			break
-		}
-		if i == len(mt.history)-1 {
-			validIndex = len(mt.history)
+			filtered = append(filtered, entry)
 		}
 	}
-
-	if validIndex > 0 {
-		if validIndex >= len(mt.history) {
-			mt.history = []HistoryEntry{}
-		} else {
-			mt.history = mt.history[validIndex:]
-		}
-	}
+	mt.history = filtered
 }

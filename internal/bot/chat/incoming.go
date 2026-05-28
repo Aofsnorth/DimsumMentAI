@@ -107,7 +107,7 @@ func HandleIncomingChat(ctx context.Context, b *bot.Bot, evt event.ChatEvent) {
 	}
 
 	// 6. Deduplication filter immediately
-	allowed, _ := b.Throttler.Filter(msg)
+	allowed, _ := b.Throttler.Filter(evt.SourceName, msg)
 	if !allowed {
 		b.Logger.Info("chat ignored: throttled or duplicate", slog.String("msg", msg))
 		return
@@ -137,6 +137,9 @@ func HandleIncomingChat(ctx context.Context, b *bot.Bot, evt event.ChatEvent) {
 	reply, err := b.AiClient.Ask(evt.SourceName, systemPrompt, msg)
 	if err != nil {
 		b.Logger.Error("Failed to ask Nvidia LLM", "error", err.Error())
+		// Allow the same player to retry immediately rather than being held
+		// off by the throttler for a failed attempt.
+		b.Throttler.Rollback(evt.SourceName, msg)
 		return
 	}
 

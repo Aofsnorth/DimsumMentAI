@@ -29,7 +29,7 @@ func syncServerTick(b *bot.Bot, serverTick uint64, source string) {
 		})
 		// #endregion
 	}
-	if !synced && b.RewindMovement && !b.VenityCompat {
+	if !synced && b.RewindMovement {
 		sendMovementPredictionSync(b, b.Conn.GameData().EntityUniqueID)
 	}
 }

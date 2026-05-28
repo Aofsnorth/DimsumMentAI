@@ -79,6 +79,12 @@ func (bm *BlockMiner) GatherBlock(ctx context.Context, blockName string, targetC
 		bm.rg.looter.CollectMatchingDrops(ctx, 6.0, resolvedName)
 		currentCount = bm.waitForInventoryCount(ctx, resolvedName, beforeCount, 2*time.Second)
 		if currentCount <= beforeCount && step.CountsTowardTarget {
+			// Re-sweep once more — the item may have popped slightly out of pickup
+			// radius, or the server may have delayed the pickup.
+			bm.rg.looter.CollectMatchingDrops(ctx, 8.0, resolvedName)
+			currentCount = bm.waitForInventoryCount(ctx, resolvedName, beforeCount, 1500*time.Millisecond)
+		}
+		if currentCount <= beforeCount && step.CountsTowardTarget {
 			failedAttempts++
 			bm.logger.Warn("mined target block but inventory did not increase", "name", resolvedName, "pos", step.Position)
 		}
@@ -171,14 +177,23 @@ func (bm *BlockMiner) breakBlock(ctx context.Context, step mineStep, blockName s
 		BlockFace:       step.Face,
 	})
 
-	breakTime := 850 * time.Millisecond
+	breakTime := 350 * time.Millisecond
 	lowerName := strings.ToLower(blockName)
-	if strings.Contains(lowerName, "stone") || strings.Contains(lowerName, "ore") {
-		breakTime = 1500 * time.Millisecond
+	switch {
+	case strings.Contains(lowerName, "obsidian"):
+		breakTime = 4000 * time.Millisecond
+	case strings.Contains(lowerName, "ore") || strings.Contains(lowerName, "stone") || strings.Contains(lowerName, "cobble") || strings.Contains(lowerName, "deepslate"):
+		breakTime = 1300 * time.Millisecond
+	case strings.Contains(lowerName, "log") || strings.Contains(lowerName, "wood") || strings.Contains(lowerName, "planks"):
+		breakTime = 450 * time.Millisecond
+	case strings.Contains(lowerName, "leaves"):
+		breakTime = 250 * time.Millisecond
+	case strings.Contains(lowerName, "sand") || strings.Contains(lowerName, "gravel") || strings.Contains(lowerName, "dirt") || strings.Contains(lowerName, "grass"):
+		breakTime = 350 * time.Millisecond
 	}
 
 	elapsed := time.Duration(0)
-	swingInterval := 200 * time.Millisecond
+	swingInterval := 100 * time.Millisecond
 	for elapsed < breakTime {
 		_ = bot.WritePacket(&packet.Animate{
 			ActionType:      packet.AnimateActionSwingArm,
@@ -209,7 +224,7 @@ func (bm *BlockMiner) breakBlock(ctx context.Context, step mineStep, blockName s
 		BlockFace:       step.Face,
 	})
 
-	changed := bm.waitForBlockChanged(ctx, step.Position, blockName, 1600*time.Millisecond)
+	changed := bm.waitForBlockChanged(ctx, step.Position, blockName, 800*time.Millisecond)
 	if changed {
 		bot.GetLocalWorldModel().SetSolid(step.Position.X(), step.Position.Y(), step.Position.Z(), false)
 	} else {

@@ -26,6 +26,14 @@ import (
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
 )
 
+// RecipeInfo holds the ingredients and output for a crafting recipe, keyed by
+// RecipeNetworkID. Populated from the server's CraftingData packet.
+type RecipeInfo struct {
+	Ingredients []protocol.ItemDescriptorCount
+	Output      protocol.ItemStack
+	Block       string // e.g. "crafting_table", "" for inventory recipes
+}
+
 // Function pointers for dependency injection (resolving circular dependencies)
 var (
 	SendInputLoopFunc         func(ctx context.Context, b *Bot, gd minecraft.GameData)
@@ -128,6 +136,7 @@ type Bot struct {
 	InventoryMap   map[uint32]protocol.ItemStack
 	ItemNames      map[int32]string
 	Recipes        map[string]uint32
+	RecipesByNetID map[uint32]RecipeInfo
 	HeldSlot       uint32
 	StackRequestID int32
 
@@ -166,6 +175,8 @@ func newBot(opts ...Option) (*Bot, error) {
 		InventoryMap:        make(map[uint32]protocol.ItemStack),
 		ItemNames:           make(map[int32]string),
 		Recipes:             make(map[string]uint32),
+		RecipesByNetID:      make(map[uint32]RecipeInfo),
+		StackRequestID:      -1,
 		Health:              20,
 		Hunger:              20,
 		WorldModel:          pathfinder.NewLocalWorldModel(),

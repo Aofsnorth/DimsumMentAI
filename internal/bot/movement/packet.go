@@ -93,8 +93,10 @@ func (tc *TickContext) writePlayerAuthInputPacket() {
 	}
 
 	tc.B.Mu.Lock()
-	// Venity rewind rejects ClientAck without a real server tick reference (logs: ~30s kick).
-	clientAck := tc.B.RewindMovement && tc.B.TickSynced && !tc.B.VenityCompat
+	// ClientAckServerData tells the server we processed its correction.
+	// For Venity: TickSynced is set to true after the post-chunk-load handshake
+	// (sendVenityLoadedHandshake), so clientAck activates once the handshake completes.
+	clientAck := tc.B.RewindMovement && tc.B.TickSynced
 	tc.B.Mu.Unlock()
 	if clientAck {
 		inputData.Set(packet.InputFlagClientAckServerData)

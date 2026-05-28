@@ -17,6 +17,12 @@ type ParsedReply struct {
 
 var actionRegex = regexp.MustCompile(`(?s)<action>(.*?)</action>`)
 
+// unclosedActionRegex matches an opening <action> tag (and any text after it
+// that contains no further '<') that never received its closing </action>.
+// Happens when the LLM gets truncated by MaxTokens mid-tag, leaving fragments
+// like `<action>drop:crafting_table</` in the reply.
+var unclosedActionRegex = regexp.MustCompile(`<action>[^<]*$`)
+
 // Parse extracts clean text and actions from the AI's reply.
 func Parse(reply string) ParsedReply {
 	var actions []Action
@@ -46,6 +52,8 @@ func Parse(reply string) ParsedReply {
 
 	// Clean up the reply text by removing all <action>...</action> tags
 	cleanReply := actionRegex.ReplaceAllString(reply, "")
+	// Strip any trailing unclosed <action>... fragment (LLM token-truncation).
+	cleanReply = unclosedActionRegex.ReplaceAllString(cleanReply, "")
 	cleanReply = strings.TrimSpace(cleanReply)
 
 	// Clean up any extra whitespace or newlines

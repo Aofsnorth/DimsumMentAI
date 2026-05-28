@@ -23,9 +23,15 @@ skin:
 # --- AI & LLM Settings ---
 ai:
   provider: "nvidia" # "nvidia" or "none"
-  model: "openai/gpt-oss-120b"
+  model: "openai/gpt-oss-20b"
   api_key: "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" # Leave empty to load from NVIDIA_API_KEY environment variable
   main_player: "OnyxStygian" # Primary player/owner username
   respond_only_to_linked_player: false
   respond_only_when_tagged: false # true = only respond when tagged/named in chat (e.g. Luna or @Luna)
   custom_personality: "" # Custom LLM personality prompt override (leave empty to use default)
+
+# --- Chat Throttle Settings ---
+chat:
+  duplicate_window_sec: 3 # Same player + same message within N seconds is dropped
+  rate_limit_window_sec: 10 # Window for global flood protection
+  max_messages_per_window: 100 # Max messages handled across all players in rate window

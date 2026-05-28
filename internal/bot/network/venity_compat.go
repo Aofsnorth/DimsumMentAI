@@ -8,6 +8,7 @@ import (
 	"bedrock-ai/internal/bot"
 	"bedrock-ai/internal/bot/network/world"
 	"bedrock-ai/internal/debuglog"
+	"github.com/sandertv/gophertunnel/minecraft/protocol"
 	"github.com/sandertv/gophertunnel/minecraft/protocol/packet"
 )
 
@@ -64,13 +65,35 @@ func sendVenityLoadedHandshake(b *bot.Bot, chunkCount uint64) {
 	})
 	_ = b.Conn.Flush()
 
+	// Mark tick as synced so PlayerAuthInput starts sending ClientAckServerData.
+	// Venity uses RewindMovement but never sends CorrectPlayerMovePrediction,
+	// so syncServerTick() is never called and TickSynced stays false.
+	// Without TickSynced, clientAck is never set and the server rejects movement.
+	b.Mu.Lock()
+	b.TickSynced = true
+	b.Mu.Unlock()
+
+	// Send initial ClientMovementPredictionSync so the server knows the client's
+	// movement model (bounding box, speed) before accepting PlayerAuthInput.
+	if b.RewindMovement {
+		b.Conn.WritePacket(&packet.ClientMovementPredictionSync{
+			ActorFlags:            protocol.NewBitset(protocol.EntityDataFlagCount),
+			EntityUniqueID:        b.Conn.GameData().EntityUniqueID,
+			BoundingBoxWidth:      0.6,
+			BoundingBoxHeight:     1.8,
+			MovementSpeed:         0.1,
+		})
+	}
+
 	b.Logger.Info("venity compat: sent post-chunk-load handshake",
 		"chunks_seen", chunkCount,
 	)
 	// #region agent log
 	debuglog.Log("L", "venity_compat.go:handshake", "venity post-load handshake sent", map[string]any{
-		"chunkCount": chunkCount,
-		"runId":      "venity-fix",
+		"chunkCount":  chunkCount,
+		"tickSynced":  true,
+		"rewindMovement": b.RewindMovement,
+		"runId":       "venity-fix",
 	})
 	// #endregion
 }

@@ -7,6 +7,7 @@ type Config struct {
 	Bot    BotConfig    `yaml:"bot"`
 	Skin   SkinConfig   `yaml:"skin"`
 	AI     AIConfig     `yaml:"ai"`
+	Chat   ChatConfig   `yaml:"chat"`
 }
 
 type ServerConfig struct {
@@ -40,4 +41,10 @@ type AIConfig struct {
 	RespondOnlyToLinkedPlayer bool   `yaml:"respond_only_to_linked_player"`
 	RespondOnlyWhenTagged     bool   `yaml:"respond_only_when_tagged"`
 	CustomPersonality         string `yaml:"custom_personality"`
+}
+
+type ChatConfig struct {
+	DuplicateWindowSec   int `yaml:"duplicate_window_sec"`
+	RateLimitWindowSec   int `yaml:"rate_limit_window_sec"`
+	MaxMessagesPerWindow int `yaml:"max_messages_per_window"`
 }

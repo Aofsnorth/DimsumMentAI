@@ -39,6 +39,15 @@ func applyDefaults(cfg *Config) {
 	if cfg.Bot.StatePath == "" {
 		cfg.Bot.StatePath = "data/bot_state.json"
 	}
+	if cfg.Chat.DuplicateWindowSec <= 0 {
+		cfg.Chat.DuplicateWindowSec = 3
+	}
+	if cfg.Chat.RateLimitWindowSec <= 0 {
+		cfg.Chat.RateLimitWindowSec = 10
+	}
+	if cfg.Chat.MaxMessagesPerWindow <= 0 {
+		cfg.Chat.MaxMessagesPerWindow = 100
+	}
 }
 
 func validate(cfg *Config) error {

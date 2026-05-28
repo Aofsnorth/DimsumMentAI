@@ -9,6 +9,7 @@ import (
 	"os/signal"
 	"reflect"
 	"syscall"
+	"time"
 
 	"bedrock-ai/internal/ai"
 	"bedrock-ai/internal/bot"
@@ -117,7 +118,11 @@ func main() {
 		if cfg.AI.CustomPersonality != "" {
 			aiClient.SetPersona(cfg.AI.CustomPersonality)
 		}
-		throttler = ai.DefaultThrottler()
+		throttler = ai.NewMessageThrottler(
+			time.Duration(cfg.Chat.DuplicateWindowSec)*time.Second,
+			time.Duration(cfg.Chat.RateLimitWindowSec)*time.Second,
+			cfg.Chat.MaxMessagesPerWindow,
+		)
 	}
 
 	// --- Dependency Injection Registration ---

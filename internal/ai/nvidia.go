@@ -125,7 +125,7 @@ func (nc *NvidiaClient) Ask(user, systemPrompt, message string) (string, error) 
 		Model:       nc.model,
 		Messages:    messages,
 		Temperature: 0.7,
-		MaxTokens:   256,
+		MaxTokens:   512,
 	}
 
 	bodyBytes, err = json.Marshal(reqBody)
@@ -134,7 +134,8 @@ func (nc *NvidiaClient) Ask(user, systemPrompt, message string) (string, error) 
 	}
 
 	url := "https://integrate.api.nvidia.com/v1/chat/completions"
-	var responseBody []byte
+	var completionResp ChatCompletionResponse
+	var lastEmpty bool
 	maxRetries := 4
 
 	for attempt := 0; attempt < maxRetries; attempt++ {
@@ -156,9 +157,8 @@ func (nc *NvidiaClient) Ask(user, systemPrompt, message string) (string, error) 
 			continue
 		}
 
-		defer resp.Body.Close()
-
 		if resp.StatusCode == http.StatusTooManyRequests { // HTTP 429
+			resp.Body.Close()
 			if attempt == maxRetries-1 {
 				return "", fmt.Errorf("HTTP 429 rate limit exceeded after %d retries", maxRetries)
 			}
@@ -167,7 +167,8 @@ func (nc *NvidiaClient) Ask(user, systemPrompt, message string) (string, error) 
 			continue
 		}
 
-		responseBody, err = io.ReadAll(resp.Body)
+		responseBody, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
 		if err != nil {
 			return "", fmt.Errorf("read response body: %w", err)
 		}
@@ -176,16 +177,26 @@ func (nc *NvidiaClient) Ask(user, systemPrompt, message string) (string, error) 
 			return "", fmt.Errorf("HTTP %d from NVIDIA API: %s", resp.StatusCode, string(responseBody))
 		}
 
+		completionResp = ChatCompletionResponse{}
+		if err := json.Unmarshal(responseBody, &completionResp); err != nil {
+			return "", fmt.Errorf("unmarshal response: %w", err)
+		}
+
+		if len(completionResp.Choices) == 0 || completionResp.Choices[0].Message.Content == "" {
+			lastEmpty = true
+			if attempt == maxRetries-1 {
+				break
+			}
+			// Short backoff before retrying on empty completion.
+			time.Sleep(500 * time.Millisecond)
+			continue
+		}
+
+		lastEmpty = false
 		break
 	}
 
-	// 4. Parse response Choices
-	var completionResp ChatCompletionResponse
-	if err := json.Unmarshal(responseBody, &completionResp); err != nil {
-		return "", fmt.Errorf("unmarshal response: %w", err)
-	}
-
-	if len(completionResp.Choices) == 0 || completionResp.Choices[0].Message.Content == "" {
+	if lastEmpty {
 		return "", fmt.Errorf("empty choices from NVIDIA API response")
 	}
 
