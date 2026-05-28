@@ -120,13 +120,31 @@ func NavigateToBlock(b *bot.Bot, x, y, z int32, tolerance float32) bool {
 		Y: int32(math.Floor(float64(b.GetCoords().Y() + 0.1))),
 		Z: int32(math.Floor(float64(b.GetCoords().Z()))),
 	}
+
+	// Quick win: if we're already within tolerance, no walking needed.
+	if pos := b.GetCoords(); float32(math.Sqrt(float64(
+		(pos.X()-block.X())*(pos.X()-block.X())+
+			(pos.Y()-block.Y())*(pos.Y()-block.Y())+
+			(pos.Z()-block.Z())*(pos.Z()-block.Z())))) <= tolerance {
+		return true
+	}
+
 	if standTarget, ok := nearestStandableNode(b, start, pathfinder.Node{X: x, Y: y, Z: z}, 3); ok {
+		// Reject "snap to current position" — the standable picker found OUR
+		// current tile within the search radius, meaning no actual walk is
+		// needed but we're still outside the caller's tolerance. Walking to
+		// our own tile would just spin the wait loop for 5s.
+		if standTarget.X == start.X && standTarget.Y == start.Y && standTarget.Z == start.Z {
+			return false
+		}
 		target = mgl32.Vec3{float32(standTarget.X) + 0.5, float32(standTarget.Y), float32(standTarget.Z) + 0.5}
 	}
 	b.WalkTo(target)
 
-	for i := 0; i < 25; i++ {
-		time.Sleep(200 * time.Millisecond)
+	// Tight wait loop: 15 × 100ms = 1.5s max. Anything longer means the bot
+	// isn't actually making progress; let the caller move on.
+	for i := 0; i < 15; i++ {
+		time.Sleep(100 * time.Millisecond)
 		b.Mu.Lock()
 		curPos := b.Pos
 		mState := b.MovementState

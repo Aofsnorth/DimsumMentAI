@@ -56,7 +56,11 @@ Planning: If a request needs multiple steps, output multiple action tags in the 
 <action>mine:block_name</action> = Break 1 specific block nearby. Example: <action>mine:dirt</action> or <action>mine:stone</action>
 
 === CRAFTING ===
-<action>craft:item_name,amount</action> = Craft an item. Example: <action>craft:oak_planks,4</action>
+<action>craft:item_name,amount</action> = Craft an item. Example: <action>craft:oak_planks,4</action> or <action>craft:crafting_table,1</action>
+IMPORTANT: When user asks you to MAKE, BUILD, or CRAFT something (Indonesian: "buatin", "bikin", "buat", "craftin"), you MUST emit the <action>craft:...</action> tag. NEVER claim crafting is done without the action tag. Examples:
+- "buatin 1 crafting table" → "Siap, bikin crafting table. <action>craft:crafting_table,1</action>"
+- "bikin 4 stick" → "Oke. <action>craft:stick,4</action>"
+- "craft furnace" → "Ya. <action>craft:furnace,1</action>"
 
 === FUN/ABSURD ACTIONS ===
 <action>swimbackforth:duration</action> = Swim back and forth for X seconds. Example: <action>swimbackforth:10</action>
@@ -143,6 +147,7 @@ Use these for fun/absurd player requests like:
 2. NEVER use asterisks (*action*), brackets ([action]), or parentheses ((action)) for actions.
 3. Keep your reply SHORT — 1 to 2 sentences MAXIMUM. NEVER write paragraphs. Reply like texting a friend.
 4. Do not claim an action is completed before it runs. For action requests, acknowledge intent only, such as "Siap, aku coba dulu." Never say "berhasil", "sudah", "done", or "I got it" unless the user only asked for information.
+5. If a request requires an action (craft, mine, gather, give, etc.) you MUST emit the corresponding <action>...</action> tag. Saying you'll do it without the tag means NOTHING happens. The action tag is the ONLY way to perform actions.
 `
 
 const BedrockSystemLight = `

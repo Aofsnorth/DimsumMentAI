@@ -25,18 +25,34 @@ func NewLooter(rg *ResourceGatherer, logger *slog.Logger) *Looter {
 
 // CollectAllDrops sweeps nearby item drops and navigates to them
 func (l *Looter) CollectAllDrops(ctx context.Context, maxDist float32) int {
-	return l.collectDrops(ctx, maxDist, "")
+	return l.collectDrops(ctx, maxDist, "", -1, 4500*time.Millisecond)
 }
 
 func (l *Looter) CollectMatchingDrops(ctx context.Context, maxDist float32, itemName string) int {
-	return l.collectDrops(ctx, maxDist, itemName)
+	return l.collectDrops(ctx, maxDist, itemName, -1, 4500*time.Millisecond)
 }
 
-func (l *Looter) collectDrops(ctx context.Context, maxDist float32, itemName string) int {
+// CollectMatchingDropsUntil sweeps for matching drops, exiting as soon as the
+// bot's inventory count for itemName rises above beforeCount OR timeout elapses.
+// Used by the mining loop for program-based fast pickup without waiting for
+// server confirmation.
+func (l *Looter) CollectMatchingDropsUntil(ctx context.Context, maxDist float32, itemName string, beforeCount int, timeout time.Duration) int {
+	return l.collectDrops(ctx, maxDist, itemName, beforeCount, timeout)
+}
+
+func (l *Looter) collectDrops(ctx context.Context, maxDist float32, itemName string, beforeCount int, timeout time.Duration) int {
 	collected := 0
 	l.logger.Info("Starting item sweep", "max_distance", maxDist, "item", itemName)
-	deadline := time.Now().Add(4500 * time.Millisecond)
+	deadline := time.Now().Add(timeout)
 	attempted := make(map[uint64]bool)
+
+	pollInv := beforeCount >= 0 && itemName != ""
+
+	// Tight early-exit check: if inventory has already risen (server-side
+	// pickup beat us to the sweep), bail immediately.
+	if pollInv && l.currentItemCount(itemName) > beforeCount {
+		return 0
+	}
 
 	for {
 		select {
@@ -45,13 +61,17 @@ func (l *Looter) collectDrops(ctx context.Context, maxDist float32, itemName str
 		default:
 		}
 
+		if pollInv && l.currentItemCount(itemName) > beforeCount {
+			return collected
+		}
+
 		closestItem := l.closestDrop(maxDist, itemName, attempted)
 
 		if closestItem == nil {
 			if time.Now().After(deadline) {
 				break
 			}
-			if !sleepContext(ctx, 100*time.Millisecond) {
+			if !sleepContext(ctx, 80*time.Millisecond) {
 				return collected
 			}
 			continue
@@ -59,7 +79,11 @@ func (l *Looter) collectDrops(ctx context.Context, maxDist float32, itemName str
 
 		l.logger.Info("Looter: heading to item drop", "id", closestItem.ID, "pos", closestItem.Position)
 		l.rg.bot.LookAt(closestItem.Position)
-		if !sleepContext(ctx, 100*time.Millisecond) {
+		if !sleepContext(ctx, 80*time.Millisecond) {
+			return collected
+		}
+
+		if pollInv && l.currentItemCount(itemName) > beforeCount {
 			return collected
 		}
 
@@ -74,8 +98,7 @@ func (l *Looter) collectDrops(ctx context.Context, maxDist float32, itemName str
 		if reached {
 			attempted[closestItem.ID] = true
 			collected++
-			deadline = time.Now().Add(700 * time.Millisecond)
-			if !sleepContext(ctx, 650*time.Millisecond) {
+			if pollInv && l.currentItemCount(itemName) > beforeCount {
 				return collected
 			}
 		} else {
@@ -85,6 +108,11 @@ func (l *Looter) collectDrops(ctx context.Context, maxDist float32, itemName str
 
 	l.rg.bot.StopMovement()
 	return collected
+}
+
+// currentItemCount counts items in the bot's inventory matching itemName.
+func (l *Looter) currentItemCount(itemName string) int {
+	return inventoryCountMatching(l.rg.bot.GetInventorySlots(), l.rg.bot.GetItemNames(), itemName)
 }
 
 func (l *Looter) closestDrop(maxDist float32, itemName string, attempted map[uint64]bool) *entity.Info {
