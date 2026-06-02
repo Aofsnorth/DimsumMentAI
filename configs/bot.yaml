@@ -21,11 +21,18 @@ skin:
   arm_size: "slim" # "slim" (Alex) or "wide" (Steve)
 
 # --- AI & LLM Settings ---
+# Supported providers (all OpenAI-compatible chat-completion format):
+#   - nvidia              → uses https://integrate.api.nvidia.com (env: NVIDIA_API_KEY)
+#   - minimax             → uses https://api.minimax.io/v1 (env: MINIMAX_API_KEY)
+#   - opengateway         → requires base_url (env: OPENAI_API_KEY)
+#   - openai_compatible   → generic; requires base_url (env: OPENAI_API_KEY)
+#   - none                → disable AI
 ai:
-  provider: "nvidia" # "nvidia" or "none"
-  model: "openai/gpt-oss-20b"
-  api_key: "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" # Leave empty to load from NVIDIA_API_KEY environment variable
-  main_player: "OnyxStygian" # Primary player/owner username
+  provider: "nvidia"
+  model: "meta/llama-4-maverick-17b-128e-instruct"
+  api_key: "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"
+  base_url: "" # leave empty to use provider default. Required for opengateway/openai_compatible.
+  main_player: "OnyxStygian"
   respond_only_to_linked_player: false
   respond_only_when_tagged: false # true = only respond when tagged/named in chat (e.g. Luna or @Luna)
   custom_personality: "" # Custom LLM personality prompt override (leave empty to use default)

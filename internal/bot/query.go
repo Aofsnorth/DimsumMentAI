@@ -201,6 +201,22 @@ func (b *Bot) SetLookAngles(yaw, pitch float32) {
 	b.Mu.Unlock()
 }
 
+// OverrideLookPitch pins the bot's pitch to a specific value, bypassing the
+// idle look loop's eye-corrected recomputation. Used to angle a toss upward
+// so the dropped item arcs further than its tiny base velocity allows.
+// Pair with a brief sleep (200-300ms) so the movement tick can interpolate
+// to the new pitch before the drop transaction is sent.
+func (b *Bot) OverrideLookPitch(pitch float32) {
+	b.Mu.Lock()
+	defer b.Mu.Unlock()
+	b.Pitch = pitch
+	b.IdleLookTargetPitch = pitch
+	// Use a sentinel that applyIdleLook will treat as "use the static
+	// IdleLookTargetYaw/Pitch as-is" rather than recomputing from block pos.
+	b.IdleLookTargetType = "static"
+	b.NextIdleLookChange = time.Now().Add(2 * time.Second)
+}
+
 // WaitForYawSync polls until the movement tick has actually sent a
 // PlayerAuthInput carrying the target yaw to the server, or the timeout
 // elapses. Returns true when sync confirmed. Used before drop transactions

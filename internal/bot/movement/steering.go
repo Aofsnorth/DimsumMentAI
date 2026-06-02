@@ -8,6 +8,7 @@ import (
 
 	"bedrock-ai/internal/bot/pathfinder"
 	"github.com/go-gl/mathgl/mgl32"
+	"github.com/sandertv/gophertunnel/minecraft/protocol"
 )
 
 func (tc *TickContext) performActiveSteering() {
@@ -148,6 +149,21 @@ func (tc *TickContext) performActiveSteering() {
 					tc.B.TicksStuck = 0
 					tc.B.ConsecutiveStuckCount++
 					tc.B.Logger.Debug("Stuck detected, recalculating path", "consecutive_count", tc.B.ConsecutiveStuckCount, "hasPath", tc.HasPath)
+
+					// On the SECOND consecutive stuck, try breaking whatever is
+					// in front of the bot at head height. First stuck just
+					// retries pathing; if a wall really is blocking us we'll
+					// arrive here again and break through.
+					if tc.B.ConsecutiveStuckCount >= 2 && tc.HasPath && tc.B.PathIndex < len(tc.B.CurrentPath) {
+						node := tc.B.CurrentPath[tc.B.PathIndex]
+						obs := protocol.BlockPos{node.X, node.Y, node.Z}
+						tc.B.Mu.Unlock()
+						tc.B.BreakObstacleAt(obs)
+						// Also try the block above (head height) in case the
+						// floor block is fine but a ceiling overhang is.
+						tc.B.BreakObstacleAt(protocol.BlockPos{node.X, node.Y + 1, node.Z})
+						tc.B.Mu.Lock()
+					}
 
 					if tc.HasPath && tc.B.PathIndex < len(tc.B.CurrentPath) {
 						node := tc.B.CurrentPath[tc.B.PathIndex]

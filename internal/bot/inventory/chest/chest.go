@@ -37,6 +37,7 @@ type Bot interface {
 	FindPlayer(username string) (uint64, mgl32.Vec3, bool)
 	SetLookAngles(yaw, pitch float32)
 	WaitForYawSync(targetYaw float32, timeout time.Duration) bool
+	OverrideLookPitch(pitch float32)
 }
 
 type ChestData struct {

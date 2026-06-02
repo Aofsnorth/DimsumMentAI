@@ -182,6 +182,19 @@ func HandleIncomingChat(ctx context.Context, b *bot.Bot, evt event.ChatEvent) {
 			b.Logger.Info("chat inferred movement action from message", slog.Any("steps", steps))
 		}
 	}
+	// Intent fallback: LLM said "Siap/Oke/Bentar..." but forgot to emit an
+	// <action> tag. Synthesize one from the user's request when their verb
+	// clearly maps to a known action.
+	if len(steps) == 0 && isAffirmativeReply(parsed.CleanReply) {
+		steps = inferActionIntent(msg)
+		if len(steps) > 0 {
+			b.Logger.Info("chat inferred action from intent (LLM forgot tag)",
+				slog.String("user_msg", msg),
+				slog.String("llm_reply", parsed.CleanReply),
+				slog.Any("steps", steps),
+			)
+		}
+	}
 	action.ExecutePlan(b, steps, evt.SourceName)
 }
 

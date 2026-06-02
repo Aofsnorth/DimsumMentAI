@@ -58,7 +58,10 @@ func LookAt(b *bot.Bot, pos mgl32.Vec3) {
 	defer b.Mu.Unlock()
 
 	dx := pos.X() - b.Pos.X()
-	dy := pos.Y() - b.Pos.Y()
+	// Use eye-height (feet + 1.62) for pitch so the bot actually looks at
+	// the target point rather than below it. Matches setLookTarget in
+	// control.go which the idle look loop uses for interpolation.
+	dy := pos.Y() - (b.Pos.Y() + 1.62)
 	dz := pos.Z() - b.Pos.Z()
 
 	distH := math.Sqrt(float64(dx*dx + dz*dz))

@@ -75,6 +75,15 @@ func (tc *TreeChopper) chopTree(ctx context.Context, basePos protocol.BlockPos, 
 
 	tc.logger.Debug("Collected log blocks via BFS", "count", len(logBlocks))
 
+	// Bottom-up chop order feels natural — players don't start mid-tree.
+	for i := 0; i < len(logBlocks); i++ {
+		for j := i + 1; j < len(logBlocks); j++ {
+			if logBlocks[j].Y() < logBlocks[i].Y() {
+				logBlocks[i], logBlocks[j] = logBlocks[j], logBlocks[i]
+			}
+		}
+	}
+
 	tc.equipBestAxe()
 
 	for _, pos := range logBlocks {
@@ -95,14 +104,9 @@ func (tc *TreeChopper) chopTree(ctx context.Context, basePos protocol.BlockPos, 
 
 		targetCenter := mgl32.Vec3{float32(pos.X()) + 0.5, float32(pos.Y()) + 0.5, float32(pos.Z()) + 0.5}
 		bot.LookAt(targetCenter)
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(60 * time.Millisecond)
 
 		tc.logger.Debug("Chopping log block", "pos", pos)
-
-		_ = bot.WritePacket(&packet.Animate{
-			ActionType:      packet.AnimateActionSwingArm,
-			EntityRuntimeID: bot.GetEntityRuntimeID(),
-		})
 
 		_ = bot.WritePacket(&packet.PlayerAction{
 			EntityRuntimeID: bot.GetEntityRuntimeID(),
@@ -111,24 +115,23 @@ func (tc *TreeChopper) chopTree(ctx context.Context, basePos protocol.BlockPos, 
 			BlockFace:       1,
 		})
 
-		breakDeadline := time.Now().Add(1200 * time.Millisecond)
-		for time.Now().Before(breakDeadline) {
+		// Per-log break: keep swinging until the hardness-based break time
+		// has actually elapsed so the server accepts the destroy packet.
+		breakTime := blockBreakDuration("oak_log", tc.equippedAxeName())
+		elapsed := time.Duration(0)
+		for elapsed < breakTime {
 			_ = bot.WritePacket(&packet.Animate{
 				ActionType:      packet.AnimateActionSwingArm,
 				EntityRuntimeID: bot.GetEntityRuntimeID(),
 			})
-			_ = bot.WritePacket(&packet.PlayerAction{
-				EntityRuntimeID: bot.GetEntityRuntimeID(),
-				ActionType:      protocol.PlayerActionCrackBreak,
-				BlockPosition:   pos,
-				BlockFace:       1,
-			})
-			time.Sleep(250 * time.Millisecond)
+			bot.LookAt(targetCenter)
+			time.Sleep(100 * time.Millisecond)
+			elapsed += 100 * time.Millisecond
 		}
 
 		_ = bot.WritePacket(&packet.PlayerAction{
 			EntityRuntimeID: bot.GetEntityRuntimeID(),
-			ActionType:      protocol.PlayerActionStopBreak,
+			ActionType:      protocol.PlayerActionCrackBreak,
 			BlockPosition:   pos,
 			BlockFace:       1,
 		})
@@ -141,7 +144,10 @@ func (tc *TreeChopper) chopTree(ctx context.Context, basePos protocol.BlockPos, 
 
 		world.SetSolid(pos.X(), pos.Y(), pos.Z(), false)
 
-		time.Sleep(100 * time.Millisecond)
+		// Minimal gap so the swing animation doesn't visually overlap the
+		// destroy of the previous log. Anything longer just makes the bot
+		// feel sluggish.
+		time.Sleep(20 * time.Millisecond)
 	}
 
 	tc.rg.scaffold.DescendFromTower(ctx, float32(basePos.Y()))

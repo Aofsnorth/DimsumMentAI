@@ -71,13 +71,35 @@ func validate(cfg *Config) error {
 	default:
 		return fmt.Errorf("bot.log_level must be one of: debug, info, warn, error")
 	}
-	if cfg.AI.Provider == "nvidia" {
+	switch cfg.AI.Provider {
+	case "", "none":
+		// AI disabled
+	case "nvidia":
 		if cfg.AI.ApiKey == "" && os.Getenv("NVIDIA_API_KEY") == "" {
 			return fmt.Errorf("ai.api_key or NVIDIA_API_KEY environment variable is required when provider is 'nvidia'")
 		}
 		if cfg.AI.Model == "" {
 			return fmt.Errorf("ai.model is required when provider is 'nvidia'")
 		}
+	case "minimax":
+		if cfg.AI.ApiKey == "" && os.Getenv("MINIMAX_API_KEY") == "" {
+			return fmt.Errorf("ai.api_key or MINIMAX_API_KEY environment variable is required when provider is 'minimax'")
+		}
+		if cfg.AI.Model == "" {
+			return fmt.Errorf("ai.model is required when provider is 'minimax'")
+		}
+	case "opengateway", "openai_compatible":
+		if cfg.AI.ApiKey == "" && os.Getenv("OPENAI_API_KEY") == "" {
+			return fmt.Errorf("ai.api_key or OPENAI_API_KEY environment variable is required when provider is '%s'", cfg.AI.Provider)
+		}
+		if cfg.AI.BaseURL == "" {
+			return fmt.Errorf("ai.base_url is required when provider is '%s'", cfg.AI.Provider)
+		}
+		if cfg.AI.Model == "" {
+			return fmt.Errorf("ai.model is required when provider is '%s'", cfg.AI.Provider)
+		}
+	default:
+		return fmt.Errorf("unknown ai.provider %q (expected: nvidia, minimax, opengateway, openai_compatible, none)", cfg.AI.Provider)
 	}
 	return nil
 }

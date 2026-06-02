@@ -34,28 +34,48 @@ func (ic *Container) GiveItem(ctx context.Context, itemName string, playerName s
 			ic.logger.Warn("GiveItem: could not reach player", "name", playerName)
 			return false
 		}
-		ic.bot.StopMovement()
 	}
 
-	ic.bot.LookAt(playerPos.Add(mgl32.Vec3{0, 1.6, 0}))
+	// Force-stop any residual walk/follow state. Without this the look loop
+	// keeps interpolating yaw toward path direction and the drop flies away
+	// from the player.
+	ic.bot.StopMovement()
 
-	targetHead := playerPos.Add(mgl32.Vec3{0, 1.6, 0})
-	dx := targetHead.X() - (botPos.X())
-	dy := targetHead.Y() - (botPos.Y() + 1.62)
-	dz := targetHead.Z() - (botPos.Z())
-	distH := math.Sqrt(float64(dx*dx + dz*dz))
+	// Re-fetch position after stop (we may have stepped during nav).
+	botPos = ic.bot.GetCoords()
+	targetHead := playerPos.Add(mgl32.Vec3{0, 1.62, 0})
+
+	// LookAt pins IdleLookTargetType="block" with target=targetHead for 3s, so
+	// the movement loop will continuously interpolate yaw/pitch toward this
+	// point (eye-corrected via setLookTarget in control.go) until the drop
+	// transaction lands.
+	ic.bot.LookAt(targetHead)
+
+	// Compute the same yaw the look loop will converge to, then wait for the
+	// next PlayerAuthInput tick to actually transmit it. Bedrock drop direction
+	// comes from the last sent PlayerAuthInput.Yaw.
+	dx := targetHead.X() - botPos.X()
+	dz := targetHead.Z() - botPos.Z()
 	yaw := float32(math.Atan2(float64(dz), float64(dx))*180/math.Pi) - 90
 	for yaw < 0 {
 		yaw += 360
 	}
-	pitch := float32(-math.Atan2(float64(dy), distH) * 180 / math.Pi)
-	ic.bot.SetLookAngles(yaw, pitch)
+	// 800ms = up to 16 ticks of interpolation, enough to swing the bot through
+	// a 180° rotation if it was facing away from the player.
+	synced := ic.bot.WaitForYawSync(yaw, 800*time.Millisecond)
 
-	// Block until the movement tick actually transmits this yaw to the server.
-	// Dropped items use the player's last-known facing on the server side, so
-	// the drop transaction must come AFTER the PlayerAuthInput with the new
-	// yaw — otherwise the item flies in whatever direction was sent last tick.
-	ic.bot.WaitForYawSync(yaw, 250*time.Millisecond)
+	// Aim slightly upward so the toss arcs further. Bedrock's base drop
+	// velocity is tiny (~0.3 m/s forward); without an upward pitch, the item
+	// lands inside the bot's own 1-block pickup radius and gets re-collected.
+	ic.bot.OverrideLookPitch(-22)
+	time.Sleep(250 * time.Millisecond)
+	ic.logger.Info("dropping item",
+		"target_yaw", yaw,
+		"target_player", playerName,
+		"yaw_synced", synced,
+		"bot_pos", botPos,
+		"player_pos", playerPos,
+	)
 
 	inv := ic.bot.GetInventorySlots()
 	names := ic.bot.GetItemNames()
@@ -83,11 +103,27 @@ func (ic *Container) GiveItem(ctx context.Context, itemName string, playerName s
 	}
 
 	err := ic.bot.DropItem(names[inv[targetSlot].NetworkID], int(count))
-	if err == nil {
-		ic.logger.Info("Gave item successfully", "item", itemName, "count", count, "to", playerName)
-		return true
+	if err != nil {
+		return false
 	}
-	return false
+
+	ic.logger.Info("Gave item successfully", "item", itemName, "count", count, "to", playerName)
+
+	// Step back a bit so the dropped item ends up outside the bot's pickup
+	// radius. The look loop will swing yaw toward the new walk direction, but
+	// by now the drop transaction has already left.
+	yawWorldRad := float64(yaw+90) * math.Pi / 180
+	forwardX := float32(math.Cos(yawWorldRad))
+	forwardZ := float32(math.Sin(yawWorldRad))
+	backPos := mgl32.Vec3{
+		botPos.X() - forwardX*1.8,
+		botPos.Y(),
+		botPos.Z() - forwardZ*1.8,
+	}
+	ic.bot.NavigateTo(backPos)
+	time.Sleep(700 * time.Millisecond)
+	ic.bot.StopMovement()
+	return true
 }
 
 func (ic *Container) StoreItem(ctx context.Context, itemName string, count int32) bool {

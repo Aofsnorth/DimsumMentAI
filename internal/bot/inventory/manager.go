@@ -8,6 +8,7 @@ import (
 
 	"bedrock-ai/internal/bot/entity"
 	"bedrock-ai/internal/bot/inventory/chest"
+	"bedrock-ai/internal/bot/inventory/crafting"
 	"bedrock-ai/internal/bot/inventory/furnace"
 	"github.com/go-gl/mathgl/mgl32"
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
@@ -31,17 +32,23 @@ type Bot interface {
 	SendChat(msg string)
 	GetEntityRuntimeID() uint64
 	GetLocalWorldModel() entity.WorldModel
+	GetBlockName(x, y, z int32) (string, bool)
 	DropItem(name string, count int) error
 	FindPlayer(username string) (uint64, mgl32.Vec3, bool)
 	SetLookAngles(yaw, pitch float32)
 	WaitForYawSync(targetYaw float32, timeout time.Duration) bool
+	OverrideLookPitch(pitch float32)
+	FindItemSlotByName(name string) (uint32, bool)
+	CraftItem(recipeNetID uint32, count int) error
+	GetRecipes() map[string]uint32
 }
 
 type InventoryManager struct {
-	bot     Bot
-	logger  *slog.Logger
-	chest   *chest.Container
-	furnace *furnace.Manager
+	bot      Bot
+	logger   *slog.Logger
+	chest    *chest.Container
+	furnace  *furnace.Manager
+	crafting *crafting.Manager
 }
 
 func NewInventoryManager(bot Bot, logger *slog.Logger) *InventoryManager {
@@ -51,6 +58,7 @@ func NewInventoryManager(bot Bot, logger *slog.Logger) *InventoryManager {
 	}
 	im.chest = chest.NewContainer(bot, logger)
 	im.furnace = furnace.NewManager(bot, logger)
+	im.crafting = crafting.NewManager(bot, logger)
 	return im
 }
 
@@ -60,6 +68,10 @@ func (im *InventoryManager) Chest() *chest.Container {
 
 func (im *InventoryManager) Furnace() *furnace.Manager {
 	return im.furnace
+}
+
+func (im *InventoryManager) Crafting() *crafting.Manager {
+	return im.crafting
 }
 
 func (im *InventoryManager) EquipItem(name string) error {

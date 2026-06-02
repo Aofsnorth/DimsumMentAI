@@ -56,23 +56,56 @@ func handleCraft(b *bot.Bot, param string) {
 		_, _ = fmt.Sscanf(parts[1], "%d", &count)
 	}
 
-	b.Mu.Lock()
-	recipeID, ok := b.Recipes[itemName]
-	if !ok {
-		recipeID, ok = b.Recipes["minecraft:"+itemName]
-	}
-	b.Mu.Unlock()
+	go func() {
+		ctx := context.Background()
 
-	if ok {
-		b.Logger.Debug("Executing craft action", "item", itemName, "recipeID", recipeID, "count", count)
-		_ = b.CraftItem(recipeID, count)
-	} else {
-		b.Logger.Warn("ExecuteAction: recipe not found for item", "item", itemName)
-		var guessed uint32
-		if _, err := fmt.Sscanf(itemName, "%d", &guessed); err == nil && guessed != 0 {
-			_ = b.CraftItem(guessed, count)
+		b.Mu.Lock()
+		recipeID, ok := b.Recipes[itemName]
+		if !ok {
+			recipeID, ok = b.Recipes["minecraft:"+itemName]
 		}
-	}
+		recipe, recipeOK := b.RecipesByNetID[recipeID]
+		b.Mu.Unlock()
+
+		if !ok {
+			b.Logger.Warn("ExecuteAction: recipe not found for item", "item", itemName)
+			b.SendChat("Maaf, aku belum tau resep buat " + itemName + ".")
+			return
+		}
+		if !recipeOK {
+			// Server's CraftingData hasn't populated yet for this network ID;
+			// shouldn't happen in practice but guard anyway.
+			b.Logger.Warn("ExecuteAction: recipe net ID not in RecipesByNetID cache", "item", itemName, "id", recipeID)
+			return
+		}
+
+		// 2×2 inventory recipes (recipe.Block == "") work without a bench.
+		// 3×3 recipes require an open crafting_table window or strict servers
+		// silently drop the StackRequest.
+		if recipe.Block != "" {
+			b.Logger.Debug("Craft requires bench, ensuring crafting_table", "item", itemName, "block", recipe.Block)
+			tablePos, ensured := b.InventoryMgr.Crafting().EnsureCraftingTable(ctx)
+			if !ensured {
+				return // EnsureCraftingTable already messaged the user.
+			}
+			if err := b.InventoryMgr.Crafting().OpenCraftingTable(ctx, tablePos); err != nil {
+				b.Logger.Warn("OpenCraftingTable failed", "err", err)
+				b.SendChat("Aku gagal buka crafting_table.")
+				return
+			}
+			defer b.InventoryMgr.Crafting().CloseWindow()
+		} else {
+			b.Logger.Debug("Inventory recipe (no bench needed)", "item", itemName)
+		}
+
+		b.Logger.Debug("Executing craft action", "item", itemName, "recipeID", recipeID, "count", count)
+		if err := b.CraftItem(recipeID, count); err != nil {
+			b.Logger.Warn("CraftItem failed", "err", err, "item", itemName)
+			b.SendChat("Gagal craft " + itemName + ": " + err.Error())
+			return
+		}
+		b.SendChat(fmt.Sprintf("Selesai craft %d %s!", count, itemName))
+	}()
 }
 
 func handleTake(b *bot.Bot, param, user string) {
@@ -128,6 +161,22 @@ func handleDrop(b *bot.Bot, param string) {
 	}
 }
 
+// isWoodLike reports whether an item name refers to a log/wood block that
+// should be harvested via the tree-committed chopper rather than the
+// per-block scanner. Recognizes vanilla wood variants and Indonesian aliases
+// post-normalization.
+func isWoodLike(itemName string) bool {
+	n := strings.ToLower(itemName)
+	if strings.Contains(n, "log") || strings.Contains(n, "wood") {
+		return true
+	}
+	switch n {
+	case "kayu", "oak", "birch", "spruce", "jungle", "acacia", "dark_oak", "mangrove", "cherry", "crimson_stem", "warped_stem":
+		return true
+	}
+	return false
+}
+
 func normalizeItemName(name string) string {
 	name = strings.ToLower(strings.TrimSpace(name))
 	name = strings.ReplaceAll(name, " ", "_")
@@ -135,10 +184,16 @@ func normalizeItemName(name string) string {
 	switch name {
 	case "craftingtable", "craft_table", "workbench":
 		return "crafting_table"
-	case "wood":
+	case "wood", "kayu", "log", "logs":
 		return "oak_log"
-	case "plank", "planks":
+	case "plank", "planks", "papan":
 		return "oak_planks"
+	case "tanah":
+		return "dirt"
+	case "batu":
+		return "stone"
+	case "pasir":
+		return "sand"
 	}
 	return name
 }

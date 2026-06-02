@@ -23,9 +23,32 @@ var actionRegex = regexp.MustCompile(`(?s)<action>(.*?)</action>`)
 // like `<action>drop:crafting_table</` in the reply.
 var unclosedActionRegex = regexp.MustCompile(`<action>[^<]*$`)
 
+// thinkRegex matches reasoning blocks emitted by chain-of-thought models such
+// as Minimax M2, DeepSeek-R1, etc. These must be stripped before the reply is
+// shown in chat (or fed to action extraction) — otherwise the bot dumps its
+// inner monologue to other players.
+var thinkRegex = regexp.MustCompile(`(?s)<think>.*?</think>`)
+
+// unclosedThinkRegex strips a leading <think>... that was cut by MaxTokens
+// before the closing </think> could be emitted. Also strips a leading
+// .*</think> when the model emitted only the closing tag (rare but happens).
+var unclosedThinkRegex = regexp.MustCompile(`(?s)^\s*<think>.*$`)
+var leadingThinkCloseRegex = regexp.MustCompile(`(?s)^.*?</think>\s*`)
+
 // Parse extracts clean text and actions from the AI's reply.
 func Parse(reply string) ParsedReply {
 	var actions []Action
+
+	// Strip chain-of-thought reasoning blocks first. Some models (Minimax M2,
+	// DeepSeek-R1) prepend their internal reasoning between <think>...</think>
+	// which would otherwise leak into chat or confuse the action extractor.
+	reply = thinkRegex.ReplaceAllString(reply, "")
+	// If the closing </think> survived but the opening tag was lost, drop
+	// everything up to it. Conversely if the opening survived but closing was
+	// truncated by MaxTokens, drop the whole tail.
+	reply = leadingThinkCloseRegex.ReplaceAllString(reply, "")
+	reply = unclosedThinkRegex.ReplaceAllString(reply, "")
+	reply = strings.TrimSpace(reply)
 
 	// Find all <action>...</action> matches
 	matches := actionRegex.FindAllStringSubmatch(reply, -1)

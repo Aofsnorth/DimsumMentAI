@@ -192,7 +192,7 @@ func (bm *BlockMiner) mineSingle(ctx context.Context, step mineStep, blockName s
 	bm.equipBestTool(blockName)
 
 	bot.LookAt(step.Aim)
-	if !sleepContext(ctx, 60*time.Millisecond) {
+	if !sleepContext(ctx, 30*time.Millisecond) {
 		return false
 	}
 
@@ -203,23 +203,10 @@ func (bm *BlockMiner) mineSingle(ctx context.Context, step mineStep, blockName s
 		BlockFace:       step.Face,
 	})
 
-	breakTime := 350 * time.Millisecond
-	lowerName := strings.ToLower(blockName)
-	switch {
-	case strings.Contains(lowerName, "obsidian"):
-		breakTime = 4000 * time.Millisecond
-	case strings.Contains(lowerName, "ore") || strings.Contains(lowerName, "stone") || strings.Contains(lowerName, "cobble") || strings.Contains(lowerName, "deepslate"):
-		breakTime = 1300 * time.Millisecond
-	case strings.Contains(lowerName, "log") || strings.Contains(lowerName, "wood") || strings.Contains(lowerName, "planks"):
-		breakTime = 450 * time.Millisecond
-	case strings.Contains(lowerName, "leaves"):
-		breakTime = 250 * time.Millisecond
-	case strings.Contains(lowerName, "sand") || strings.Contains(lowerName, "gravel") || strings.Contains(lowerName, "dirt") || strings.Contains(lowerName, "grass"):
-		breakTime = 350 * time.Millisecond
-	}
+	breakTime := blockBreakDuration(blockName, bm.equippedToolName())
 
 	elapsed := time.Duration(0)
-	swingInterval := 100 * time.Millisecond
+	swingInterval := 150 * time.Millisecond
 	for elapsed < breakTime {
 		_ = bot.WritePacket(&packet.Animate{
 			ActionType:      packet.AnimateActionSwingArm,

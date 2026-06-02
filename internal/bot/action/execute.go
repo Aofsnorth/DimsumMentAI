@@ -121,7 +121,7 @@ func Execute(b *bot.Bot, label string, param string, user string) {
 			_, _ = fmt.Sscanf(parts[1], "%d", &count)
 		}
 
-		if strings.Contains(itemName, "wood") || strings.Contains(itemName, "log") {
+		if isWoodLike(itemName) {
 			go b.Gatherer.GatherWoodType(context.Background(), itemName, count)
 		} else {
 			go b.Gatherer.GatherBlock(context.Background(), itemName, count)
@@ -137,7 +137,14 @@ func Execute(b *bot.Bot, label string, param string, user string) {
 		if len(parts) >= 2 {
 			_, _ = fmt.Sscanf(parts[1], "%d", &count)
 		}
-		go b.Gatherer.GatherBlock(context.Background(), itemName, count)
+		// Logs/wood should always use the tree-by-tree chopper, never the
+		// per-block scanner — otherwise the bot jumps between adjacent trees
+		// without finishing any.
+		if isWoodLike(itemName) {
+			go b.Gatherer.GatherWoodType(context.Background(), itemName, count)
+		} else {
+			go b.Gatherer.GatherBlock(context.Background(), itemName, count)
+		}
 
 	case "clear", "scan":
 		go func() {

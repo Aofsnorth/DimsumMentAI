@@ -1,0 +1,23 @@
+{
+  "metadata.name": "§4Hymlea（Blood Nun）",
+  "metadata.tips": "§8Bravery is commendable! But that's all for now.\n\n§cFunctional Description:\n§6- Sword skins \n§6- Flight animations\n§6- Two types of face shapes\n§6- Body shape adjustment\n§6- Detachable clothing ",
+  "properties.extra_animation.穿脱鞋子": "shoes",
+  "properties.extra_animation.穿脱衣服": "clothing",
+  "properties.extra_animation.穿脱头巾": "scarf",
+  "properties.extra_animation.穿脱手套": "glove",
+  "properties.extra_animation.穿脱丝袜": "stockings",
+  "properties.extra_animation.穿脱眼罩": "eye mask",
+  "properties.extra_animation.神的孩子": "dance",
+  "properties.extra_animation.祷告": "pray",
+  "properties.extra_animation.祈祷": "prayer",
+  "properties.extra_animation.举灯": "Raise the lamp",
+  "properties.extra_animation.慈悲": "compassion",
+  "properties.extra_animation.立绘poss": "poss",
+  "properties.extra_animation.切换脸型": "face",
+  "files.player.texture.skin": "默认",
+  "metadata.authors.0.name": "§cFrosty Uncle",
+  "metadata.authors.0.role": "§7model",
+  "metadata.authors.0.comment": "Brain burning",
+  "properties.extra_animation_buttons.config.config_forms.0.title": "Model adjustment",
+  "properties.extra_animation_buttons.config.config_forms.0.description": "Adjust the model's body shape"
+}

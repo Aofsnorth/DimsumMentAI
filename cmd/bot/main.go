@@ -109,11 +109,13 @@ func main() {
 	var aiClient *ai.NvidiaClient
 	var throttler *ai.MessageThrottler
 
-	if cfg.AI.Provider == "nvidia" {
-		logger.Info("initializing Nvidia NIM LLM client",
+	if cfg.AI.Provider != "" && cfg.AI.Provider != "none" {
+		logger.Info("initializing LLM client",
+			slog.String("provider", cfg.AI.Provider),
 			slog.String("model", cfg.AI.Model),
+			slog.String("base_url", cfg.AI.BaseURL),
 		)
-		aiClient = ai.NewNvidiaClient(cfg.AI.ApiKey, cfg.AI.Model)
+		aiClient = ai.NewLLMClient(cfg.AI.Provider, cfg.AI.ApiKey, cfg.AI.Model, cfg.AI.BaseURL)
 		aiClient.SetLanguage(cfg.Bot.Language)
 		if cfg.AI.CustomPersonality != "" {
 			aiClient.SetPersona(cfg.AI.CustomPersonality)

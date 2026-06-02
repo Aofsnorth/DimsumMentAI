@@ -23,9 +23,14 @@ type ChatCompletionResponse struct {
 	} `json:"choices"`
 }
 
+// NvidiaClient is a generic OpenAI-compatible chat completion client. The name
+// is retained for backward compatibility; the same struct now also serves
+// Minimax, OpenGateway, and any OpenAI-compatible HTTP endpoint via BaseURL.
 type NvidiaClient struct {
 	apiKey   string
 	model    string
+	baseURL  string
+	provider string
 	client   *http.Client
 	History  *MessageHistory
 	persona  string
@@ -33,17 +38,63 @@ type NvidiaClient struct {
 	language string
 }
 
-func NewNvidiaClient(apiKey, model string) *NvidiaClient {
-	if apiKey == "" {
-		apiKey = os.Getenv("NVIDIA_API_KEY")
+const (
+	endpointNvidia  = "https://integrate.api.nvidia.com/v1/chat/completions"
+	endpointMinimax = "https://api.minimax.io/v1/chat/completions"
+)
+
+// defaultBaseURL returns the canonical endpoint for a known provider. Returns
+// empty string when caller must supply BaseURL (opengateway, openai_compatible).
+func defaultBaseURL(provider string) string {
+	switch provider {
+	case "nvidia":
+		return endpointNvidia
+	case "minimax":
+		return endpointMinimax
 	}
-	if model == "" {
+	return ""
+}
+
+// envVarForProvider returns the env var conventionally used to source the
+// provider's API key.
+func envVarForProvider(provider string) string {
+	switch provider {
+	case "nvidia":
+		return "NVIDIA_API_KEY"
+	case "minimax":
+		return "MINIMAX_API_KEY"
+	}
+	return "OPENAI_API_KEY"
+}
+
+// NewNvidiaClient constructs a client preconfigured for the NVIDIA NIM endpoint.
+// Kept for backward compatibility with existing call sites.
+func NewNvidiaClient(apiKey, model string) *NvidiaClient {
+	return NewLLMClient("nvidia", apiKey, model, "")
+}
+
+// NewLLMClient constructs an OpenAI-compatible chat-completion client for the
+// given provider. baseURL may be empty for known providers (nvidia, minimax);
+// it is required for opengateway / openai_compatible.
+func NewLLMClient(provider, apiKey, model, baseURL string) *NvidiaClient {
+	if provider == "" {
+		provider = "nvidia"
+	}
+	if apiKey == "" {
+		apiKey = os.Getenv(envVarForProvider(provider))
+	}
+	if baseURL == "" {
+		baseURL = defaultBaseURL(provider)
+	}
+	if model == "" && provider == "nvidia" {
 		model = "nvidia/llama-3.3-nemotron-super-49b-v1"
 	}
 
 	return &NvidiaClient{
 		apiKey:   apiKey,
 		model:    model,
+		baseURL:  baseURL,
+		provider: provider,
 		client:   &http.Client{Timeout: 30 * time.Second},
 		History:  NewMessageHistory(20),
 		persona:  PromptCharacter,
@@ -124,7 +175,7 @@ func (nc *NvidiaClient) Ask(user, systemPrompt, message string) (string, error) 
 	reqBody := ChatCompletionRequest{
 		Model:       nc.model,
 		Messages:    messages,
-		Temperature: 0.7,
+		Temperature: 0.4, // lower temp → more reliable <action> tag emission
 		MaxTokens:   512,
 	}
 
@@ -133,7 +184,10 @@ func (nc *NvidiaClient) Ask(user, systemPrompt, message string) (string, error) 
 		return "", fmt.Errorf("marshal request: %w", err)
 	}
 
-	url := "https://integrate.api.nvidia.com/v1/chat/completions"
+	url := nc.baseURL
+	if url == "" {
+		url = endpointNvidia
+	}
 	var completionResp ChatCompletionResponse
 	var lastEmpty bool
 	maxRetries := 4
@@ -174,7 +228,7 @@ func (nc *NvidiaClient) Ask(user, systemPrompt, message string) (string, error) 
 		}
 
 		if resp.StatusCode != http.StatusOK {
-			return "", fmt.Errorf("HTTP %d from NVIDIA API: %s", resp.StatusCode, string(responseBody))
+			return "", fmt.Errorf("HTTP %d from %s API: %s", resp.StatusCode, nc.provider, string(responseBody))
 		}
 
 		completionResp = ChatCompletionResponse{}
@@ -197,7 +251,7 @@ func (nc *NvidiaClient) Ask(user, systemPrompt, message string) (string, error) 
 	}
 
 	if lastEmpty {
-		return "", fmt.Errorf("empty choices from NVIDIA API response")
+		return "", fmt.Errorf("empty choices from %s API response", nc.provider)
 	}
 
 	reply := completionResp.Choices[0].Message.Content

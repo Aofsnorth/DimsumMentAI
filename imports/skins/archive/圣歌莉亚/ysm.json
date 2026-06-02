@@ -1,0 +1,94 @@
+{
+	"spec": 2,
+	"metadata": {
+		"name": "§4圣歌莉亚（血修女）",
+		"tips": "§8勇气可嘉！但也到此为止了。\n\n§c功能描述:\n§6- 剑类皮肤\n§6- 飞行动画\n§6- 两种脸型\n§6- 体型调整\n§6- 服装可脱",
+		"license": {
+			"type": "CC BY-NC-SA 4.0"
+		},
+		"authors": [
+			{
+				"name": "§c寒叔",
+				"role": "§6模型",
+				"avatar": "avatar/hs.png",
+				"contact": {
+					"Afdian": "§6爱发电搜索“烈鸟比百”",
+					"Bilibili": "§6B站搜索“寒叔hs”"
+				},
+				"comment": "§7烧脑ing~"
+			}
+		],
+		"link": {
+			"home": "https://space.bilibili.com/20510758?spm_id_from=333.1007.0.0",
+			"donate": "https://afdian.com/a/Aigoblin?tab=shop"
+		}
+	},
+	"properties": {
+		"height_scale": 0.7,
+		"width_scale": 0.7,
+		"extra_animation": {
+			"穿脱鞋子": "§6穿脱鞋子",
+			"穿脱衣服": "§6穿脱衣服",
+			"穿脱头巾": "§6穿脱头巾",
+			"穿脱手套": "§6穿脱手套",
+			"穿脱丝袜": "§6穿脱丝袜",
+			"穿脱眼罩": "§6穿脱眼罩",
+			"神的孩子": "§6神的孩子",
+			"祷告": "§6祷告",
+			"祈祷": "§6祈祷",
+			"举灯": "§6举灯",
+			"慈悲": "§6慈悲",
+			"立绘poss": "§6立绘poss",
+			"切换脸型": "§6切换脸型",
+			"extra1": "#模型调整"
+		},
+		"free": false,
+		"preview_animation": "gui",
+		"render_layers_first": false,
+		"disable_preview_rotation": true,
+		"all_cutout": false,
+		"extra_animation_buttons": [
+			{
+				"id": "模型调整",
+				"name": "§6模型调整\n§7Model adjustment",
+				"config_forms": [
+					{
+						"type": "range",
+						"title": "§6身高§7height",
+						"description": "§6对模型体型进行调整\n§7Adjust the model's body shape",
+						"value": "v.dx",
+						"min": 0.85,
+						"max": 1.2,
+						"step": 0.05
+					}
+				]
+			}
+		]
+	},
+	"files": {
+		"player": {
+			"model": {
+				"main": "models/main.json",
+				"arm": "models/arm.json"
+			},
+			"animation": {
+				"main": "animations/main.animation.json",
+				"extra": "animations/extra.animation.json",
+				"arm": "animations/arm.animation.json",
+				"tac": "animations/tac.animation.json",
+				"carryon": "animations/carryon.animation.json"
+			},
+			"texture": [
+				{
+					"uv": "textures/texture.png"
+				}
+			]
+		},
+		"arrow": {
+			"model": "models/arrow.json",
+			"texture": {
+				"uv": "textures/arrow.png"
+			}
+		}
+	}
+}

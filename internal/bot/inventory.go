@@ -86,10 +86,33 @@ func (b *Bot) DropItem(name string, count int) error {
 
 	if remaining == 0 {
 		delete(b.InventoryMap, targetSlot)
+		// If we just emptied the slot the bot is holding, broadcast a
+		// MobEquipment update so the hand visual clears immediately for other
+		// clients (Bedrock won't echo this automatically when the drop is
+		// initiated by the bot itself).
+		if targetSlot == b.HeldSlot {
+			_ = b.Conn.WritePacket(&packet.MobEquipment{
+				EntityRuntimeID: b.Conn.GameData().EntityRuntimeID,
+				NewItem:         protocol.ItemInstance{},
+				InventorySlot:   byte(targetSlot),
+				HotBarSlot:      byte(targetSlot),
+				WindowID:        byte(protocol.WindowIDInventory),
+			})
+		}
 	} else {
 		updated := foundItem
 		updated.Count = remaining
 		b.InventoryMap[targetSlot] = updated
+		// Slot still has items but count changed — refresh visual.
+		if targetSlot == b.HeldSlot {
+			_ = b.Conn.WritePacket(&packet.MobEquipment{
+				EntityRuntimeID: b.Conn.GameData().EntityRuntimeID,
+				NewItem:         protocol.ItemInstance{Stack: updated},
+				InventorySlot:   byte(targetSlot),
+				HotBarSlot:      byte(targetSlot),
+				WindowID:        byte(protocol.WindowIDInventory),
+			})
+		}
 	}
 	return nil
 }
@@ -310,4 +333,32 @@ func (b *Bot) GetRecipes() map[string]uint32 {
 		copyMap[k] = v
 	}
 	return copyMap
+}
+
+func (b *Bot) GetRecipesByNetID() map[uint32]RecipeInfo {
+	b.Mu.Lock()
+	defer b.Mu.Unlock()
+
+	copyMap := make(map[uint32]RecipeInfo, len(b.RecipesByNetID))
+	for k, v := range b.RecipesByNetID {
+		copyMap[k] = v
+	}
+	return copyMap
+}
+
+func (b *Bot) FindItemSlotByName(name string) (uint32, bool) {
+	inv := b.GetInventorySlots()
+	names := b.GetItemNames()
+	lowerName := strings.ToLower(name)
+
+	for slot, item := range inv {
+		if item.Count <= 0 {
+			continue
+		}
+		itemName := names[item.NetworkID]
+		if strings.Contains(strings.ToLower(itemName), lowerName) {
+			return slot, true
+		}
+	}
+	return 0, false
 }
