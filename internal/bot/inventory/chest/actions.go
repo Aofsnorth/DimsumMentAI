@@ -23,12 +23,15 @@ func (ic *Container) GiveItem(ctx context.Context, itemName string, playerName s
 	}
 
 	dist := ic.distance(botPos, playerPos)
-	if dist > 3.0 {
+	if dist > 2.0 {
+		// Bedrock's base drop velocity is ~0.3 m/s — the item can only travel
+		// a fraction of a block. Stand within 1.3 blocks so the tossed item
+		// lands inside the player's pickup range rather than between us.
 		reached := ic.bot.NavigateToBlock(
 			int32(math.Floor(float64(playerPos.X()))),
 			int32(math.Floor(float64(playerPos.Y()))),
 			int32(math.Floor(float64(playerPos.Z()))),
-			2.5,
+			1.3,
 		)
 		if !reached {
 			ic.logger.Warn("GiveItem: could not reach player", "name", playerName)
@@ -64,10 +67,11 @@ func (ic *Container) GiveItem(ctx context.Context, itemName string, playerName s
 	// a 180° rotation if it was facing away from the player.
 	synced := ic.bot.WaitForYawSync(yaw, 800*time.Millisecond)
 
-	// Aim slightly upward so the toss arcs further. Bedrock's base drop
-	// velocity is tiny (~0.3 m/s forward); without an upward pitch, the item
-	// lands inside the bot's own 1-block pickup radius and gets re-collected.
-	ic.bot.OverrideLookPitch(-22)
+	// Aim with a slight upward angle so the item arcs forward into the
+	// player's pickup radius instead of falling into our own. 28° gives
+	// enough flight time for the ~0.3 m/s base velocity to cover a 1-block
+	// toss; flatter pitches (~22°) land just in front of the bot.
+	ic.bot.OverrideLookPitch(-28)
 	time.Sleep(250 * time.Millisecond)
 	ic.logger.Info("dropping item",
 		"target_yaw", yaw,
@@ -107,21 +111,27 @@ func (ic *Container) GiveItem(ctx context.Context, itemName string, playerName s
 		return false
 	}
 
+	// Brief pause so the drop transaction lands and the entity is on the
+	// ground before we start moving. Without this, the bot's immediate
+	// backward step can re-collect the item or push it out of the player's
+	// pickup range.
+	time.Sleep(150 * time.Millisecond)
+
 	ic.logger.Info("Gave item successfully", "item", itemName, "count", count, "to", playerName)
 
-	// Step back a bit so the dropped item ends up outside the bot's pickup
-	// radius. The look loop will swing yaw toward the new walk direction, but
-	// by now the drop transaction has already left.
+	// Step back a short distance so the dropped item ends up outside the
+	// bot's pickup radius. The look loop will swing yaw toward the new walk
+	// direction, but by now the drop transaction has already left.
 	yawWorldRad := float64(yaw+90) * math.Pi / 180
 	forwardX := float32(math.Cos(yawWorldRad))
 	forwardZ := float32(math.Sin(yawWorldRad))
 	backPos := mgl32.Vec3{
-		botPos.X() - forwardX*1.8,
+		botPos.X() - forwardX*1.2,
 		botPos.Y(),
-		botPos.Z() - forwardZ*1.8,
+		botPos.Z() - forwardZ*1.2,
 	}
 	ic.bot.NavigateTo(backPos)
-	time.Sleep(700 * time.Millisecond)
+	time.Sleep(500 * time.Millisecond)
 	ic.bot.StopMovement()
 	return true
 }

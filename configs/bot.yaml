@@ -4,9 +4,9 @@
 
 # --- Server Settings ---
 server:
-  host: "127.0.0.1"
+  host: "play.venity.net"
   port: 19132
-  offline: true # true = no Xbox Live auth (local server)
+  offline: false # true = no Xbox Live auth (local server)
 
 # --- Bot Identity ---
 bot:
@@ -29,12 +29,12 @@ skin:
 #   - none                → disable AI
 ai:
   provider: "nvidia"
-  model: "meta/llama-4-maverick-17b-128e-instruct"
-  api_key: "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"
+  model: "meta/llama-3.3-70b-instruct"
+  api_key: ""
   base_url: "" # leave empty to use provider default. Required for opengateway/openai_compatible.
   main_player: "OnyxStygian"
   respond_only_to_linked_player: false
-  respond_only_when_tagged: false # true = only respond when tagged/named in chat (e.g. Luna or @Luna)
+  respond_only_when_tagged: true # true = only respond when tagged/named in chat (e.g. Luna or @Luna)
   custom_personality: "" # Custom LLM personality prompt override (leave empty to use default)
 
 # --- Chat Throttle Settings ---

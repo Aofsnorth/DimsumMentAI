@@ -84,25 +84,32 @@ func (tc *TickContext) performActiveSteering() {
 
 			if tc.HasPath && tc.Dist < advanceDist {
 				tc.B.Mu.Lock()
-				nextNode := tc.B.CurrentPath[tc.B.PathIndex]
-				yDiff := float64(nextNode.Y) - float64(tc.CurrPos.Y())
-				heightDiff := math.Abs(yDiff)
+				// Re-validate the path snapshot under the lock. HasPath was
+				// computed in resolveNextTarget; another goroutine (e.g. a
+				// concurrent RecalculatePath) can have nulled CurrentPath
+				// since then.
+				if tc.B.PathIndex < len(tc.B.CurrentPath) {
+					nextNode := tc.B.CurrentPath[tc.B.PathIndex]
+					yDiff := float64(nextNode.Y) - float64(tc.CurrPos.Y())
+					heightDiff := math.Abs(yDiff)
 
-				canAdvance := heightDiff < maxHeightDiff
-				if yDiff > 0.5 {
-					// Allow advancing while climbing if we're within one block of node Y.
-					canAdvance = heightDiff < 1.05 && float64(tc.CurrPos.Y())+0.15 >= float64(nextNode.Y)
-				}
+					canAdvance := heightDiff < maxHeightDiff
+					if yDiff > 0.5 {
+						// Allow advancing while climbing if we're within one block of node Y.
+						canAdvance = heightDiff < 1.05 && float64(tc.CurrPos.Y())+0.15 >= float64(nextNode.Y)
+					}
 
-				if canAdvance {
-					tc.B.PathIndex++
-					tc.B.TicksStuck = 0
-					tc.B.LastTickPos = tc.CurrPos
-					if tc.B.PathIndex >= len(tc.B.CurrentPath) {
-						tc.B.CurrentPath = nil
-						if tc.B.MovementState == "walk_to" {
-							tc.B.MovementState = "idle"
-							tc.B.Logger.Debug("bot arrived at target destination", slog.Float64("x", float64(tc.TPos.X())), slog.Float64("z", float64(tc.TPos.Z())))
+					if canAdvance {
+						tc.B.PathIndex++
+						tc.B.TicksStuck = 0
+						tc.B.LastTickPos = tc.CurrPos
+						if tc.B.PathIndex >= len(tc.B.CurrentPath) {
+							tc.B.CurrentPath = nil
+							tc.B.PathIndex = 0
+							if tc.B.MovementState == "walk_to" {
+								tc.B.MovementState = "idle"
+								tc.B.Logger.Debug("bot arrived at target destination", slog.Float64("x", float64(tc.TPos.X())), slog.Float64("z", float64(tc.TPos.Z())))
+							}
 						}
 					}
 				}

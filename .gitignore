@@ -26,3 +26,5 @@ data/device_identity.json
 
 data\bot_state.json
 .codex
+
+archive/

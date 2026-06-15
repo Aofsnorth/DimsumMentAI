@@ -96,25 +96,43 @@ func (tc *TreeChopper) GatherWood(ctx context.Context, targetCount int, preferre
 		return
 	}
 
-	best := candidates[0]
-	for _, c := range candidates[1:] {
-		if c.score < best.score {
-			best = c
+	// Sort ascending by score so we can try the next-best base when the
+	// primary one is unreachable (pathfinder stuck on a ledge, etc).
+	for i := 1; i < len(candidates); i++ {
+		for j := i; j > 0 && candidates[j-1].score > candidates[j].score; j-- {
+			candidates[j-1], candidates[j] = candidates[j], candidates[j-1]
 		}
 	}
-	tc.logger.Info("Selected tree base",
-		"pos", best.base,
-		"hDist", best.hDist,
-		"dyAbs", best.dyAbs,
-		"score", best.score,
-		"matched_preferred", best.matched,
-		"candidates", len(candidates),
-	)
 
-	tc.ChopTreeAt(ctx, best.base, targetCount)
+	// Try up to 3 candidate bases before giving up. The previous version
+	// locked onto a single base and reported "Gak bisa nyampe" even when a
+	// perfectly good tree sat two blocks further away.
+	maxAttempts := 3
+	if len(candidates) < maxAttempts {
+		maxAttempts = len(candidates)
+	}
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		best := candidates[attempt]
+		tc.logger.Info("Selected tree base",
+			"pos", best.base,
+			"hDist", best.hDist,
+			"dyAbs", best.dyAbs,
+			"score", best.score,
+			"matched_preferred", best.matched,
+			"candidates", len(candidates),
+			"attempt", attempt+1,
+		)
+		if tc.ChopTreeAt(ctx, best.base, targetCount) {
+			tc.logger.Info("Wood gathering finished", "attempt", attempt+1, "target", targetCount)
+			return
+		}
+		tc.logger.Warn("Tree base unreachable, trying next candidate", "attempt", attempt+1, "pos", best.base)
+	}
+	tc.logger.Warn("All tree-base candidates exhausted", "tried", maxAttempts)
+	tc.rg.bot.SendChat("Aku gak bisa nyampe ke pohonnya, mungkin kehalang sesuatu.")
 }
 
-func (tc *TreeChopper) ChopTreeAt(ctx context.Context, startPos protocol.BlockPos, targetCount int) {
+func (tc *TreeChopper) ChopTreeAt(ctx context.Context, startPos protocol.BlockPos, targetCount int) bool {
 	tc.logger.Debug("Directed to chop tree", "pos", startPos)
 	if targetCount <= 0 {
 		targetCount = 1
@@ -139,8 +157,7 @@ func (tc *TreeChopper) ChopTreeAt(ctx context.Context, startPos protocol.BlockPo
 	}
 	if !reached {
 		tc.logger.Warn("Could not reach tree base", "pos", startPos)
-		tc.rg.bot.SendChat("Aku gak bisa nyampe ke pohonnya, mungkin kehalang sesuatu.")
-		return
+		return false
 	}
 	tc.rg.bot.StopMovement()
 
@@ -148,6 +165,7 @@ func (tc *TreeChopper) ChopTreeAt(ctx context.Context, startPos protocol.BlockPo
 	// so we don't trace again here. Callers from elsewhere that pass a
 	// canopy log can rely on chopTree's BFS to walk the trunk upward.
 	tc.chopTree(ctx, startPos, targetCount)
+	return true
 }
 
 // equippedAxeName returns the bot's currently held item name (empty when no

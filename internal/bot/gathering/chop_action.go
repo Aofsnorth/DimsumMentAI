@@ -159,43 +159,54 @@ func (tc *TreeChopper) clearObstructions(ctx context.Context, targetPos protocol
 	world := bot.GetLocalWorldModel()
 
 	checkPos := protocol.BlockPos{targetPos.X(), targetPos.Y() + 1, targetPos.Z()}
-	if world.IsSolid(checkPos.X(), checkPos.Y(), checkPos.Z()) {
-		_ = bot.UnequipItem()
-		time.Sleep(50 * time.Millisecond)
-
-		bot.LookAt(mgl32.Vec3{float32(checkPos.X()) + 0.5, float32(checkPos.Y()) + 0.5, float32(checkPos.Z()) + 0.5})
-
-		_ = bot.WritePacket(&packet.Animate{
-			ActionType:      packet.AnimateActionSwingArm,
-			EntityRuntimeID: bot.GetEntityRuntimeID(),
-		})
-		_ = bot.WritePacket(&packet.PlayerAction{
-			EntityRuntimeID: bot.GetEntityRuntimeID(),
-			ActionType:      protocol.PlayerActionStartBreak,
-			BlockPosition:   checkPos,
-			BlockFace:       1,
-		})
-
-		time.Sleep(300 * time.Millisecond)
-
-		_ = bot.WritePacket(&packet.PlayerAction{
-			EntityRuntimeID: bot.GetEntityRuntimeID(),
-			ActionType:      protocol.PlayerActionCrackBreak,
-			BlockPosition:   checkPos,
-			BlockFace:       1,
-		})
-		_ = bot.WritePacket(&packet.PlayerAction{
-			EntityRuntimeID: bot.GetEntityRuntimeID(),
-			ActionType:      protocol.PlayerActionPredictDestroyBlock,
-			BlockPosition:   checkPos,
-			BlockFace:       1,
-		})
-
-		world.SetSolid(checkPos.X(), checkPos.Y(), checkPos.Z(), false)
-		time.Sleep(100 * time.Millisecond)
-
-		tc.equipBestAxe()
+	if !world.IsSolid(checkPos.X(), checkPos.Y(), checkPos.Z()) {
+		return
 	}
+
+	// Only break true obstructions (leaves, vines, etc.). If the block above
+	// is itself a log/wood, the chopper will reach it in its own pass — trying
+	// to break it here too produces a phantom swing on a block that never
+	// actually breaks and confuses the player.
+	name, ok := bot.GetBlockName(checkPos.X(), checkPos.Y(), checkPos.Z())
+	if ok && isLogBlockName(name) {
+		return
+	}
+
+	_ = bot.UnequipItem()
+	time.Sleep(50 * time.Millisecond)
+
+	bot.LookAt(mgl32.Vec3{float32(checkPos.X()) + 0.5, float32(checkPos.Y()) + 0.5, float32(checkPos.Z()) + 0.5})
+
+	_ = bot.WritePacket(&packet.Animate{
+		ActionType:      packet.AnimateActionSwingArm,
+		EntityRuntimeID: bot.GetEntityRuntimeID(),
+	})
+	_ = bot.WritePacket(&packet.PlayerAction{
+		EntityRuntimeID: bot.GetEntityRuntimeID(),
+		ActionType:      protocol.PlayerActionStartBreak,
+		BlockPosition:   checkPos,
+		BlockFace:       1,
+	})
+
+	time.Sleep(300 * time.Millisecond)
+
+	_ = bot.WritePacket(&packet.PlayerAction{
+		EntityRuntimeID: bot.GetEntityRuntimeID(),
+		ActionType:      protocol.PlayerActionCrackBreak,
+		BlockPosition:   checkPos,
+		BlockFace:       1,
+	})
+	_ = bot.WritePacket(&packet.PlayerAction{
+		EntityRuntimeID: bot.GetEntityRuntimeID(),
+		ActionType:      protocol.PlayerActionPredictDestroyBlock,
+		BlockPosition:   checkPos,
+		BlockFace:       1,
+	})
+
+	world.SetSolid(checkPos.X(), checkPos.Y(), checkPos.Z(), false)
+	time.Sleep(100 * time.Millisecond)
+
+	tc.equipBestAxe()
 }
 
 func (tc *TreeChopper) equipBestAxe() {

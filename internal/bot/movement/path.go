@@ -101,7 +101,11 @@ func RecalculatePath(b *bot.Bot) {
 		}
 		b.Logger.Info("A* pathfinding completed", "nodes", len(path), "path", strings.Join(nodeCoords, " -> "), "movement_state", movementState)
 	} else {
+		// Reset PathIndex together with the path so readers in other goroutines
+		// (steering.go, follow.go) cannot dereference a stale index into nil
+		// and trip "index out of range [N] with length 0".
 		b.CurrentPath = nil
+		b.PathIndex = 0
 		b.LastPathRecalcTime = time.Now()
 		b.Logger.Warn("A* pathfinding failed to resolve walkable path to destination",
 			"start", start, "target", target, "movement_state", movementState)
