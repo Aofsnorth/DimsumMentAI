@@ -1,4 +1,4 @@
-# Minecraft Bedrock AI Bot
+# DimsumMentAI
 
 A comprehensive, state-of-the-art AI-powered bot client for **Minecraft Bedrock Edition**. Built in Go using the powerful [`gophertunnel`](https://github.com/sandertv/gophertunnel) library, this project features an autonomous agent capable of pathfinding, building, resource gathering, combat mitigation, and interactive conversation driven by **NVIDIA NIM LLMs**.
 
