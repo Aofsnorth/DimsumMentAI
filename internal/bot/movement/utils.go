@@ -49,6 +49,87 @@ func InterpolatePitch(current, target, maxStep float32) float32 {
 	return res
 }
 
+// EaseAngle moves current yaw towards target using ease-out: the step is a
+// fraction of the remaining angle (so it slows as it approaches) clamped to
+// [minStep, maxStep]. Handles 360 wrap-around. Unlike InterpolateAngle (constant
+// speed → robotic), this produces a human-like decelerating head turn.
+// minStep keeps tiny remaining angles from stalling into a stiff crawl.
+func EaseAngle(current, target, minStep, maxStep, ease float32) float32 {
+	diff := target - current
+	for diff < -180 {
+		diff += 360
+	}
+	for diff > 180 {
+		diff -= 360
+	}
+
+	mag := diff
+	if mag < 0 {
+		mag = -mag
+	}
+	if mag < 0.05 {
+		return current
+	}
+
+	step := mag * ease
+	if step > maxStep {
+		step = maxStep
+	}
+	if step < minStep {
+		step = minStep
+	}
+	if step > mag {
+		step = mag
+	}
+	if diff < 0 {
+		step = -step
+	}
+
+	res := current + step
+	for res < 0 {
+		res += 360
+	}
+	for res >= 360 {
+		res -= 360
+	}
+	return res
+}
+
+// EasePitch is the pitch counterpart of EaseAngle (no wrap-around; clamped to
+// [-90, 90]).
+func EasePitch(current, target, minStep, maxStep, ease float32) float32 {
+	diff := target - current
+	mag := diff
+	if mag < 0 {
+		mag = -mag
+	}
+	if mag < 0.05 {
+		return current
+	}
+
+	step := mag * ease
+	if step > maxStep {
+		step = maxStep
+	}
+	if step < minStep {
+		step = minStep
+	}
+	if step > mag {
+		step = mag
+	}
+	if diff < 0 {
+		step = -step
+	}
+
+	res := current + step
+	if res > 90 {
+		res = 90
+	} else if res < -90 {
+		res = -90
+	}
+	return res
+}
+
 func StopMovement(b *bot.Bot) {
 	b.Stop()
 }

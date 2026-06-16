@@ -10,16 +10,13 @@ import (
 )
 
 func (tc *TickContext) writePlayerAuthInputPacket() {
+	// PlayerAuthInput is the client heartbeat: a real Bedrock client sends it
+	// EVERY tick (20/s), even when standing perfectly still. Previously we
+	// skipped the send entirely when idle and not turning (the venityLookOnly
+	// throttle), which broke the heartbeat and let Venity time the session out
+	// ("Network timed out"). We now always send; venityLookOnly only controls
+	// whether positional delta is suppressed below.
 	venityLookOnly := tc.B.VenityCompat && tc.MState == "idle" && !tc.HasHorizontalMove && !tc.ShouldJump
-	if venityLookOnly {
-		tc.B.Mu.Lock()
-		dyaw := math.Abs(float64(tc.Yaw - tc.B.LastSentInputYaw))
-		dpitch := math.Abs(float64(tc.Pitch - tc.B.LastSentInputPitch))
-		tc.B.Mu.Unlock()
-		if dyaw < 1.0 && dpitch < 1.0 {
-			return
-		}
-	}
 
 	tc.MoveDelta = tc.CurrPos.Sub(tc.PrevPos)
 	if venityLookOnly {
@@ -65,8 +62,26 @@ func (tc *TickContext) writePlayerAuthInputPacket() {
 	}
 
 	inputData := protocol.NewBitset(packet.PlayerAuthInputBitsetSize)
+	// BlockBreakingDelayEnabled is sent by a real Bedrock client on EVERY tick
+	// (verified via MITM capture: 245/245 PlayerAuthInput packets, even while
+	// standing perfectly still). Our bot never sent it, which is the single most
+	// consistent difference between us and a genuine client — the likely trigger
+	// for Venity's anticheat silently closing the socket ~30s after spawn. Set it
+	// unconditionally, every tick, to match the real client baseline.
+	inputData.Set(packet.InputFlagBlockBreakingDelayEnabled)
 	if tc.IsGrounded {
+		// VerticalCollision = standing on the floor; correct every grounded tick.
 		inputData.Set(packet.InputFlagVerticalCollision)
+	}
+	// HorizontalCollision must ONLY be set when we are genuinely blocked. A real
+	// client never reports a side collision while freely moving horizontally.
+	// Setting it unconditionally (the old behaviour) is harmless while idle but
+	// becomes a self-contradiction the moment we walk — "I'm wall-stuck" while
+	// posX/posZ change ~0.28/tick — which Venity's movement anticheat reads as a
+	// hack and silently closes the socket. Only flag it when we WANT to move but
+	// our actual horizontal delta is ~0 (i.e. actually pinned against geometry).
+	horizDeltaSq := tc.MoveDelta.X()*tc.MoveDelta.X() + tc.MoveDelta.Z()*tc.MoveDelta.Z()
+	if tc.HasHorizontalMove && horizDeltaSq < 0.0004 {
 		inputData.Set(packet.InputFlagHorizontalCollision)
 	}
 	if tc.ShouldJump {
@@ -94,13 +109,12 @@ func (tc *TickContext) writePlayerAuthInputPacket() {
 
 	tc.B.Mu.Lock()
 	// ClientAckServerData tells the server we processed its correction.
-	// For Venity: TickSynced is set to true after the post-chunk-load handshake
-	// (sendVenityLoadedHandshake), so clientAck activates once the handshake completes.
-	clientAck := tc.B.RewindMovement && tc.B.TickSynced
+	// The original bot unconditionally sent ClientAckServerData when RewindMovement was true.
+	// But according to the protocol, ClientAckServerData MUST ONLY be set if a
+	// CorrectPlayerMovePrediction was received. Since Venity never sends them, we
+	// should never set this flag. Setting it on every tick causes a kick after 30s.
+	clientAck := false
 	tc.B.Mu.Unlock()
-	if clientAck {
-		inputData.Set(packet.InputFlagClientAckServerData)
-	}
 	tc.B.Mu.Lock()
 	if tc.B.EmoteTicks > 0 {
 		tc.B.EmoteTicks--
@@ -171,7 +185,9 @@ func (tc *TickContext) writePlayerAuthInputPacket() {
 		AnalogueMoveVector: tc.MoveVec,
 		RawMoveVector:      tc.MoveVec,
 	}
-	if tc.Tick < 5 || tc.Tick%200 == 0 {
+	// Log every send while moving (so the final ticks before a Venity kick are
+	// captured), plus the usual startup/heartbeat sampling when idle.
+	if tc.Tick < 5 || tc.Tick%200 == 0 || tc.HasHorizontalMove || tc.ShouldJump {
 		tc.B.Mu.Lock()
 		tickSyncedLog := tc.B.TickSynced
 		tc.B.Mu.Unlock()
@@ -181,8 +197,19 @@ func (tc *TickContext) writePlayerAuthInputPacket() {
 			"rewindMovement": tc.B.RewindMovement,
 			"clientAck":      clientAck,
 			"tickSynced":     tickSyncedLog,
-			"runId":          "tick-fix-v4",
-			"venityLookOnly": venityLookOnly,
+			"runId":          "tick-fix-v5",
+			"hasHMove":       tc.HasHorizontalMove,
+			"mState":         tc.MState,
+			"shouldJump":     tc.ShouldJump,
+			"posX":           tc.CurrPos.X(),
+			"posY":           tc.CurrPos.Y(),
+			"posZ":           tc.CurrPos.Z(),
+			"moveVecX":       tc.MoveVec.X(),
+			"moveVecY":       tc.MoveVec.Y(),
+			"deltaX":         tc.MoveDelta.X(),
+			"deltaY":         tc.MoveDelta.Y(),
+			"deltaZ":         tc.MoveDelta.Z(),
+			"yaw":            tc.Yaw,
 		})
 		// #endregion
 	}

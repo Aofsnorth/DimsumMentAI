@@ -91,6 +91,33 @@ func HandlePlayerPacket(b *bot.Bot, pk packet.Packet) bool {
 		b.Mu.Unlock()
 		return true
 
+	case *packet.MoveActorAbsolute:
+		b.Logger.Debug("MoveActorAbsolute packet received",
+			slog.Uint64("runtime_id", p.EntityRuntimeID),
+			slog.Float64("x", float64(p.Position.X())),
+			slog.Float64("y", float64(p.Position.Y())),
+			slog.Float64("z", float64(p.Position.Z())),
+		)
+		b.Mu.Lock()
+		if p.EntityRuntimeID == b.Conn.GameData().EntityRuntimeID {
+			b.Pos = p.Position
+			b.Logger.Info("Bot moved by MoveActorAbsolute", "pos", p.Position)
+		} else if act, ok := b.Actors[p.EntityRuntimeID]; ok {
+			act.Position = p.Position
+		}
+		b.Mu.Unlock()
+		return true
+
+	case *packet.SetActorMotion:
+		b.Mu.Lock()
+		if p.EntityRuntimeID == b.Conn.GameData().EntityRuntimeID {
+			b.VelY = p.Velocity.Y()
+			b.IsGrounded = false
+			b.Logger.Info("Bot motion set by SetActorMotion", "velocity", p.Velocity)
+		}
+		b.Mu.Unlock()
+		return true
+
 	case *packet.TakeItemActor:
 		b.Mu.Lock()
 		delete(b.Actors, p.ItemEntityRuntimeID)

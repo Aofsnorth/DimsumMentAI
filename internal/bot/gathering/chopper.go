@@ -44,54 +44,73 @@ func (tc *TreeChopper) GatherWood(ctx context.Context, targetCount int, preferre
 		score   float64
 		matched bool // true when block name matches `preferred`
 	}
+
+	// Expanding-ring search: start tight (cheap, the common case) and only
+	// widen when nothing is found, so a tree that's merely "a bit far" is still
+	// located without scanning ~113k cells on every call. Each radius rescans
+	// from scratch — the inner box is small relative to the outer ones, so the
+	// redundant work is negligible compared to the simplicity.
+	searchRadii := []int32{16, 32, 48}
 	var candidates []candidate
-	visitedBase := make(map[protocol.BlockPos]bool)
 
-	for dx := int32(-16); dx <= 16; dx++ {
-		for dz := int32(-16); dz <= 16; dz++ {
-			for dy := int32(-3); dy <= 8; dy++ {
-				tx, ty, tz := bx+dx, by+dy, bz+dz
-				name, ok := tc.rg.bot.GetBlockName(tx, ty, tz)
-				if !ok || !isLogBlockName(name) {
-					continue
-				}
-				base := tc.traceToBase(protocol.BlockPos{tx, ty, tz})
-				if visitedBase[base] {
-					continue
-				}
-				visitedBase[base] = true
+	for _, radius := range searchRadii {
+		candidates = candidates[:0]
+		visitedBase := make(map[protocol.BlockPos]bool)
 
-				// Reject bases that aren't ground-anchored — likely floating
-				// chunks or partially-loaded trees that the bot can't stand
-				// next to safely.
-				belowName, belowOK := tc.rg.bot.GetBlockName(base.X(), base.Y()-1, base.Z())
-				if !belowOK || isLogBlockName(belowName) {
-					// traceToBase ran out of iterations or world data isn't
-					// loaded under the base; skip rather than risk a bad nav.
-					continue
-				}
+		for dx := -radius; dx <= radius; dx++ {
+			for dz := -radius; dz <= radius; dz++ {
+				for dy := int32(-4); dy <= 8; dy++ {
+					tx, ty, tz := bx+dx, by+dy, bz+dz
+					name, ok := tc.rg.bot.GetBlockName(tx, ty, tz)
+					if !ok || !isLogBlockName(name) {
+						continue
+					}
+					base := tc.traceToBase(protocol.BlockPos{tx, ty, tz})
+					if visitedBase[base] {
+						continue
+					}
+					visitedBase[base] = true
 
-				dyBase := float64(base.Y() - by)
-				if dyBase > 4 {
-					// Out of safe reach without scaffolding.
-					continue
+					// Reject bases that aren't ground-anchored — likely floating
+					// chunks or partially-loaded trees that the bot can't stand
+					// next to safely.
+					belowName, belowOK := tc.rg.bot.GetBlockName(base.X(), base.Y()-1, base.Z())
+					if !belowOK || isLogBlockName(belowName) {
+						// traceToBase ran out of iterations or world data isn't
+						// loaded under the base; skip rather than risk a bad nav.
+						continue
+					}
+
+					dyBase := float64(base.Y() - by)
+					if dyBase > 4 {
+						// Out of safe reach without scaffolding.
+						continue
+					}
+					hDist := math.Sqrt(float64((base.X()-bx)*(base.X()-bx) + (base.Z()-bz)*(base.Z()-bz)))
+					dyAbs := math.Abs(dyBase)
+					score := hDist + dyAbs*0.5
+					matched := preferred == "" || matchesPreferredLog(name, preferred)
+					if !matched {
+						// Soft-prefer match: penalise non-matching logs heavily so
+						// they only win when no preferred logs exist nearby.
+						score += 64
+					}
+					candidates = append(candidates, candidate{base, hDist, dyAbs, score, matched})
 				}
-				hDist := math.Sqrt(float64((base.X()-bx)*(base.X()-bx) + (base.Z()-bz)*(base.Z()-bz)))
-				dyAbs := math.Abs(dyBase)
-				score := hDist + dyAbs*0.5
-				matched := preferred == "" || matchesPreferredLog(name, preferred)
-				if !matched {
-					// Soft-prefer match: penalise non-matching logs heavily so
-					// they only win when no preferred logs exist nearby.
-					score += 64
-				}
-				candidates = append(candidates, candidate{base, hDist, dyAbs, score, matched})
 			}
 		}
+
+		if len(candidates) > 0 {
+			if radius > 16 {
+				tc.logger.Info("Found trees only after widening search", "radius", radius, "candidates", len(candidates))
+			}
+			break
+		}
+		tc.logger.Debug("No logs in radius, widening search", "radius", radius)
 	}
 
 	if len(candidates) == 0 {
-		tc.logger.Warn("No log blocks found nearby")
+		tc.logger.Warn("No log blocks found nearby", "maxRadius", searchRadii[len(searchRadii)-1])
 		tc.rg.bot.SendChat("Aku belum nemu pohon yang kebaca di sekitar sini.")
 		return
 	}

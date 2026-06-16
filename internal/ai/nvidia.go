@@ -125,6 +125,16 @@ func (nc *NvidiaClient) BuildSystemPrompt(botName, botCoords, playerCoords, held
 	prompt := nc.persona + "\n" + nc.rules
 	prompt += GetLanguageInstruction(nc.language)
 
+	// Identity & addressing. Without this the model does not know its own
+	// in-game username and will echo "@<itself>" back when greeted.
+	if botName != "" {
+		prompt += "\n\n[IDENTITY]" +
+			"\n- Your in-game username is \"" + botName + "\". When someone writes \"" + botName + "\" or \"@" + botName + "\", they are talking TO you — that name refers to YOU, not another player." +
+			"\n- Each incoming message is prefixed with the speaker's name in angle brackets, e.g. \"<PlayerName> their message\". The person you are replying to is that <PlayerName>." +
+			"\n- When you address someone, use the SPEAKER's name (the <PlayerName>), never your own username \"" + botName + "\"." +
+			"\n- NEVER tag, mention, or greet your own username \"" + botName + "\" in a reply. Doing so is always wrong."
+	}
+
 	// Coordinates
 	if botCoords != "" {
 		prompt += "\n\nBot Location: " + botCoords

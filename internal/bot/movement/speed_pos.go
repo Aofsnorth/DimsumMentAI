@@ -4,6 +4,7 @@ import (
 	"math"
 
 	"bedrock-ai/internal/bot/pathfinder"
+	"bedrock-ai/internal/debuglog"
 	"github.com/go-gl/mathgl/mgl32"
 )
 
@@ -101,10 +102,22 @@ func (tc *TickContext) calculateMovementSpeedAndPosition() {
 		descentTargetY, descentDrop, plannedDescent := tc.plannedDescent(baseY)
 		hasSameLevelSupport := tc.hasGroundSupportAt(targetX, targetZ, baseY)
 		pathAllowsGap := tc.pathAllowsForwardWithoutGround(baseY)
-		if !needsStepUp && !tc.IsLadderActive && !tc.IsParkourJump && !isMidJump && !plannedDescent && !hasSameLevelSupport && !pathAllowsGap {
+
+		// H1 (Venity): chunks decode lazily within a small radius, so the cell
+		// below the next step is frequently *unknown* (not loaded) rather than
+		// known-air. hasGroundSupportAt uses IsSolid, which reports false for
+		// unloaded cells — so the guard below would cancel every forward step
+		// and the bot never moves. When the support is merely unknown and the
+		// active path expects to walk there, trust the path instead of freezing.
+		groundUnknown := tc.B.VenityCompat && !hasSameLevelSupport &&
+			tc.groundSupportUnknownAt(targetX, targetZ, baseY)
+		trustPath := groundUnknown && tc.HasPath
+
+		if !needsStepUp && !tc.IsLadderActive && !tc.IsParkourJump && !isMidJump && !plannedDescent && !hasSameLevelSupport && !pathAllowsGap && !trustPath {
 			targetX = tc.CurrPos.X()
 			targetZ = tc.CurrPos.Z()
 			tc.HasHorizontalMove = false
+			tc.logVenityWalkBlocked(baseY, hasSameLevelSupport, pathAllowsGap, plannedDescent, needsStepUp, groundUnknown)
 		}
 		if plannedDescent && !hasSameLevelSupport && !tc.IsLadderActive && !tc.IsParkourJump {
 			tc.NextY, tc.VelY = controlledDescentY(tc.CurrPos.Y(), tc.NextY, float32(descentTargetY), descentDrop)
@@ -260,4 +273,65 @@ func (tc *TickContext) hasGroundSupportAt(x, z float32, feetY int32) bool {
 		}
 	}
 	return false
+}
+
+// groundSupportUnknownAt reports whether the support cell under the next step is
+// genuinely *unloaded* (not yet decoded) rather than confirmed air. Used only on
+// Venity, where lazy chunk decoding means "not solid" usually means "not known".
+// Returns false if the WorldCache confirms the cell is loaded (so a real ledge /
+// air gap still blocks the step as normal).
+func (tc *TickContext) groundSupportUnknownAt(x, z float32, feetY int32) bool {
+	if tc.B.WorldCache == nil {
+		return false
+	}
+	supportY := feetY - 1
+	offsets := []float32{0, -0.25, 0.25}
+	anyUnknown := false
+	for _, dx := range offsets {
+		for _, dz := range offsets {
+			bx := int32(math.Floor(float64(x + dx)))
+			bz := int32(math.Floor(float64(z + dz)))
+			if _, loaded := tc.B.WorldCache.IsBlockSolid(bx, supportY, bz); !loaded {
+				anyUnknown = true
+			}
+		}
+	}
+	return anyUnknown
+}
+
+// logVenityWalkBlocked records why a forward step was cancelled. This is the
+// primary signal for disambiguating the "bot can't walk on Venity" hypotheses:
+// H1 (ground unknown / unloaded), H2 (server pins position), H3 (input rejected).
+// Gated on debug logging (log_level: debug) and Venity only.
+func (tc *TickContext) logVenityWalkBlocked(baseY int32, hasSupport, pathGap, descent, stepUp, groundUnknown bool) {
+	if !tc.B.VenityCompat || !debuglog.Enabled() {
+		return
+	}
+	if tc.Tick%10 != 0 {
+		return
+	}
+	tc.B.Mu.Lock()
+	pathLen := len(tc.B.CurrentPath)
+	pathIdx := tc.B.PathIndex
+	mState := tc.B.MovementState
+	tc.B.Mu.Unlock()
+	// #region agent log
+	debuglog.Log("V", "speed_pos.go:walkBlocked", "venity forward step cancelled", map[string]any{
+		"tick":          tc.Tick,
+		"mState":        mState,
+		"hasPath":       tc.HasPath,
+		"pathLen":       pathLen,
+		"pathIdx":       pathIdx,
+		"hasSupport":    hasSupport,
+		"pathAllowsGap": pathGap,
+		"plannedDesc":   descent,
+		"needsStepUp":   stepUp,
+		"groundUnknown": groundUnknown,
+		"dist":          tc.Dist,
+		"x":             tc.CurrPos.X(),
+		"y":             tc.CurrPos.Y(),
+		"z":             tc.CurrPos.Z(),
+		"runId":         "venity-walk-v1",
+	})
+	// #endregion
 }

@@ -4,7 +4,7 @@
 
 # --- Server Settings ---
 server:
-  host: "play.venity.net"
+  host: "geo.hivebedrock.network"
   port: 19132
   offline: false # true = no Xbox Live auth (local server)
 
@@ -12,7 +12,7 @@ server:
 bot:
   name: "Luna" # In-game display name
   language: "Indonesian" # AI reply language, e.g. "English", "Indonesian", "Japanese"
-  log_level: "info" # debug, info, warn, or error
+  log_level: "debug" # debug, info, warn, or error
   debug: true # Enable visualizer debug features (break, place, inventory buttons)
 
 # --- Skin & Geometry ---
@@ -29,7 +29,7 @@ skin:
 #   - none                → disable AI
 ai:
   provider: "nvidia"
-  model: "meta/llama-3.3-70b-instruct"
+  model: "openai/gpt-oss-120b"
   api_key: ""
   base_url: "" # leave empty to use provider default. Required for opengateway/openai_compatible.
   main_player: "OnyxStygian"

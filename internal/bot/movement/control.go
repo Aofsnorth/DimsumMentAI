@@ -95,8 +95,65 @@ func (tc *TickContext) updateLookDirection() {
 		tc.TargetYaw, tc.TargetPitch = dampenLookJitter(tc.Yaw, tc.Pitch, tc.TargetYaw, tc.TargetPitch)
 		pitchSpeed = 7.0
 	}
-	tc.Yaw = InterpolateAngle(tc.Yaw, tc.TargetYaw, yawSpeed)
-	tc.Pitch = InterpolatePitch(tc.Pitch, tc.TargetPitch, pitchSpeed)
+
+	// Linear InterpolateAngle (constant angular speed) looks robotic on every
+	// server. Use ease-out interpolation so head turns decelerate as they
+	// approach the target — the way a real player's view settles — plus a faint
+	// per-tick micro-jitter so the gaze is never perfectly frozen between
+	// targets. Applied to all servers, not just Venity.
+	tc.applyEasedLook(wantsToMove, yawSpeed, pitchSpeed)
+}
+
+// applyEasedLook performs ease-out yaw/pitch interpolation toward the
+// resolved target, tuned to read as a human head movement rather than a
+// constant-rate servo. maxStep is taken from the caller's computed speeds so
+// large corrections (e.g. ladder turns) still snap quickly.
+func (tc *TickContext) applyEasedLook(wantsToMove bool, yawMax, pitchMax float32) {
+	// ease = fraction of remaining angle consumed per tick. Lower = softer,
+	// longer settle. Moving needs a touch more authority to face travel dir.
+	yawEase := float32(0.14)
+	pitchEase := float32(0.1)
+	yawMin := float32(0.18)
+	pitchMin := float32(0.12)
+	if wantsToMove {
+		yawEase = 0.2
+		yawMin = 0.35
+	}
+
+	// The caller's yawMax/pitchMax (25–60°/tick) are tuned for the old constant
+	// -speed interpolator and feel like a whip-pan with easing. Cap the per-tick
+	// step so even large turns stay smooth; ladder turns get a little more room.
+	yawCap := float32(9.0)
+	pitchCap := float32(6.0)
+	if tc.IsLadderActive {
+		yawCap = 14.0
+	}
+	if yawMax > yawCap {
+		yawMax = yawCap
+	}
+	if pitchMax > pitchCap {
+		pitchMax = pitchCap
+	}
+
+	tc.Yaw = EaseAngle(tc.Yaw, tc.TargetYaw, yawMin, yawMax, yawEase)
+	tc.Pitch = EasePitch(tc.Pitch, tc.TargetPitch, pitchMin, pitchMax, pitchEase)
+
+	// Faint idle micro-jitter: only when essentially settled and not walking,
+	// so a stationary bot still has a living, breathing gaze instead of a
+	// frozen stare. Deterministic-ish via tick parity to avoid Math.rand churn.
+	if !wantsToMove {
+		yawDiff := angleDifference(tc.TargetYaw, tc.Yaw)
+		if math.Abs(float64(yawDiff)) < 0.6 {
+			switch tc.Tick % 11 {
+			case 0:
+				tc.Yaw = normalizeYaw(tc.Yaw + 0.12)
+			case 5:
+				tc.Yaw = normalizeYaw(tc.Yaw - 0.1)
+			case 8:
+				tc.Pitch = clampFloat32(tc.Pitch+0.08, -90, 90)
+			}
+		}
+	}
 }
 
 func (tc *TickContext) applyTrackedLookTarget() bool {

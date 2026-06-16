@@ -119,14 +119,7 @@ func SendInputLoop(ctx context.Context, b *bot.Bot, gd minecraft.GameData) {
 				tc.runPhysicsAndCollisions()
 			}
 			tc.updateLookDirection()
-			if !venityIdle {
-				tc.calculateMovementSpeedAndPosition()
-			} else {
-				tc.B.Mu.Lock()
-				tc.B.Yaw = tc.Yaw
-				tc.B.Pitch = tc.Pitch
-				tc.B.Mu.Unlock()
-			}
+			tc.calculateMovementSpeedAndPosition()
 			tc.writePlayerAuthInputPacket()
 			if tick > 0 && tick%200 == 0 {
 				// #region agent log

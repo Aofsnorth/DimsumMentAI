@@ -48,9 +48,19 @@ func (d *Dialer) Dial() (*minecraft.Conn, error) {
 		dialer.TokenSource = auth.RefreshTokenSource(token)
 	}
 
-	conn, err := dialer.Dial("raknet", d.cfg.Address())
+	// Diagnostic override: BOT_DIAL_ADDR lets us route the bot through the local
+	// MITM proxy (cmd/proxy) while servercompat detection still keys off the
+	// configured Host. Used to capture the bot's own packets for a byte-level
+	// diff against a real client. Unset in normal operation.
+	dialAddr := d.cfg.Address()
+	if override := os.Getenv("BOT_DIAL_ADDR"); override != "" {
+		fmt.Printf("BOT_DIAL_ADDR set: dialing %s instead of %s (compat still keyed on host %q)\n", override, dialAddr, d.cfg.Host)
+		dialAddr = override
+	}
+
+	conn, err := dialer.Dial("raknet", dialAddr)
 	if err != nil {
-		return nil, fmt.Errorf("dial server %s: %w", d.cfg.Address(), err)
+		return nil, fmt.Errorf("dial server %s: %w", dialAddr, err)
 	}
 
 	return conn, nil

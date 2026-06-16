@@ -25,6 +25,30 @@ func handleMovePlayer(b *bot.Bot, p *packet.MovePlayer) {
 	if isSelf {
 		newPos := p.Position.Sub(mgl32.Vec3{0, 1.62, 0})
 		if newPos.Y() <= 320 && newPos.Y() >= -64 {
+			// H2 (Venity): detect the server snapping us back while we are
+			// actively walking. A large jump from our locally-simulated Pos to
+			// the server's MovePlayer position during walk_to/follow is the
+			// signature of anticheat rejecting movement (rubberband/pin).
+			if b.VenityCompat && b.MovementState != "idle" && debuglog.Enabled() {
+				dx := b.Pos.X() - newPos.X()
+				dy := b.Pos.Y() - newPos.Y()
+				dz := b.Pos.Z() - newPos.Z()
+				snap := dx*dx + dy*dy + dz*dz
+				if snap > 0.25 {
+					// #region agent log
+					debuglog.Log("V", "move.go:serverSnap", "venity server overrode position during walk", map[string]any{
+						"mState":  b.MovementState,
+						"snapSq":  snap,
+						"localX":  b.Pos.X(),
+						"localZ":  b.Pos.Z(),
+						"srvX":    newPos.X(),
+						"srvZ":    newPos.Z(),
+						"srvTick": p.Tick,
+						"runId":   "venity-walk-v1",
+					})
+					// #endregion
+				}
+			}
 			b.Pos = newPos
 			b.VelY = 0.0
 		}
