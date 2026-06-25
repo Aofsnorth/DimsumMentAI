@@ -454,3 +454,63 @@ func handleConn(conn *minecraft.Conn, listener *minecraft.Listener, remoteAddr s
 3. **Saat update versi Minecraft:** Update gophertunnel ke versi yang mendukung Minecraft tersebut, lalu regenerasi kode yang bergantung pada nomor protokol.
 4. **NBT:** Selalu gunakan `nbt.NetworkLittleEndian` untuk data yang dikirim melalui jaringan Bedrock; gunakan `nbt.LittleEndian` untuk baca/tulis world save.
 5. **Resource pack:** Gunakan `listener.AddResourcePack()` sebelum client terhubung. Method ini tidak mempengaruhi koneksi yang sudah aktif.
+
+---
+
+## Harness Engineering
+
+Project ini dilengkapi dengan **full engineering harness** — sistem scaffolding
+yang meregulasi codebase menuju kondisi yang diinginkan. Lihat
+`docs/HARNESS_ENGINEERING.md` untuk dokumentasi lengkap.
+
+### Aturan Harness untuk AI Agent
+
+**Sebelum menulis kode:**
+1. Jalankan `make harness` untuk memastikan baseline hijau sebelum mulai.
+2. Baca aturan dependency di `internal/harness/architecture/architecture.go`
+   (`DefaultRules`) — jangan membuat package leaf (ai, config, event) import
+   package yang lebih tinggi (bot, handler).
+3. Ikuti konfigurasi linter di `.golangci.yml` — itu adalah computational
+   guide yang mencegah issue sebelum terjadi.
+
+**Saat menulis kode:**
+4. Setiap function pure-logic baru **wajib** punya unit test. Tulis test
+   bersamaan dengan kode (TDD preferred).
+5. Gunakan `t.Parallel()` di semua test untuk konkurensi safety.
+6. Test file dinamakan `<file>_test.go` dan ditempatkan di package yang sama
+   (white-box testing untuk akses unexported symbols).
+7. Jangan import `internal/bot` dari `internal/ai`, `internal/config`, atau
+   `internal/event` — ini akan ditangkap oleh architecture fitness sensor.
+
+**Setelah menulis kode:**
+8. Jalankan `make harness` sebelum commit. Semua check harus pass.
+9. Jalankan `make harness-full` sebelum PR (termasuk race detector & coverage).
+10. Jika menemukan bug baru, tambahkan test yang mereproduksi bug tersebut
+    **sebelum** memperbaikinya (steering loop: issue → sensor → fix → guide).
+
+**Saat menambah modul/package baru:**
+11. Tambahkan aturan dependency di `DefaultRules()` jika package baru punya
+    batasan import.
+12. Tambahkan test architecture fitness di
+    `internal/harness/architecture/architecture_test.go` untuk memvalidasi
+    aturan baru.
+13. Daftarkan package di test coverage map di `docs/HARNESS_ENGINEERING.md`.
+
+**SOLID principles di harness:**
+- `Sensor` dan `Guide` adalah interface terpisah (Interface Segregation).
+- `Runner` menerima implementasi baru tanpa modifikasi (Open/Closed).
+- `Runner` bergantung pada abstraksi `Sensor`/`Reporter`, bukan konkrit
+  (Dependency Inversion).
+
+### Quick Commands
+
+```bash
+make help          # List semua target
+make harness       # Fast: fmt-check, vet, lint, build, test, arch
+make harness-full  # Full: + race detector + coverage
+make test          # Unit tests saja
+make lint          # golangci-lint saja
+make arch          # Architecture fitness saja
+make cover         # Coverage report
+make install-hooks # Install pre-commit hook
+```

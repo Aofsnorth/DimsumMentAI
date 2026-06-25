@@ -1,0 +1,138 @@
+# =============================================================================
+# GitHub Actions — Harness Engineering CI Pipeline
+# =============================================================================
+# This workflow runs the full engineering harness on every push and pull
+# request. It implements both feedforward (guides) and feedback (sensors)
+# controls across all three regulation categories:
+#
+#   Maintainability:  golangci-lint, gofmt check
+#   Architecture:     architecture fitness sensor (module boundaries)
+#   Behaviour:        unit tests, race detector, coverage
+#
+# The pipeline fails fast on the cheapest checks (formatting, vet) before
+# running the more expensive ones (race detector, coverage).
+# =============================================================================
+
+name: Harness
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+# Cancel in-progress runs for the same branch when new commits arrive.
+concurrency:
+  group: harness-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GO_VERSION: "1.26"
+  GOFLAGS: "-count=1"
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Job 1: Guides (Feedforward) — fast, deterministic, run first.
+  # ---------------------------------------------------------------------------
+  guides:
+    name: Guides (fmt, vet, lint)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: Download dependencies
+        run: go mod download
+
+      # --- Computational guide: formatting ---
+      - name: Check formatting (gofmt)
+        run: |
+          unformatted=$(gofmt -l . 2>/dev/null | grep -v vendor | grep -v node_modules)
+          if [ -n "$unformatted" ]; then
+            echo "::error::Files need formatting:"
+            echo "$unformatted"
+            echo "::error::Run 'make fmt' to fix."
+            exit 1
+          fi
+          echo "All files formatted."
+
+      # --- Computational guide: go vet ---
+      - name: Run go vet
+        run: go vet ./cmd/... ./internal/...
+
+      # --- Computational guide: golangci-lint ---
+      - name: Install golangci-lint
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: latest
+          args: --timeout 5m
+
+  # ---------------------------------------------------------------------------
+  # Job 2: Sensors (Feedback) — tests, architecture, race, coverage.
+  # ---------------------------------------------------------------------------
+  sensors:
+    name: Sensors (test, arch, race, cover)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: Download dependencies
+        run: go mod download
+
+      # --- Computational sensor: build ---
+      - name: Build all packages
+        run: go build ./cmd/... ./internal/...
+
+      # --- Computational sensor: unit tests ---
+      - name: Run unit tests
+        run: go test -count=1 ./internal/...
+
+      # --- Computational sensor: architecture fitness ---
+      - name: Run architecture fitness sensor
+        run: go test -count=1 -v ./internal/harness/architecture/...
+
+      # --- Computational sensor: race detector ---
+      - name: Run race detector
+        run: go test -count=1 -race ./internal/...
+
+      # --- Computational sensor: coverage ---
+      - name: Run coverage
+        run: |
+          go test -count=1 -coverprofile=coverage.out ./internal/...
+          go tool cover -func=coverage.out | tail -1
+
+      - name: Upload coverage artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: coverage.out
+          retention-days: 7
+
+  # ---------------------------------------------------------------------------
+  # Job 3: Summary gate — only passes if all guides and sensors pass.
+  # ---------------------------------------------------------------------------
+  harness-summary:
+    name: Harness Summary
+    runs-on: ubuntu-latest
+    needs: [guides, sensors]
+    if: always()
+    steps:
+      - name: Check harness result
+        run: |
+          if [ "${{ needs.guides.result }}" != "success" ] || [ "${{ needs.sensors.result }}" != "success" ]; then
+            echo "::error::Harness FAILED — guides or sensors did not pass."
+            exit 1
+          fi
+          echo "✓ Harness PASSED — all guides and sensors green."

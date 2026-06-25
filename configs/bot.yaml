@@ -4,7 +4,7 @@
 
 # --- Server Settings ---
 server:
-  host: "geo.hivebedrock.network"
+  host: "play.venity.net"
   port: 19132
   offline: false # true = no Xbox Live auth (local server)
 
@@ -30,7 +30,7 @@ skin:
 ai:
   provider: "nvidia"
   model: "openai/gpt-oss-120b"
-  api_key: ""
+  api_key: "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"
   base_url: "" # leave empty to use provider default. Required for opengateway/openai_compatible.
   main_player: "OnyxStygian"
   respond_only_to_linked_player: false

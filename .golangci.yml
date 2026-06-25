@@ -1,0 +1,150 @@
+# =============================================================================
+# golangci-lint configuration — Computational Guide (Feedforward Control)
+# =============================================================================
+# This is the maintainability harness's primary feedforward control. It runs
+# deterministic, fast checks that steer code quality before issues reach
+# review or CI.
+#
+# Install:  go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
+# Run:      golangci-lint run
+# =============================================================================
+
+run:
+  timeout: 5m
+  go: "1.26"
+  modules-download-mode: readonly
+
+  # Skip generated and vendored code.
+  skip-dirs:
+    - vendor
+    - node_modules
+    - web/visualizer/node_modules
+    - web/visualizer/src
+    - .kilo
+  skip-files:
+    - ".*_gen\\.go$"
+
+output:
+  formats:
+    - format: colored-line-number
+  sort-results: true
+  print-issued-lines: true
+  print-linter-name: true
+
+# =============================================================================
+# Enabled linters — each regulates a specific quality dimension.
+# =============================================================================
+linters:
+  disable-all: true
+  enable:
+    # --- Correctness & bugs ---
+    - errcheck        # unchecked errors
+    - gosimple        # simplifications
+    - govet           # go vet checks
+    - ineffassign     # ineffectual assignments
+    - staticcheck     # comprehensive static analysis
+    - typecheck       # type checking
+    - unused          # unused identifiers
+
+    # --- Style & conventions ---
+    - gofmt           # formatting
+    - goimports       # import grouping
+    - misspell        # spelling mistakes
+    - unconvert       # unnecessary type conversions
+    - whitespace      # leading/trailing whitespace
+
+    # --- Performance ---
+    - prealloc        # slice pre-allocation hints
+
+    # --- Maintainability ---
+    - gocritic        # comprehensive checks
+    - revive          # golint successor, configurable rules
+
+    # --- Security ---
+    - gosec           # security issues
+
+# =============================================================================
+# Linter-specific configuration.
+# =============================================================================
+linters-settings:
+  errcheck:
+    # Allow unchecked errors in test helpers and main packages.
+    exclude-functions:
+      - fmt.Print*
+      - fmt.Fprint*
+
+  govet:
+    enable:
+      - assignshift   # shift overflow
+      - copylocks     # lock value copies
+      - printf        # format string mismatches
+
+  gocritic:
+    enabled-tags:
+      - diagnostic
+      - performance
+      - style
+    disabled-checks:
+      - hugeParam       # struct params are intentional in this project
+      - rangeValCopy    # some range copies are intentional
+
+  revive:
+    severity: warning
+    rules:
+      - name: blank-imports
+      - name: context-as-argument
+      - name: context-keys-type
+      - name: dot-imports
+      - name: error-return
+      - name: error-strings
+      - name: error-naming
+      - name: exported
+        arguments: ["disableStutteringCheck"]
+      - name: increment-decrement
+      - name: range
+      - name: receiver-naming
+      - name: time-naming
+      - name: var-declaration
+      - name: unexported-return
+
+  gosec:
+    excludes:
+      - G104   # unhandled errors (errcheck covers this)
+    severity: medium
+    confidence: medium
+
+  prealloc:
+    simple: true
+    for-loops: true
+
+  misspell:
+    locale: US
+
+# =============================================================================
+# Issue exclusions — legitimate cases that should not fail the build.
+# =============================================================================
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
+
+  exclude-rules:
+    # Exclude test files from some checks that are noisy in tests.
+    - path: _test\.go
+      linters:
+        - gosec
+        - prealloc
+        - gocritic
+
+    # The bot package uses function-pointer injection to resolve circular
+    # dependencies — revive's exported rule is too strict for these.
+    - path: internal/bot/bot\.go
+      linters:
+        - revive
+
+    # cmd/ packages are entry points; main functions are allowed to be long.
+    - path: cmd/
+      linters:
+        - gocritic
+
+  # Don't auto-fix; let the developer or agent review and fix manually.
+  fix: false

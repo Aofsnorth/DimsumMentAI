@@ -8,8 +8,13 @@ import (
 
 	"bedrock-ai/internal/bot/building/coordinator"
 	"bedrock-ai/internal/bot/combat"
+	"bedrock-ai/internal/bot/exploration"
+	"bedrock-ai/internal/bot/farming"
+	"bedrock-ai/internal/bot/fishing"
 	"bedrock-ai/internal/bot/gathering"
+	"bedrock-ai/internal/bot/husbandry"
 	"bedrock-ai/internal/bot/inventory"
+	"bedrock-ai/internal/bot/survival"
 	"bedrock-ai/internal/debuglog"
 	"bedrock-ai/internal/event"
 
@@ -120,6 +125,11 @@ func (b *Bot) Run(ctx context.Context) error {
 	b.Gatherer = gathering.NewResourceGatherer(b, b.Logger)
 	b.InventoryMgr = inventory.NewInventoryManager(b, b.Logger)
 	b.BuilderAgent = coordinator.NewBuilderAgent(b, b.Logger, b.AiClient)
+	b.SurvivalMgr = survival.NewManager(b, b.Logger)
+	b.Farmer = farming.NewFarmer(b, b.Logger)
+	b.Fisher = fishing.NewFisher(b, b.Logger)
+	b.HusbandryMgr = husbandry.NewManager(b, b.Logger)
+	b.Explorer = exploration.NewExplorer(b, b.Logger)
 
 	b.Bus.Publish(event.SpawnEvent{GameData: gd})
 
@@ -166,6 +176,20 @@ func (b *Bot) Run(ctx context.Context) error {
 				return
 			case <-ticker.C:
 				b.ThreatDet.Scan(ctx)
+			}
+		}
+	}()
+
+	// Survival automation loop: auto-eat, auto-armor, time-based actions
+	go func() {
+		ticker := time.NewTicker(500 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				b.SurvivalMgr.Tick()
 			}
 		}
 	}()

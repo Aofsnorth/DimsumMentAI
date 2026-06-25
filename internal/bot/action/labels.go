@@ -18,6 +18,20 @@ func SupportedLabels() map[string]struct{} {
 		"buryself", "digout", "dighole", "buildtower",
 		"followrandom", "runaway", "chase", "throwparty",
 		"gotoheaven", "gotohell", "explode", "ascend", "descend", "teleportfake",
+		// === NEW SURVIVAL FEATURES ===
+		"farm", "harvest", "plant", "hoe",
+		"fish", "fishing",
+		"breed", "feed", "milk", "shear", "tame",
+		"sleep", "bed",
+		"torch", "placetorch",
+		"shield", "block",
+		"shoot", "bow", "crossbow",
+		"potion", "heal",
+		"autoeat", "autoarmor", "autotool",
+		"explore", "exploredir", "returnhome",
+		"shelter",
+		"time", "whatstime",
+		"deathpoint", "recover",
 	}
 	out := make(map[string]struct{}, len(labels))
 	for _, label := range labels {

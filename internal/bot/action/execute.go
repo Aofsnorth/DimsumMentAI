@@ -222,6 +222,163 @@ func Execute(b *bot.Bot, label string, param string, user string) {
 	case "buildtower", "gotoheaven", "ascend":
 		go towerAction(b, param)
 
+	// === NEW SURVIVAL FEATURES ===
+	case "farm", "harvest":
+		cropType := normalizeCropType(param)
+		count := parseCount(param, 20)
+		go func() {
+			harvested := b.Farmer.HarvestCrops(context.Background(), cropType, count)
+			b.Logger.Debug("harvest complete", "count", harvested)
+		}()
+
+	case "plant":
+		cropType := normalizeCropType(param)
+		count := parseCount(param, 20)
+		go func() {
+			planted := b.Farmer.PlantSeeds(context.Background(), cropType, count)
+			b.Logger.Debug("plant complete", "count", planted)
+		}()
+
+	case "hoe":
+		radius := int32(parseCount(param, 5))
+		go func() {
+			hoed := b.Farmer.HoeGround(context.Background(), radius)
+			b.Logger.Debug("hoe complete", "count", hoed)
+		}()
+
+	case "fish", "fishing":
+		count := parseCount(param, 5)
+		go func() {
+			caught := b.Fisher.GoFish(context.Background(), count)
+			b.Logger.Debug("fishing complete", "caught", caught)
+		}()
+
+	case "breed":
+		animalType := normalizeItemName(param)
+		go b.HusbandryMgr.BreedAnimals(context.Background(), animalType)
+
+	case "feed":
+		animalType := normalizeItemName(param)
+		go b.HusbandryMgr.FeedAnimal(context.Background(), animalType)
+
+	case "milk":
+		go b.HusbandryMgr.MilkCow(context.Background())
+
+	case "shear":
+		go b.HusbandryMgr.ShearSheep(context.Background())
+
+	case "tame":
+		animalType := normalizeItemName(param)
+		go func() {
+			if animalType == "cat" || animalType == "ocelot" {
+				b.HusbandryMgr.TameCat(context.Background())
+			} else {
+				b.HusbandryMgr.TameWolf(context.Background())
+			}
+		}()
+
+	case "sleep", "bed":
+		go func() {
+			b.SurvivalMgr.SleepInBed(context.Background())
+		}()
+
+	case "torch", "placetorch":
+		go b.SurvivalMgr.AutoPlaceTorches(context.Background())
+
+	case "shield", "block":
+		if b.CombatMgr.HasShield() {
+			b.CombatMgr.RaiseShield()
+			b.SendSafeChat("Shield naik! 🛡️")
+		} else {
+			b.SendSafeChat("Aku gak punya shield.")
+		}
+
+	case "shoot", "bow", "crossbow":
+		go func() {
+			if b.CombatMgr.HasRangedWeapon() {
+				// Find nearest hostile mob to shoot
+				entities := b.GetEntities()
+				pos := b.GetCoords()
+				var closestID uint64
+				closestDist := float32(30)
+				for id, ent := range entities {
+					if ent.Health <= 0 {
+						continue
+					}
+					dist := pos.Sub(ent.Position).Len()
+					if dist < closestDist && dist > 4.0 {
+						closestDist = dist
+						closestID = id
+					}
+				}
+				if closestID != 0 {
+					b.CombatMgr.BowAttack(closestID)
+				} else {
+					b.SendSafeChat("Gak ada target dalam jarak tembak.")
+				}
+			} else {
+				b.SendSafeChat("Aku gak punya bow/arrow.")
+			}
+		}()
+
+	case "potion", "heal":
+		if b.SurvivalMgr.UseHealingPotion() {
+			b.SendSafeChat("Minum potion! ✨")
+		} else {
+			b.SendSafeChat("Gak punya healing potion.")
+		}
+
+	case "autoeat":
+		enabled := param != "off" && param != "false" && param != "0"
+		b.SurvivalMgr.EnableAutoEat(enabled)
+		if enabled {
+			b.SendSafeChat("Auto-eat dinyalakan! 🍖")
+		} else {
+			b.SendSafeChat("Auto-eat dimatikan.")
+		}
+
+	case "autoarmor":
+		enabled := param != "off" && param != "false" && param != "0"
+		b.SurvivalMgr.EnableAutoArmor(enabled)
+		if enabled {
+			count := b.SurvivalMgr.EquipBestArmor()
+			b.SendSafeChat("Auto-armor: equip " + string(rune('0'+count)) + " armor piece.")
+		} else {
+			b.SendSafeChat("Auto-armor dimatikan.")
+		}
+
+	case "autotool":
+		b.SendSafeChat("Auto-tool aktif - akan pilih tool terbaik otomatis saat mine.")
+
+	case "explore":
+		duration := parseCount(param, 60)
+		go b.Explorer.ExploreRandom(context.Background(), time.Duration(duration)*time.Second)
+
+	case "exploredir":
+		parts := strings.Split(param, ",")
+		direction := "north"
+		dist := 200
+		if len(parts) >= 1 && parts[0] != "" {
+			direction = strings.TrimSpace(parts[0])
+		}
+		if len(parts) >= 2 {
+			_, _ = fmt.Sscanf(parts[1], "%d", &dist)
+		}
+		go b.Explorer.ExploreDirection(context.Background(), direction, dist)
+
+	case "returnhome":
+		go b.Explorer.ReturnToOrigin(context.Background())
+
+	case "shelter":
+		go b.SurvivalMgr.BuildEmergencyShelter(context.Background())
+
+	case "time", "whatstime":
+		tod := b.SurvivalMgr.GetTimeOfDay()
+		b.SendSafeChat("Sekarang waktu: " + tod)
+
+	case "deathpoint", "recover":
+		go b.SurvivalMgr.RecoverFromDeath(context.Background())
+
 	default:
 		b.Logger.Debug("unknown or unhandled action label", "label", label, "param", param)
 	}

@@ -11,9 +11,14 @@ import (
 	"bedrock-ai/internal/bot/building/coordinator"
 	"bedrock-ai/internal/bot/combat"
 	"bedrock-ai/internal/bot/entity"
+	"bedrock-ai/internal/bot/exploration"
+	"bedrock-ai/internal/bot/farming"
+	"bedrock-ai/internal/bot/fishing"
 	"bedrock-ai/internal/bot/gathering"
+	"bedrock-ai/internal/bot/husbandry"
 	"bedrock-ai/internal/bot/inventory"
 	"bedrock-ai/internal/bot/pathfinder"
+	"bedrock-ai/internal/bot/survival"
 	"bedrock-ai/internal/bot/world"
 	"bedrock-ai/internal/config"
 	"bedrock-ai/internal/event"
@@ -93,6 +98,11 @@ type Bot struct {
 	Gatherer     *gathering.ResourceGatherer
 	InventoryMgr *inventory.InventoryManager
 	BuilderAgent *coordinator.BuilderAgent
+	SurvivalMgr  *survival.Manager
+	Farmer       *farming.Farmer
+	Fisher       *fishing.Fisher
+	HusbandryMgr *husbandry.Manager
+	Explorer     *exploration.Explorer
 
 	// Movement & Steering
 	MovementState    string // "idle", "walk_to", "follow"

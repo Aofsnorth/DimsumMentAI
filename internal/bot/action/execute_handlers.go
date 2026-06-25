@@ -194,6 +194,50 @@ func normalizeItemName(name string) string {
 		return "stone"
 	case "pasir":
 		return "sand"
+	case "gandum", "wheat_crop":
+		return "wheat"
+	case "wortel":
+		return "carrot"
+	case "kentang":
+		return "potato"
+	case "sapi", "cow_animal":
+		return "cow"
+	case "domba", "sheep_animal":
+		return "sheep"
+	case "babi", "pig_animal":
+		return "pig"
+	case "ayam", "chicken_animal":
+		return "chicken"
+	case "serigala", "dog":
+		return "wolf"
+	case "kucing":
+		return "cat"
 	}
 	return name
+}
+
+func normalizeCropType(param string) string {
+	parts := strings.Split(param, ",")
+	if len(parts) == 0 || parts[0] == "" {
+		return ""
+	}
+	crop := strings.ToLower(strings.TrimSpace(parts[0]))
+	switch crop {
+	case "gandum", "wheat_crop":
+		return "wheat"
+	case "wortel":
+		return "carrot"
+	case "kentang":
+		return "potato"
+	case "bit", "beet":
+		return "beetroot"
+	case "labu":
+		return "pumpkin"
+	case "semangka":
+		return "melon"
+	case "tebu", "sugarcane":
+		return "sugar_cane"
+	default:
+		return crop
+	}
 }

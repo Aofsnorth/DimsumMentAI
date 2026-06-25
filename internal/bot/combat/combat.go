@@ -41,6 +41,7 @@ type CombatManager struct {
 	targetID     uint64
 	inCombat     bool
 	friendlyMode bool
+	shieldUp     bool
 	mu           sync.Mutex
 	lastAttack   time.Time
 	recentKills  map[uint64]time.Time
