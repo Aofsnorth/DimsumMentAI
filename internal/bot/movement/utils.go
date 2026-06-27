@@ -31,6 +31,24 @@ func organicLookDrift(tick uint64, ampYaw, ampPitch float32) (float32, float32) 
 	return yawDrift, pitchDrift
 }
 
+// smoothSpeedMultiplier returns a value that oscillates smoothly around 1.0
+// in the range [1.0-amp, 1.0+amp], using low-frequency incommensurate sines.
+// Unlike per-tick random jitter (which produces high-frequency vibration at
+// 20Hz), this varies over periods of 3–8 seconds — matching how a human
+// head's angular velocity fluctuates gradually during a sustained turn.
+// At 20 ticks/sec, frequency 0.008 = period ~156 ticks ~7.8s.
+//
+// Each channel (yaw/pitch/body) uses a different phase offset so they don't
+// move in lockstep.
+func smoothSpeedMultiplier(tick uint64, amp float32, phase float64) float32 {
+	t := float64(tick)
+	return 1.0 + amp*float32(
+		math.Sin(t*0.0083+phase)+
+			0.5*math.Sin(t*0.0147+phase*1.7)+
+			0.25*math.Sin(t*0.0231+phase*3.1),
+	)
+}
+
 // InterpolateAngle smoothly moves current angle towards target by at most maxStep, handling 360 wrap-around
 func InterpolateAngle(current, target, maxStep float32) float32 {
 	diff := target - current

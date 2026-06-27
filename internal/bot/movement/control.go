@@ -84,16 +84,16 @@ func (tc *TickContext) updateLookDirection() {
 	}
 	absYawDiff := math.Abs(float64(yawDiff))
 
-	var yawSpeed float32 = 25.0
+	var yawSpeed float32 = 40.0
 	if tc.IsLadderActive {
-		yawSpeed = 60.0
+		yawSpeed = 80.0
 	} else if absYawDiff > 30.0 {
-		yawSpeed = 45.0
+		yawSpeed = 65.0
 	}
-	pitchSpeed := float32(15.0)
+	pitchSpeed := float32(22.0)
 	if !wantsToMove {
 		tc.TargetYaw, tc.TargetPitch = dampenLookJitter(tc.Yaw, tc.Pitch, tc.TargetYaw, tc.TargetPitch)
-		pitchSpeed = 7.0
+		pitchSpeed = 12.0
 	}
 
 	// Linear InterpolateAngle (constant angular speed) looks robotic on every
@@ -117,33 +117,48 @@ func (tc *TickContext) updateLookDirection() {
 //     the head yaw and pitch every tick. This replaces the old deterministic
 //     tick-parity jitter and mimics breathing, micro-saccades and postural
 //     sway — the gaze is never mathematically frozen.
+//  4. Smooth speed variation: the ease factor and step caps are multiplied
+//     by a smooth low-frequency multiplier (periods of 3–8 seconds) so the
+//     angular velocity gradually speeds up and slows down — never constant,
+//     but never vibrating. Per-tick random jitter would create 20Hz
+//     vibration; this instead matches how a human head's turn rate
+//     fluctuates over the course of a single head movement.
 func (tc *TickContext) applyEasedLook(wantsToMove bool, yawMax, pitchMax float32) {
 	// --- Head (leads) -------------------------------------------------------
 	// Head eases toward the target faster than the body so it arrives first.
-	headEase := float32(0.20)
-	headMin := float32(0.25)
-	headCap := float32(12.0)
+	headEase := float32(0.32)
+	headMin := float32(0.40)
+	headCap := float32(22.0)
 	if tc.IsLadderActive {
-		headCap = 16.0
+		headCap = 28.0
 	}
 	if wantsToMove {
-		headEase = 0.26
-		headMin = 0.45
+		headEase = 0.42
+		headMin = 0.70
 	}
 	if yawMax > headCap {
 		yawMax = headCap
 	}
 
-	pitchEase := float32(0.12)
-	pitchMin := float32(0.15)
-	pitchCap := float32(7.0)
+	pitchEase := float32(0.22)
+	pitchMin := float32(0.30)
+	pitchCap := float32(14.0)
 	if pitchMax > pitchCap {
 		pitchMax = pitchCap
 	}
 
-	// Smoothly ease head toward target.
-	tc.HeadYaw = EaseAngle(tc.HeadYaw, tc.TargetYaw, headMin, yawMax, headEase)
-	tc.Pitch = EasePitch(tc.Pitch, tc.TargetPitch, pitchMin, pitchMax, pitchEase)
+	// Smooth speed multipliers: vary gradually over 3–8 second periods using
+	// low-frequency sines with different phases per channel. Amplitude 0.22
+	// means speed ranges from 0.78× to 1.22× baseline — enough to feel alive
+	// but not erratic. Each channel (head yaw, head pitch, body) uses a
+	// different phase so they don't pulse in unison.
+	speedAmp := float32(0.22)
+	headYawSpd := smoothSpeedMultiplier(tc.Tick, speedAmp, 0.0)
+	headPitchSpd := smoothSpeedMultiplier(tc.Tick, speedAmp, 2.1)
+
+	// Smoothly ease head toward target (with smooth speed variation).
+	tc.HeadYaw = EaseAngle(tc.HeadYaw, tc.TargetYaw, headMin*headYawSpd, yawMax*headYawSpd, headEase*headYawSpd)
+	tc.Pitch = EasePitch(tc.Pitch, tc.TargetPitch, pitchMin*headPitchSpd, pitchMax*headPitchSpd, pitchEase*headPitchSpd)
 
 	// --- Organic drift ------------------------------------------------------
 	// Continuous, non-repeating micro-motion via incommensurate sine
@@ -162,17 +177,18 @@ func (tc *TickContext) applyEasedLook(wantsToMove bool, yawMax, pitchMax float32
 	// --- Body (lags, follows head) -----------------------------------------
 	// Body yaw eases toward the head yaw with a softer rate, so the torso
 	// trails the head by a few degrees during a turn and settles after it.
-	bodyEase := float32(0.12)
-	bodyMin := float32(0.15)
-	bodyCap := float32(8.0)
+	bodyEase := float32(0.20)
+	bodyMin := float32(0.25)
+	bodyCap := float32(16.0)
 	if tc.IsLadderActive {
-		bodyCap = 14.0
+		bodyCap = 22.0
 	}
 	if wantsToMove {
-		bodyEase = 0.18
-		bodyMin = 0.30
+		bodyEase = 0.30
+		bodyMin = 0.50
 	}
-	tc.Yaw = EaseAngle(tc.Yaw, tc.HeadYaw, bodyMin, bodyCap, bodyEase)
+	bodySpd := smoothSpeedMultiplier(tc.Tick, speedAmp, 4.3)
+	tc.Yaw = EaseAngle(tc.Yaw, tc.HeadYaw, bodyMin*bodySpd, bodyCap*bodySpd, bodyEase*bodySpd)
 }
 
 func (tc *TickContext) applyTrackedLookTarget() bool {

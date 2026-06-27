@@ -190,8 +190,11 @@ func (b *Bot) CraftItem(recipeNetID uint32, count int) error {
 		return fmt.Errorf("recipe %d not in cache (waiting for CraftingData)", recipeNetID)
 	}
 
-	consumePlan, err := planIngredientConsumption(b.InventoryMap, b.ItemNames, recipe.Ingredients, count)
-	if err != nil {
+	// Validate that we have enough ingredients for the requested crafts. We
+	// don't send Consume actions to the server (auto-craft handles consumption
+	// server-side), but we still check locally so we can fail early with a
+	// clear error instead of a server rejection.
+	if _, err := planIngredientConsumption(b.InventoryMap, b.ItemNames, recipe.Ingredients, count); err != nil {
 		b.Mu.Unlock()
 		return err
 	}
@@ -217,15 +220,44 @@ func (b *Bot) CraftItem(recipeNetID uint32, count int) error {
 	outputNetID := int32(recipe.Output.NetworkID)
 	itemName := b.ItemNames[outputNetID]
 
-	// Copy stack network IDs for consume plan slots while still holding the
-	// lock to avoid a race condition with concurrent inventory sync handlers.
-	stackIDs := make(map[uint32]int32, len(consumePlan))
-	for _, c := range consumePlan {
-		stackIDs[c.slot] = b.StackNetworkIDs[c.slot]
+	b.Logger.Info("CraftItem request",
+		"recipeNetID", recipeNetID,
+		"item", itemName,
+		"count", count,
+		"recipeBlock", recipe.Block,
+		"recipeShapeless", recipe.Shapeless,
+		"recipeWidth", recipe.Width,
+		"recipeHeight", recipe.Height,
+		"recipeOutputNetID", recipe.Output.NetworkID,
+		"recipeOutputCount", recipe.Output.Count,
+		"outputSlot", outputSlot,
+		"ingredientCount", len(recipe.Ingredients),
+	)
+	for i, ing := range recipe.Ingredients {
+		var ingNetID int32
+		var ingName string
+		if dd, ok := ing.Descriptor.(*protocol.DefaultItemDescriptor); ok {
+			ingNetID = int32(dd.NetworkID)
+			ingName = b.ItemNames[ingNetID]
+		}
+		b.Logger.Info("CraftItem ingredient",
+			"index", i,
+			"netID", ingNetID,
+			"name", ingName,
+			"count", ing.Count,
+		)
 	}
 	b.Mu.Unlock()
 
-	actions := make([]protocol.StackRequestAction, 0, 2+len(consumePlan))
+	// For AutoCraftRecipe (shift-click recipe book style), the server handles
+	// ingredient consumption internally. The client only sends:
+	//   1. AutoCraftRecipe action (recipe ID, times crafted, ingredients)
+	//   2. Place action (move output from CreatedOutput to inventory slot)
+	//
+	// Sending Consume actions alongside AutoCraftRecipe causes the vanilla BDS
+	// server to reject with status=7 (InvalidCraftRequest) because it doesn't
+	// expect explicit consumption for auto-craft.
+	actions := make([]protocol.StackRequestAction, 0, 2)
 
 	actions = append(actions, &protocol.AutoCraftRecipeStackRequestAction{
 		RecipeNetworkID: recipeNetID,
@@ -233,22 +265,6 @@ func (b *Bot) CraftItem(recipeNetID uint32, count int) error {
 		TimesCrafted:    byte(count),
 		Ingredients:     recipe.Ingredients,
 	})
-
-	for _, c := range consumePlan {
-		consume := &protocol.ConsumeStackRequestAction{}
-		// c.count is already the total needed for `count` crafts (computed
-		// in planIngredientConsumption with times=count), so don't multiply
-		// again.
-		consume.Count = byte(c.count)
-		consume.Source = protocol.StackRequestSlotInfo{
-			Container: protocol.FullContainerName{ContainerID: protocol.ContainerCombinedHotBarAndInventory},
-			Slot:      byte(c.slot),
-			// StackNetworkID must match the server-assigned stack instance ID
-			// for this slot. Sending 0 causes the server to reject the request.
-			StackNetworkID: stackIDs[c.slot],
-		}
-		actions = append(actions, consume)
-	}
 
 	outputCount := int(recipe.Output.Count) * count
 	if outputCount <= 0 {
