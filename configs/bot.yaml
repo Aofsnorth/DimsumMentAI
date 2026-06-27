@@ -30,7 +30,7 @@ skin:
 ai:
   provider: "nvidia"
   model: "openai/gpt-oss-120b"
-  api_key: ""
+  # API key is loaded from .env (NVIDIA_API_KEY). See .env.example.
   base_url: "" # leave empty to use provider default. Required for opengateway/openai_compatible.
   main_player: "OnyxStygian"
   respond_only_to_linked_player: false
