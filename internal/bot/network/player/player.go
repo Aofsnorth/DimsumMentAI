@@ -5,8 +5,8 @@ import (
 
 	"bedrock-ai/internal/bot"
 	"bedrock-ai/internal/bot/entity"
+
 	"github.com/go-gl/mathgl/mgl32"
-	"github.com/sandertv/gophertunnel/minecraft/protocol"
 	"github.com/sandertv/gophertunnel/minecraft/protocol/packet"
 )
 
@@ -144,33 +144,25 @@ func HandlePlayerPacket(b *bot.Bot, pk packet.Packet) bool {
 
 	case *packet.InventoryContent:
 		isPlayerInv := isPlayerInventoryContent(p)
-		var containerID byte
-		containerID = p.Container.ContainerID
-		b.Logger.Info("received InventoryContent",
+		containerID := p.Container.ContainerID
+		b.Logger.Debug("received InventoryContent",
 			slog.Uint64("window_id", uint64(p.WindowID)),
 			slog.Uint64("container_id", uint64(containerID)),
 			slog.Bool("is_player_inv", isPlayerInv),
 			slog.Int("items_count", len(p.Content)),
 		)
 		if isPlayerInv {
-			b.Mu.Lock()
-			b.InventoryMap = make(map[uint32]protocol.ItemStack)
-			for slot, item := range p.Content {
-				if item.Stack.Count > 0 && item.Stack.NetworkID != 0 {
-					b.InventoryMap[uint32(slot)] = item.Stack
-				}
-			}
-			b.Mu.Unlock()
+			applyInventoryContent(b, p)
 		}
 		return true
 
 	case *packet.InventorySlot:
 		isPlayerInv := isPlayerInventorySlot(p)
-		var containerID byte
+		containerID := byte(0)
 		if container, ok := p.Container.Value(); ok {
 			containerID = container.ContainerID
 		}
-		b.Logger.Info("received InventorySlot",
+		b.Logger.Debug("received InventorySlot",
 			slog.Uint64("window_id", uint64(p.WindowID)),
 			slog.Uint64("container_id", uint64(containerID)),
 			slog.Bool("is_player_inv", isPlayerInv),
@@ -178,14 +170,16 @@ func HandlePlayerPacket(b *bot.Bot, pk packet.Packet) bool {
 			slog.Int("count", int(p.NewItem.Stack.Count)),
 		)
 		if isPlayerInv {
-			b.Mu.Lock()
-			if p.NewItem.Stack.Count > 0 && p.NewItem.Stack.NetworkID != 0 {
-				b.InventoryMap[p.Slot] = p.NewItem.Stack
-			} else {
-				delete(b.InventoryMap, p.Slot)
-			}
-			b.Mu.Unlock()
+			applyInventorySlot(b, p)
 		}
+		return true
+
+	case *packet.ItemStackResponse:
+		applyItemStackResponse(b, p)
+		return true
+
+	case *packet.InventoryTransaction:
+		applyInventoryTransaction(b, p)
 		return true
 
 	case *packet.MobEquipment:

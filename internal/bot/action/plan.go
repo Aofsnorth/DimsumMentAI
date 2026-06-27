@@ -34,6 +34,15 @@ func ExecutePlan(b *bot.Bot, steps []Step, user string) {
 	}()
 }
 
+// ExecuteAndWait runs a single action synchronously and blocks until the
+// action has settled (movement idle, gathering complete, craft processed,
+// etc.). Used by the planner's agentic loop so each step completes before
+// re-evaluating with the LLM.
+func ExecuteAndWait(b *bot.Bot, label, param, user string) {
+	Execute(b, label, param, user)
+	waitForActionSettled(b, strings.ToLower(strings.TrimSpace(label)))
+}
+
 func waitForActionSettled(b *bot.Bot, label string) {
 	switch label {
 	case "come", "goto":

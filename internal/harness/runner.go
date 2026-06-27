@@ -1,7 +1,9 @@
 package harness
 
 import (
+	"encoding/json"
 	"fmt"
+	"io"
 	"sync"
 	"time"
 )
@@ -167,3 +169,73 @@ type NullReporter struct{}
 
 // Report implements Reporter — does nothing.
 func (NullReporter) Report(Result) error { return nil }
+
+// --- JSONReporter ---------------------------------------------------------
+
+// jsonResult is the JSON-serialisable representation of a harness Result.
+type jsonResult struct {
+	StartedAt   time.Time     `json:"started_at"`
+	FinishedAt  time.Time     `json:"finished_at"`
+	DurationMs  int64         `json:"duration_ms"`
+	SensorCount int           `json:"sensor_count"`
+	GuideCount  int           `json:"guide_count"`
+	Passed      bool          `json:"passed"`
+	Errors      []string      `json:"errors,omitempty"`
+	Findings    []jsonFinding `json:"findings"`
+}
+
+type jsonFinding struct {
+	Check     string `json:"check"`
+	Category  string `json:"category"`
+	Mode      string `json:"mode"`
+	Direction string `json:"direction"`
+	Severity  string `json:"severity"`
+	File      string `json:"file,omitempty"`
+	Line      int    `json:"line,omitempty"`
+	Message   string `json:"message"`
+	Suggest   string `json:"suggest,omitempty"`
+}
+
+// JSONReporter writes the harness result as JSON to an io.Writer. It
+// implements Reporter and is suitable for machine-readable output (CI
+// integration, SARIF conversion, dashboards).
+type JSONReporter struct {
+	w io.Writer
+}
+
+// NewJSONReporter creates a reporter that writes JSON to the given writer.
+func NewJSONReporter(w io.Writer) *JSONReporter {
+	return &JSONReporter{w: w}
+}
+
+// Report implements Reporter.
+func (j *JSONReporter) Report(result Result) error {
+	jr := jsonResult{
+		StartedAt:   result.StartedAt,
+		FinishedAt:  result.FinishedAt,
+		DurationMs:  result.Duration.Milliseconds(),
+		SensorCount: result.SensorCount,
+		GuideCount:  result.GuideCount,
+		Passed:      result.Passed(),
+		Findings:    make([]jsonFinding, 0, len(result.Findings)),
+	}
+	for _, e := range result.Errors {
+		jr.Errors = append(jr.Errors, e.Error())
+	}
+	for _, f := range result.Findings {
+		jr.Findings = append(jr.Findings, jsonFinding{
+			Check:     f.Check,
+			Category:  string(f.Category),
+			Mode:      string(f.Mode),
+			Direction: string(f.Direction),
+			Severity:  string(f.Severity),
+			File:      f.File,
+			Line:      f.Line,
+			Message:   f.Message,
+			Suggest:   f.Suggest,
+		})
+	}
+	enc := json.NewEncoder(j.w)
+	enc.SetIndent("", "  ")
+	return enc.Encode(jr)
+}

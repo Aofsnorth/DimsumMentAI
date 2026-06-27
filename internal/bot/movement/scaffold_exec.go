@@ -8,6 +8,8 @@ import (
 
 	"bedrock-ai/internal/bot"
 	"bedrock-ai/internal/bot/pathfinder"
+	"bedrock-ai/internal/event"
+
 	"github.com/go-gl/mathgl/mgl32"
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
 	"github.com/sandertv/gophertunnel/minecraft/protocol/packet"
@@ -119,13 +121,13 @@ func placeScaffoldBlock(b *bot.Bot, refPos protocol.BlockPos, isTower bool) {
 	slot, item, ok := b.Gatherer.FindScaffoldItem()
 	if !ok {
 		b.Logger.Warn("No blocks to place! Gathering dirt blocks first")
-		b.SendChat("Bentar ya OnyxStygian, aku gak punya block buat lewat. Aku kumpulin dirt dulu.")
-		
+		b.ReportActionStatus("", event.ActionStatus{Action: "gather", Item: "dirt", Success: false, Error: "gak punya block buat lewat"})
+
 		b.Mu.Lock()
 		b.CurrentPath = nil
 		b.MovementState = "idle"
 		b.Mu.Unlock()
-		
+
 		b.Gatherer.GatherBlock(context.Background(), "dirt", 5)
 		return
 	}
@@ -135,14 +137,14 @@ func placeScaffoldBlock(b *bot.Bot, refPos protocol.BlockPos, isTower bool) {
 	}
 
 	b.Logger.Info("Placing block for path", "pos", refPos, "item", item)
-	
+
 	if isTower {
 		b.Mu.Lock()
 		b.VelY = 0.42
 		b.IsGrounded = false
 		b.Mu.Unlock()
 		time.Sleep(150 * time.Millisecond)
-		
+
 		b.Mu.Lock()
 		botPos := b.Pos
 		b.Mu.Unlock()
@@ -150,7 +152,7 @@ func placeScaffoldBlock(b *bot.Bot, refPos protocol.BlockPos, isTower bool) {
 	} else {
 		b.LookAt(mgl32.Vec3{float32(refPos.X()) + 0.5, float32(refPos.Y()) + 0.5, float32(refPos.Z()) + 0.5})
 	}
-	
+
 	time.Sleep(100 * time.Millisecond)
 
 	b.Mu.Lock()

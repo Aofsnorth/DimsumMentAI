@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"bedrock-ai/internal/bot"
+	"bedrock-ai/internal/event"
 
 	"github.com/go-gl/mathgl/mgl32"
 )
@@ -67,6 +68,10 @@ func Execute(b *bot.Bot, label string, param string, user string) {
 
 	case "stop", "stay":
 		b.Stop()
+		// Cancel any running agentic plan so "stop" truly halts everything.
+		if b.Planner != nil {
+			b.Planner.Cancel()
+		}
 
 	case "lookat":
 		target := param
@@ -97,7 +102,7 @@ func Execute(b *bot.Bot, label string, param string, user string) {
 		handleGive(b, param, user)
 
 	case "drop":
-		handleDrop(b, param)
+		handleDrop(b, param, user)
 
 	case "eat":
 		go func() {
@@ -153,7 +158,7 @@ func Execute(b *bot.Bot, label string, param string, user string) {
 		}()
 
 	case "craft":
-		handleCraft(b, param)
+		handleCraft(b, param, user)
 
 	case "smelt":
 		go func() {
@@ -174,10 +179,10 @@ func Execute(b *bot.Bot, label string, param string, user string) {
 
 	case "status":
 		hp, hunger, coords := b.GetStatusDetails()
-		b.SendSafeChat(fmt.Sprintf("HP: %d/20, Hunger: %d/20, Posisi: %s", hp, hunger, coords))
+		b.ReportActionStatus(user, event.ActionStatus{Action: "status", Item: fmt.Sprintf("HP:%d Hunger:%d Coords:%s", hp, hunger, coords), Success: true})
 
 	case "inventory":
-		b.SendSafeChat(b.GetInventorySummary())
+		b.ReportActionStatus(user, event.ActionStatus{Action: "inventory", Item: b.GetInventorySummary(), Success: true})
 
 	case "swimbackforth", "walkbackforth", "walkcircle", "walksquare", "moonwalk", "crabwalk",
 		"zigzag", "spiral", "randomwalk", "jumpforward", "bunnyhop", "panic", "runaway",
@@ -288,9 +293,9 @@ func Execute(b *bot.Bot, label string, param string, user string) {
 	case "shield", "block":
 		if b.CombatMgr.HasShield() {
 			b.CombatMgr.RaiseShield()
-			b.SendSafeChat("Shield naik! 🛡️")
+			b.ReportActionStatus(user, event.ActionStatus{Action: "shield", Success: true})
 		} else {
-			b.SendSafeChat("Aku gak punya shield.")
+			b.ReportActionStatus(user, event.ActionStatus{Action: "shield", Success: false, Error: "gak punya shield"})
 		}
 
 	case "shoot", "bow", "crossbow":
@@ -314,41 +319,37 @@ func Execute(b *bot.Bot, label string, param string, user string) {
 				if closestID != 0 {
 					b.CombatMgr.BowAttack(closestID)
 				} else {
-					b.SendSafeChat("Gak ada target dalam jarak tembak.")
+					b.ReportActionStatus(user, event.ActionStatus{Action: "shoot", Success: false, Error: "gak ada target dalam jarak tembak"})
 				}
 			} else {
-				b.SendSafeChat("Aku gak punya bow/arrow.")
+				b.ReportActionStatus(user, event.ActionStatus{Action: "shoot", Success: false, Error: "gak punya bow atau arrow"})
 			}
 		}()
 
 	case "potion", "heal":
 		if b.SurvivalMgr.UseHealingPotion() {
-			b.SendSafeChat("Minum potion! ✨")
+			b.ReportActionStatus(user, event.ActionStatus{Action: "heal", Item: "potion", Success: true})
 		} else {
-			b.SendSafeChat("Gak punya healing potion.")
+			b.ReportActionStatus(user, event.ActionStatus{Action: "heal", Item: "potion", Success: false, Error: "gak punya healing potion"})
 		}
 
 	case "autoeat":
 		enabled := param != "off" && param != "false" && param != "0"
 		b.SurvivalMgr.EnableAutoEat(enabled)
-		if enabled {
-			b.SendSafeChat("Auto-eat dinyalakan! 🍖")
-		} else {
-			b.SendSafeChat("Auto-eat dimatikan.")
-		}
+		b.ReportActionStatus(user, event.ActionStatus{Action: "toggle", Item: "auto-eat", Success: true})
 
 	case "autoarmor":
 		enabled := param != "off" && param != "false" && param != "0"
 		b.SurvivalMgr.EnableAutoArmor(enabled)
 		if enabled {
 			count := b.SurvivalMgr.EquipBestArmor()
-			b.SendSafeChat("Auto-armor: equip " + string(rune('0'+count)) + " armor piece.")
+			b.ReportActionStatus(user, event.ActionStatus{Action: "toggle", Item: "auto-armor", Count: count, Success: true})
 		} else {
-			b.SendSafeChat("Auto-armor dimatikan.")
+			b.ReportActionStatus(user, event.ActionStatus{Action: "toggle", Item: "auto-armor", Success: true})
 		}
 
 	case "autotool":
-		b.SendSafeChat("Auto-tool aktif - akan pilih tool terbaik otomatis saat mine.")
+		b.ReportActionStatus(user, event.ActionStatus{Action: "toggle", Item: "auto-tool", Success: true})
 
 	case "explore":
 		duration := parseCount(param, 60)
@@ -374,7 +375,7 @@ func Execute(b *bot.Bot, label string, param string, user string) {
 
 	case "time", "whatstime":
 		tod := b.SurvivalMgr.GetTimeOfDay()
-		b.SendSafeChat("Sekarang waktu: " + tod)
+		b.ReportActionStatus(user, event.ActionStatus{Action: "time", Item: tod, Success: true})
 
 	case "deathpoint", "recover":
 		go b.SurvivalMgr.RecoverFromDeath(context.Background())

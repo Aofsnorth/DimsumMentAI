@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"bedrock-ai/internal/bot/entity"
+	"bedrock-ai/internal/event"
 
 	"github.com/go-gl/mathgl/mgl32"
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
@@ -28,7 +29,9 @@ type Bot interface {
 	GetItemNames() map[int32]string
 	EquipItem(slot uint32) error
 	SendChat(msg string)
+	ReportActionStatus(user string, status event.ActionStatus)
 	GetEntityRuntimeID() uint64
+	FormatItemName(name string) string
 }
 
 // Manager handles animal breeding, feeding, milking, and shearing
@@ -48,29 +51,29 @@ func NewManager(bot Bot, logger *slog.Logger) *Manager {
 
 // Animal breeding food mapping
 var breedFood = map[string][]string{
-	"cow":        {"wheat"},
-	"pig":        {"carrot", "potato", "beetroot"},
-	"sheep":      {"wheat"},
-	"chicken":    {"wheat_seeds", "melon_seeds", "pumpkin_seeds", "beetroot_seeds"},
-	"horse":      {"golden_apple", "golden_carrot"},
-	"donkey":     {"golden_apple", "golden_carrot"},
-	"rabbit":     {"carrot", "golden_carrot", "dandelion"},
-	"wolf":       {"bone"},
-	"cat":        {"cod", "salmon"},
-	"ocelot":     {"cod", "salmon"},
-	"parrot":     {"wheat_seeds", "melon_seeds", "pumpkin_seeds", "beetroot_seeds"},
-	"llama":      {"hay_bale", "wheat"},
-	"turtle":     {"seagrass"},
-	"panda":      {"bamboo"},
-	"fox":        {"sweet_berries", "glow_berries"},
-	"bee":        {"any_flower"},
-	"goat":       {"wheat"},
-	"axolotl":    {"tropical_fish_bucket"},
-	"frog":       {"slime_ball"},
-	"camel":      {"cactus"},
-	"sniffer":    {"torchflower_seeds"},
-	"hoglin":     {"crimson_fungus"},
-	"strider":    {"warped_fungus"},
+	"cow":     {"wheat"},
+	"pig":     {"carrot", "potato", "beetroot"},
+	"sheep":   {"wheat"},
+	"chicken": {"wheat_seeds", "melon_seeds", "pumpkin_seeds", "beetroot_seeds"},
+	"horse":   {"golden_apple", "golden_carrot"},
+	"donkey":  {"golden_apple", "golden_carrot"},
+	"rabbit":  {"carrot", "golden_carrot", "dandelion"},
+	"wolf":    {"bone"},
+	"cat":     {"cod", "salmon"},
+	"ocelot":  {"cod", "salmon"},
+	"parrot":  {"wheat_seeds", "melon_seeds", "pumpkin_seeds", "beetroot_seeds"},
+	"llama":   {"hay_bale", "wheat"},
+	"turtle":  {"seagrass"},
+	"panda":   {"bamboo"},
+	"fox":     {"sweet_berries", "glow_berries"},
+	"bee":     {"any_flower"},
+	"goat":    {"wheat"},
+	"axolotl": {"tropical_fish_bucket"},
+	"frog":    {"slime_ball"},
+	"camel":   {"cactus"},
+	"sniffer": {"torchflower_seeds"},
+	"hoglin":  {"crimson_fungus"},
+	"strider": {"warped_fungus"},
 }
 
 // passiveMobs are animals that can be interacted with
@@ -119,7 +122,13 @@ func (m *Manager) BreedAnimals(ctx context.Context, animalType string) bool {
 	// Find breeding food
 	foods, ok := breedFood[strings.ToLower(animalType)]
 	if !ok {
-		m.bot.SendChat("Aku gak tau makanan buat " + animalType)
+		m.bot.ReportActionStatus("", event.ActionStatus{
+			Action:  "breed",
+			Item:    animalType,
+			Count:   0,
+			Success: false,
+			Error:   "gak tau makanan",
+		})
 		return false
 	}
 
@@ -147,7 +156,13 @@ func (m *Manager) BreedAnimals(ctx context.Context, animalType string) bool {
 	}
 
 	if !found {
-		m.bot.SendChat("Aku gak punya makanan buat breed " + animalType + "!")
+		m.bot.ReportActionStatus("", event.ActionStatus{
+			Action:  "breed",
+			Item:    animalType,
+			Count:   0,
+			Success: false,
+			Error:   "gak punya makanan",
+		})
 		return false
 	}
 
@@ -170,7 +185,13 @@ func (m *Manager) BreedAnimals(ctx context.Context, animalType string) bool {
 	}
 
 	if len(targets) < 2 {
-		m.bot.SendChat("Butuh minimal 2 " + animalType + " buat breeding!")
+		m.bot.ReportActionStatus("", event.ActionStatus{
+			Action:  "breed",
+			Item:    animalType,
+			Count:   len(targets),
+			Success: false,
+			Error:   "butuh minimal 2",
+		})
 		return false
 	}
 
@@ -212,7 +233,12 @@ func (m *Manager) BreedAnimals(ctx context.Context, animalType string) bool {
 	}
 
 	if feeded == 2 {
-		m.bot.SendChat("Breeding " + animalType + " berhasil! 🐣")
+		m.bot.ReportActionStatus("", event.ActionStatus{
+			Action:  "breed",
+			Item:    animalType,
+			Count:   feeded,
+			Success: true,
+		})
 		return true
 	}
 	return false
@@ -273,7 +299,13 @@ func (m *Manager) FeedAnimal(ctx context.Context, animalType string) bool {
 	}
 
 	if closest == nil {
-		m.bot.SendChat("Gak ada " + animalType + " di sekitar sini!")
+		m.bot.ReportActionStatus("", event.ActionStatus{
+			Action:  "feed",
+			Item:    animalType,
+			Count:   0,
+			Success: false,
+			Error:   "gak ada",
+		})
 		return false
 	}
 
@@ -299,7 +331,12 @@ func (m *Manager) FeedAnimal(ctx context.Context, animalType string) bool {
 	}
 	_ = m.bot.WritePacket(tx)
 
-	m.bot.SendChat("Aku kasih makan " + animalType + " ya! 🐄")
+	m.bot.ReportActionStatus("", event.ActionStatus{
+		Action:  "feed",
+		Item:    animalType,
+		Count:   1,
+		Success: true,
+	})
 	return true
 }
 
@@ -329,7 +366,13 @@ func (m *Manager) MilkCow(ctx context.Context) bool {
 	}
 
 	if !found {
-		m.bot.SendChat("Aku gak punya bucket kosong!")
+		m.bot.ReportActionStatus("", event.ActionStatus{
+			Action:  "milk",
+			Item:    "bucket",
+			Count:   0,
+			Success: false,
+			Error:   "gak punya bucket kosong",
+		})
 		return false
 	}
 
@@ -354,7 +397,13 @@ func (m *Manager) MilkCow(ctx context.Context) bool {
 	}
 
 	if cow == nil {
-		m.bot.SendChat("Gak ada sapi di sekitar sini!")
+		m.bot.ReportActionStatus("", event.ActionStatus{
+			Action:  "milk",
+			Item:    "cow",
+			Count:   0,
+			Success: false,
+			Error:   "gak ada sapi",
+		})
 		return false
 	}
 
@@ -380,7 +429,12 @@ func (m *Manager) MilkCow(ctx context.Context) bool {
 	}
 	_ = m.bot.WritePacket(tx)
 
-	m.bot.SendChat("Aku perah susu sapi! 🥛")
+	m.bot.ReportActionStatus("", event.ActionStatus{
+		Action:  "milk",
+		Item:    "cow",
+		Count:   1,
+		Success: true,
+	})
 	return true
 }
 
@@ -404,7 +458,13 @@ func (m *Manager) ShearSheep(ctx context.Context) bool {
 	}
 
 	if !found {
-		m.bot.SendChat("Aku gak punya gunting (shears)!")
+		m.bot.ReportActionStatus("", event.ActionStatus{
+			Action:  "shear",
+			Item:    "shears",
+			Count:   0,
+			Success: false,
+			Error:   "gak punya gunting",
+		})
 		return false
 	}
 
@@ -427,7 +487,13 @@ func (m *Manager) ShearSheep(ctx context.Context) bool {
 	}
 
 	if sheep == nil {
-		m.bot.SendChat("Gak ada domba di sekitar sini!")
+		m.bot.ReportActionStatus("", event.ActionStatus{
+			Action:  "shear",
+			Item:    "sheep",
+			Count:   0,
+			Success: false,
+			Error:   "gak ada domba",
+		})
 		return false
 	}
 
@@ -453,7 +519,12 @@ func (m *Manager) ShearSheep(ctx context.Context) bool {
 	}
 	_ = m.bot.WritePacket(tx)
 
-	m.bot.SendChat("Aku cukur domba! ✂️🐑")
+	m.bot.ReportActionStatus("", event.ActionStatus{
+		Action:  "shear",
+		Item:    "sheep",
+		Count:   1,
+		Success: true,
+	})
 	return true
 }
 
@@ -486,7 +557,13 @@ func (m *Manager) tameWithItem(ctx context.Context, animalType, itemName, action
 	}
 
 	if !found {
-		m.bot.SendChat("Aku gak punya " + itemName + "!")
+		m.bot.ReportActionStatus("", event.ActionStatus{
+			Action:  "tame",
+			Item:    itemName,
+			Count:   0,
+			Success: false,
+			Error:   "gak punya " + itemName,
+		})
 		return false
 	}
 
@@ -509,7 +586,13 @@ func (m *Manager) tameWithItem(ctx context.Context, animalType, itemName, action
 	}
 
 	if target == nil {
-		m.bot.SendChat("Gak ada " + animalType + " di sekitar sini!")
+		m.bot.ReportActionStatus("", event.ActionStatus{
+			Action:  "tame",
+			Item:    animalType,
+			Count:   0,
+			Success: false,
+			Error:   "gak ada",
+		})
 		return false
 	}
 
@@ -545,7 +628,12 @@ func (m *Manager) tameWithItem(ctx context.Context, animalType, itemName, action
 		time.Sleep(1 * time.Second)
 	}
 
-	m.bot.SendChat("Aku coba tame " + animalType + "! 🐾")
+	m.bot.ReportActionStatus("", event.ActionStatus{
+		Action:  "tame",
+		Item:    animalType,
+		Count:   1,
+		Success: true,
+	})
 	return true
 }
 

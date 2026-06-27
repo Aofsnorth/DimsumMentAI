@@ -6,6 +6,8 @@ import (
 	"math"
 	"time"
 
+	"bedrock-ai/internal/event"
+
 	"github.com/go-gl/mathgl/mgl32"
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
 )
@@ -27,7 +29,12 @@ func (tc *TreeChopper) GatherWood(ctx context.Context, targetCount int, preferre
 	botPos := bot.GetCoords()
 
 	tc.logger.Debug("Starting wood gathering", "target", targetCount)
-	tc.rg.bot.SendChat("Aku cari pohon dulu ya!")
+	tc.rg.bot.ReportActionStatus("", event.ActionStatus{
+		Action:  "chop",
+		Item:    "log",
+		Count:   0,
+		Success: true,
+	})
 
 	bx := int32(math.Floor(float64(botPos.X())))
 	by := int32(math.Floor(float64(botPos.Y())))
@@ -111,7 +118,12 @@ func (tc *TreeChopper) GatherWood(ctx context.Context, targetCount int, preferre
 
 	if len(candidates) == 0 {
 		tc.logger.Warn("No log blocks found nearby", "maxRadius", searchRadii[len(searchRadii)-1])
-		tc.rg.bot.SendChat("Aku belum nemu pohon yang kebaca di sekitar sini.")
+		tc.rg.bot.ReportActionStatus("", event.ActionStatus{
+			Action:  "chop",
+			Item:    "log",
+			Success: false,
+			Error:   "no trees found nearby",
+		})
 		return
 	}
 
@@ -148,7 +160,12 @@ func (tc *TreeChopper) GatherWood(ctx context.Context, targetCount int, preferre
 		tc.logger.Warn("Tree base unreachable, trying next candidate", "attempt", attempt+1, "pos", best.base)
 	}
 	tc.logger.Warn("All tree-base candidates exhausted", "tried", maxAttempts)
-	tc.rg.bot.SendChat("Aku gak bisa nyampe ke pohonnya, mungkin kehalang sesuatu.")
+	tc.rg.bot.ReportActionStatus("", event.ActionStatus{
+		Action:  "chop",
+		Item:    "log",
+		Success: false,
+		Error:   "kehalang sesuatu",
+	})
 }
 
 func (tc *TreeChopper) ChopTreeAt(ctx context.Context, startPos protocol.BlockPos, targetCount int) bool {

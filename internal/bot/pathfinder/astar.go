@@ -2,7 +2,6 @@ package pathfinder
 
 import (
 	"container/heap"
-	"fmt"
 )
 
 type PriorityQueue []*Node
@@ -30,6 +29,17 @@ func (pq *PriorityQueue) Pop() interface{} {
 	return item
 }
 
+// packKey encodes a 3D block coordinate into a single int64 for use as a
+// map key. This is ~10x faster than fmt.Sprintf-based string keys and
+// eliminates GC pressure from string allocations during pathfinding.
+// Coordinate range: x/z ±2,097,151 (21 bits), y -2048..+2047 (12 bits).
+func packKey(x, y, z int32) int64 {
+	ux := uint64(x) & 0x1FFFFF
+	uy := uint64(y) & 0xFFF
+	uz := uint64(z) & 0x1FFFFF
+	return int64(ux<<33 | uy<<21 | uz)
+}
+
 // FindPath executes the A* algorithm in 3D grid space using the provided world walkability rules
 func FindPath(startNode, targetNode Node, world WorldModel, allowFallback bool) []Node {
 	type boundableWorld interface {
@@ -42,23 +52,23 @@ func FindPath(startNode, targetNode Node, world WorldModel, allowFallback bool) 
 	openSet := &PriorityQueue{}
 	heap.Init(openSet)
 
-	openMap := make(map[string]*Node)
-	closedMap := make(map[string]bool)
+	openMap := make(map[int64]*Node)
+	closedMap := make(map[int64]bool)
 
 	start := &Node{
 		X: startNode.X,
 		Y: startNode.Y,
 		Z: startNode.Z,
 		G: 0,
-		H: Distance(startNode, targetNode),
+		H: heuristic(startNode, targetNode),
 	}
 	start.F = start.G + start.H
 
 	heap.Push(openSet, start)
-	openMap[key(start.X, start.Y, start.Z)] = start
+	startKey := packKey(start.X, start.Y, start.Z)
+	openMap[startKey] = start
 
 	// Dynamic maxIterations based on distance to target
-	// Go is extremely fast, so we can afford much higher iterations for complex environments
 	distanceToTarget := Distance(startNode, targetNode)
 	var maxIterations int32 = 10000
 	if distanceToTarget < 20 {
@@ -76,17 +86,16 @@ func FindPath(startNode, targetNode Node, world WorldModel, allowFallback bool) 
 	for openSet.Len() > 0 && iterations < maxIterations {
 		iterations++
 		current := heap.Pop(openSet).(*Node)
-		currentKey := key(current.X, current.Y, current.Z)
+		currentKey := packKey(current.X, current.Y, current.Z)
 		delete(openMap, currentKey)
 		closedMap[currentKey] = true
 
 		if isTargetReached(current, targetNode) {
-			// If we reached adjacent node, make sure to add targetNode to path if it is passable
 			path := reconstructPath(current)
 			if !current.Equal(&targetNode) {
 				path = append(path, targetNode)
 			}
-			return path
+			return smoothPath(path, world)
 		}
 
 		dist := Distance(*current, targetNode)
@@ -97,7 +106,7 @@ func FindPath(startNode, targetNode Node, world WorldModel, allowFallback bool) 
 
 		neighbors := world.GetNeighbors(*current)
 		for _, neighbor := range neighbors {
-			nKey := key(neighbor.X, neighbor.Y, neighbor.Z)
+			nKey := packKey(neighbor.X, neighbor.Y, neighbor.Z)
 			if closedMap[nKey] {
 				continue
 			}
@@ -114,7 +123,7 @@ func FindPath(startNode, targetNode Node, world WorldModel, allowFallback bool) 
 					Y:        neighbor.Y,
 					Z:        neighbor.Z,
 					G:        tentativeG,
-					H:        Distance(neighbor, targetNode),
+					H:        heuristic(neighbor, targetNode),
 					Parent:   current,
 					Action:   neighbor.Action,
 					LinkType: neighbor.LinkType,
@@ -135,14 +144,10 @@ func FindPath(startNode, targetNode Node, world WorldModel, allowFallback bool) 
 
 	// Fallback to the closest node reached if perfect destination is blocked
 	if allowFallback && bestNode != start {
-		return reconstructPath(bestNode)
+		return smoothPath(reconstructPath(bestNode), world)
 	}
 
 	return nil
-}
-
-func key(x, y, z int32) string {
-	return fmt.Sprintf("%d,%d,%d", x, y, z)
 }
 
 func reconstructPath(endNode *Node) []Node {
@@ -173,4 +178,102 @@ func abs32(val int32) int32 {
 		return -val
 	}
 	return val
+}
+
+// smoothPath applies string-pulling to remove unnecessary intermediate
+// waypoints. For each node, it checks if the bot can walk directly from
+// the node before it to the node after it (skipping the middle node).
+// This eliminates zigzag patterns common in grid-based A* paths and
+// produces smoother, more natural movement.
+func smoothPath(path []Node, world WorldModel) []Node {
+	if len(path) <= 2 {
+		return path
+	}
+
+	smoothed := []Node{path[0]}
+	i := 0
+	for i < len(path)-2 {
+		// Try to skip as many intermediate nodes as possible
+		j := len(path) - 1
+		for j > i+1 {
+			if canWalkDirectly(path[i], path[j], world) {
+				break
+			}
+			j--
+		}
+		if j > i+1 {
+			smoothed = append(smoothed, path[j])
+			i = j
+		} else {
+			smoothed = append(smoothed, path[i+1])
+			i++
+		}
+	}
+	// Always include the final node if not already included
+	if smoothed[len(smoothed)-1] != path[len(path)-1] {
+		smoothed = append(smoothed, path[len(path)-1])
+	}
+
+	return smoothed
+}
+
+// canWalkDirectly checks if the bot can walk in a straight line between
+// two path nodes without hitting solid blocks. It samples intermediate
+// positions and verifies floor + head clearance at each step.
+func canWalkDirectly(from, to Node, world WorldModel) bool {
+	// Only smooth walk-type segments; don't smooth jumps, falls, or scaffolding
+	if from.Action != "" || to.Action != "" {
+		return false
+	}
+	if from.LinkType != LinkWalk || to.LinkType != LinkWalk {
+		return false
+	}
+	// Only smooth same-Y or gentle descent (1 block down)
+	dy := to.Y - from.Y
+	if dy > 1 || dy < -3 {
+		return false
+	}
+
+	dx := to.X - from.X
+	dz := to.Z - from.Z
+	horizDist := abs32(dx)
+	if abs32(dz) > horizDist {
+		horizDist = abs32(dz)
+	}
+	if horizDist > 8 {
+		return false // limit smoothing distance for safety
+	}
+
+	// Sample points along the line at 0.5-block intervals
+	steps := horizDist * 2
+	if steps < 2 {
+		steps = 2
+	}
+	for s := int32(1); s < steps; s++ {
+		t := float32(s) / float32(steps)
+		sx := float32(from.X) + 0.5 + float32(dx)*t
+		sz := float32(from.Z) + 0.5 + float32(dz)*t
+		sy := from.Y
+		if dy != 0 {
+			sy = from.Y + int32(float32(dy)*t)
+		}
+
+		bx := int32(sx)
+		bz := int32(sz)
+		by := sy
+
+		// Check feet + head clearance and floor support
+		if world.IsSolid(bx, by, bz) || world.IsSolid(bx, by+1, bz) {
+			return false
+		}
+		if world.IsHazard(bx, by, bz) || world.IsHazard(bx, by+1, bz) {
+			return false
+		}
+		// Floor must be solid (or we're descending)
+		if dy >= 0 && !world.IsSolid(bx, by-1, bz) {
+			return false
+		}
+	}
+
+	return true
 }

@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 
+	"bedrock-ai/internal/event"
+
 	"github.com/go-gl/mathgl/mgl32"
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
 	"github.com/sandertv/gophertunnel/minecraft/protocol/packet"
@@ -91,7 +93,12 @@ func (bm *BlockMiner) GatherBlock(ctx context.Context, blockName string, targetC
 		collected = 0
 	}
 	bm.logger.Info("block gathering complete", "requested", resolvedName, "mined_blocks", minedBlocks, "collected", collected)
-	bot.SendChat(fmt.Sprintf("Selesai ngumpulin %s! Aku dapet %d block.", blockName, collected))
+	bot.ReportActionStatus("", event.ActionStatus{
+		Action:  "mine",
+		Item:    resolvedName,
+		Count:   collected,
+		Success: true,
+	})
 }
 
 func (bm *BlockMiner) findBestMineStep(resolvedName string, dugPositions map[string]bool) (mineStep, string, bool) {

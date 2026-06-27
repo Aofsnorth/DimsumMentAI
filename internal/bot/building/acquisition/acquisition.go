@@ -1,13 +1,14 @@
 package acquisition
 
 import (
-	"fmt"
 	"log/slog"
 	"strings"
 	"time"
 
 	"bedrock-ai/internal/bot/building/common"
 	"bedrock-ai/internal/bot/building/scanner"
+	"bedrock-ai/internal/event"
+
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
 )
 
@@ -76,8 +77,8 @@ func (ia *InventoryAcquisition) CraftPlanksIfNeeded() {
 
 				if ok {
 					ia.logger.Info("Crafting planks from logs", "log", log, "count", stack.Count)
-					ia.bot.SendSafeChat(fmt.Sprintf("Aku buat plank dulu ya dari %s.", strings.ReplaceAll(log, "_", " ")))
-					
+					ia.bot.ReportActionStatus("", event.ActionStatus{Action: "craft", Item: targetPlank, Count: int(stack.Count), Success: true})
+
 					time.Sleep(200 * time.Millisecond)
 
 					craftCount := int(stack.Count)
@@ -155,7 +156,7 @@ func (ia *InventoryAcquisition) CraftToolsIfNeeded() {
 		recipeID, ok := recipes["wooden_axe"]
 		if ok {
 			ia.logger.Info("Crafting wooden axe")
-			ia.bot.SendSafeChat("Aku buat kapak kayu dulu.")
+			ia.bot.ReportActionStatus("", event.ActionStatus{Action: "craft", Item: "wooden_axe", Count: 1, Success: true})
 			_ = ia.bot.CraftItem(recipeID, 1)
 			time.Sleep(500 * time.Millisecond)
 			planksCount -= 3

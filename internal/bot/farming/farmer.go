@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"bedrock-ai/internal/bot/entity"
+	"bedrock-ai/internal/event"
 
 	"github.com/go-gl/mathgl/mgl32"
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
@@ -29,6 +30,7 @@ type Bot interface {
 	GetItemNames() map[int32]string
 	EquipItem(slot uint32) error
 	SendChat(msg string)
+	ReportActionStatus(user string, status event.ActionStatus)
 	GetEntityRuntimeID() uint64
 	GetLocalWorldModel() entity.WorldModel
 	GetBlockName(x, y, z int32) (string, bool)
@@ -37,13 +39,13 @@ type Bot interface {
 
 // Farmer handles all farming operations: planting, harvesting, hoeing
 type Farmer struct {
-	bot         Bot
-	logger      *slog.Logger
-	mu          sync.Mutex
-	isFarming   bool
+	bot       Bot
+	logger    *slog.Logger
+	mu        sync.Mutex
+	isFarming bool
 
 	// Known farm plot positions
-	farmPlots   []protocol.BlockPos
+	farmPlots []protocol.BlockPos
 }
 
 func NewFarmer(bot Bot, logger *slog.Logger) *Farmer {
@@ -55,8 +57,8 @@ func NewFarmer(bot Bot, logger *slog.Logger) *Farmer {
 
 // Crop types and their seed/block mappings
 type cropInfo struct {
-	name     string
-	seedName string
+	name       string
+	seedName   string
 	blockNames []string
 	grownName  string
 }
@@ -162,7 +164,11 @@ func (f *Farmer) HarvestCrops(ctx context.Context, cropType string, maxCount int
 	}
 
 	if harvested > 0 {
-		f.bot.SendChat(f.harvestReport(cropType, harvested))
+		item := cropType
+		if item == "" {
+			item = "mixed_crops"
+		}
+		f.bot.ReportActionStatus("", event.ActionStatus{Action: "harvest", Item: item, Count: harvested, Success: true})
 	}
 	return harvested
 }
@@ -180,7 +186,7 @@ func (f *Farmer) PlantSeeds(ctx context.Context, cropType string, maxCount int) 
 
 	crop, ok := crops[cropType]
 	if !ok {
-		f.bot.SendChat("Aku gak tau cara tanam " + cropType)
+		f.bot.ReportActionStatus("", event.ActionStatus{Action: "plant", Item: cropType, Count: 0, Success: false, Error: "gak tau cara tanam " + cropType})
 		return 0
 	}
 
@@ -202,7 +208,7 @@ func (f *Farmer) PlantSeeds(ctx context.Context, cropType string, maxCount int) 
 		}
 	}
 	if !found {
-		f.bot.SendChat("Aku gak punya benih " + cropType + "!")
+		f.bot.ReportActionStatus("", event.ActionStatus{Action: "plant", Item: crop.seedName, Count: 0, Success: false, Error: "gak punya benih " + cropType})
 		return 0
 	}
 
@@ -269,7 +275,7 @@ func (f *Farmer) PlantSeeds(ctx context.Context, cropType string, maxCount int) 
 	}
 
 	if planted > 0 {
-		f.bot.SendChat(f.plantReport(cropType, planted))
+		f.bot.ReportActionStatus("", event.ActionStatus{Action: "plant", Item: cropType, Count: planted, Success: true})
 	}
 	return planted
 }
@@ -301,7 +307,7 @@ func (f *Farmer) HoeGround(ctx context.Context, radius int32) int {
 	}
 
 	if !found {
-		f.bot.SendChat("Aku gak punya cangkul (hoe)!")
+		f.bot.ReportActionStatus("", event.ActionStatus{Action: "hoe", Item: "hoe", Count: 0, Success: false, Error: "gak punya cangkul"})
 		return 0
 	}
 
@@ -365,7 +371,7 @@ func (f *Farmer) HoeGround(ctx context.Context, radius int32) int {
 	}
 
 	if hoed > 0 {
-		f.bot.SendChat("Selesai mencangkul tanah!")
+		f.bot.ReportActionStatus("", event.ActionStatus{Action: "hoe", Item: "farmland", Count: hoed, Success: true})
 	}
 	return hoed
 }
@@ -425,15 +431,4 @@ func (f *Farmer) breakBlock(pos protocol.BlockPos) {
 		},
 	}
 	_ = f.bot.WritePacket(tx)
-}
-
-func (f *Farmer) harvestReport(cropType string, count int) string {
-	if cropType == "" {
-		cropType = "semua crops"
-	}
-	return "Panen " + cropType + " selesai! Dapat " + string(rune('0'+count%10)) + " block."
-}
-
-func (f *Farmer) plantReport(cropType string, count int) string {
-	return "Selesai menanam " + string(rune('0'+count%10)) + " " + cropType + "!"
 }

@@ -4,15 +4,15 @@
 
 # --- Server Settings ---
 server:
-  host: "play.venity.net"
+  host: "127.0.0.1"
   port: 19132
-  offline: false # true = no Xbox Live auth (local server)
+  offline: true # true = no Xbox Live auth (local server)
 
 # --- Bot Identity ---
 bot:
   name: "Luna" # In-game display name
   language: "Indonesian" # AI reply language, e.g. "English", "Indonesian", "Japanese"
-  log_level: "debug" # debug, info, warn, or error
+  log_level: "info" # debug, info, warn, or error
   debug: true # Enable visualizer debug features (break, place, inventory buttons)
 
 # --- Skin & Geometry ---
@@ -30,11 +30,11 @@ skin:
 ai:
   provider: "nvidia"
   model: "openai/gpt-oss-120b"
-  api_key: "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"
+  # API key is loaded from .env (NVIDIA_API_KEY). See .env.example.
   base_url: "" # leave empty to use provider default. Required for opengateway/openai_compatible.
   main_player: "OnyxStygian"
   respond_only_to_linked_player: false
-  respond_only_when_tagged: true # true = only respond when tagged/named in chat (e.g. Luna or @Luna)
+  respond_only_when_tagged: false # true = only respond when tagged/named in chat (e.g. Luna or @Luna)
   custom_personality: "" # Custom LLM personality prompt override (leave empty to use default)
 
 # --- Chat Throttle Settings ---

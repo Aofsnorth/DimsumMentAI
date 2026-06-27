@@ -1,8 +1,11 @@
 package action
 
 import (
+	"bedrock-ai/internal/bot"
 	"testing"
 	"time"
+
+	"github.com/sandertv/gophertunnel/minecraft/protocol"
 )
 
 // --- normalizeItemName ---
@@ -163,6 +166,82 @@ func TestParseCount_Default(t *testing.T) {
 	t.Parallel()
 	if got := parseCount("", 10); got != 10 {
 		t.Errorf("parseCount(%q, 10) = %d, want 10", "", got)
+	}
+}
+
+// --- recipeNeedsCraftingBench ---
+
+func TestComputeCrafts(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		desired, perCraft, want int
+	}{
+		{4, 4, 1},  // 4 oak planks, recipe gives 4 per craft
+		{8, 4, 2},  // 8 oak planks, recipe gives 4 per craft
+		{1, 4, 1},  // 1 oak plank, still 1 craft
+		{4, 1, 4},  // 4 items, recipe gives 1 per craft
+		{0, 4, 1},  // default to 1 craft
+		{5, 4, 2},  // ceil(5/4)=2
+		{16, 4, 4}, // planner example: 16 planks = 4 crafts
+		{4, 0, 4},  // bad output per craft, default 1
+	}
+	for _, tc := range tests {
+		got := computeCrafts(tc.desired, tc.perCraft)
+		if got != tc.want {
+			t.Errorf("computeCrafts(%d, %d) = %d, want %d", tc.desired, tc.perCraft, got, tc.want)
+		}
+	}
+}
+
+func TestRecipeNeedsCraftingBench(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name   string
+		recipe bot.RecipeInfo
+		want   bool
+	}{
+		{
+			name:   "inventory recipe empty block",
+			recipe: bot.RecipeInfo{Block: "", Shapeless: true, Ingredients: []protocol.ItemDescriptorCount{{}}},
+			want:   false,
+		},
+		{
+			name:   "oak_planks shapeless with table tag",
+			recipe: bot.RecipeInfo{Block: "crafting_table", Shapeless: true, Ingredients: []protocol.ItemDescriptorCount{{}}},
+			want:   false,
+		},
+		{
+			name:   "stick shapeless 2 ingredients with table tag",
+			recipe: bot.RecipeInfo{Block: "crafting_table", Shapeless: true, Ingredients: []protocol.ItemDescriptorCount{{}, {}}},
+			want:   false,
+		},
+		{
+			name:   "shapeless 5 ingredients needs bench",
+			recipe: bot.RecipeInfo{Block: "crafting_table", Shapeless: true, Ingredients: make([]protocol.ItemDescriptorCount, 5)},
+			want:   true,
+		},
+		{
+			name:   "crafting_table shaped 2x2",
+			recipe: bot.RecipeInfo{Block: "crafting_table", Shapeless: false, Width: 2, Height: 2},
+			want:   false,
+		},
+		{
+			name:   "iron_pickaxe shaped 3x3",
+			recipe: bot.RecipeInfo{Block: "crafting_table", Shapeless: false, Width: 3, Height: 3},
+			want:   true,
+		},
+		{
+			name:   "furnace recipe needs furnace",
+			recipe: bot.RecipeInfo{Block: "furnace", Shapeless: true, Ingredients: []protocol.ItemDescriptorCount{{}}},
+			want:   true,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := recipeNeedsCraftingBench(tc.recipe); got != tc.want {
+				t.Errorf("recipeNeedsCraftingBench(%s) = %v, want %v", tc.name, got, tc.want)
+			}
+		})
 	}
 }
 

@@ -197,7 +197,16 @@ func (b *Bot) LookAt(pos mgl32.Vec3) {
 func (b *Bot) SetLookAngles(yaw, pitch float32) {
 	b.Mu.Lock()
 	b.Yaw = yaw
+	b.HeadYaw = yaw
 	b.Pitch = pitch
+	// Pin the idle look target so the movement loop's applyIdleLook doesn't
+	// override the gaze on the next tick. Without this, the eased look
+	// interpolation can drift the body Yaw away from the forced value before
+	// the next PlayerAuthInput is sent.
+	b.IdleLookTargetYaw = yaw
+	b.IdleLookTargetPitch = pitch
+	b.IdleLookTargetType = "static"
+	b.NextIdleLookChange = time.Now().Add(2 * time.Second)
 	b.Mu.Unlock()
 }
 

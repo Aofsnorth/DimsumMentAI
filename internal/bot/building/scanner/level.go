@@ -6,6 +6,8 @@ import (
 	"time"
 
 	"bedrock-ai/internal/bot/building/schematic"
+	"bedrock-ai/internal/event"
+
 	"github.com/go-gl/mathgl/mgl32"
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
 	"github.com/sandertv/gophertunnel/minecraft/protocol/packet"
@@ -42,7 +44,7 @@ func (s *AreaScanner) LevelArea(ctx context.Context, cx, cy, cz, requiredSize in
 
 	if len(blocksToClear) > 5 || len(blocksToFill) > 5 {
 		s.logger.Info("Leveling terrain", "to_clear", len(blocksToClear), "to_fill", len(blocksToFill))
-		s.bot.SendSafeChat("Aku ratain tanahnya dulu biar rumahnya muat.")
+		s.bot.ReportActionStatus("", event.ActionStatus{Action: "level", Count: len(blocksToClear) + len(blocksToFill), Success: true})
 
 		for i := 0; i < len(blocksToClear); i++ {
 			for j := i + 1; j < len(blocksToClear); j++ {

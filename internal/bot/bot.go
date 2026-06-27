@@ -37,6 +37,10 @@ type RecipeInfo struct {
 	Ingredients []protocol.ItemDescriptorCount
 	Output      protocol.ItemStack
 	Block       string // e.g. "crafting_table", "" for inventory recipes
+	// Shapeless is true for shapeless recipes; shaped recipes use Width/Height.
+	Shapeless bool
+	Width     int32 // only meaningful for shaped recipes
+	Height    int32 // only meaningful for shaped recipes
 }
 
 // Function pointers for dependency injection (resolving circular dependencies)
@@ -56,7 +60,31 @@ var (
 	// Chat listener and action execution hooks
 	InitChatListenerFunc func(ctx context.Context, b *Bot)
 	ExecuteActionFunc    func(b *Bot, label, param, user string)
+
+	// Proactive conversation loop hook. bot/chat imports bot, so we can't
+	// import it back here — the loop is started via this function pointer.
+	StartProactiveLoopFunc func(ctx context.Context, b *Bot)
+
+	// Planner initialization hook. bot/planner imports bot, so we can't
+	// import it back here — the concrete planner is constructed via this
+	// function pointer and stored as PlannerInterface.
+	NewPlannerFunc func(b *Bot, client *ai.NvidiaClient) PlannerInterface
 )
+
+// PlannerInterface is implemented by bot/planner.Planner. Defined here to
+// break the circular dependency (bot/planner imports bot, bot can't import
+// bot/planner). The interface exposes only what the bot and chat handler
+// need: running plans, cancelling, and rendering the todo list.
+type PlannerInterface interface {
+	Run(goal, user string, actions []string)
+	RunFromChat(user, request string)
+	Cancel()
+	IsRunning() bool
+	TodoRenderForPrompt() string
+	TodoRenderForChat() string
+	TodoIsActive() bool
+	TodoClear()
+}
 
 type Bot struct {
 	Logger            *slog.Logger
@@ -79,6 +107,7 @@ type Bot struct {
 	AiClient  *ai.NvidiaClient
 	Throttler *ai.MessageThrottler
 	AiCfg     config.AIConfig
+	Planner   PlannerInterface
 
 	// Player Tracking
 	PlayerEntityIDs map[string]uint64
@@ -108,15 +137,21 @@ type Bot struct {
 	MovementState    string // "idle", "walk_to", "follow"
 	TargetPos        mgl32.Vec3
 	TargetPlayerName string
-	LookTargetName   string
-	LookTargetUntil  time.Time
-	IsOnLadder       bool // shared ladder state between movement and network systems
-	IsGrounded       bool
-	ParkourUntil     time.Time
+
+	// LastChatPartner is the most recent player the bot had a conversation
+	// with. Used by action status reports to know whom to address when the
+	// action handler doesn't have a specific user.
+	LastChatPartner string
+	LookTargetName  string
+	LookTargetUntil time.Time
+	IsOnLadder      bool // shared ladder state between movement and network systems
+	IsGrounded      bool
+	ParkourUntil    time.Time
 
 	// Look angles
 	Yaw                 float32
 	Pitch               float32
+	HeadYaw             float32 // decoupled head yaw — leads body Yaw during turns for natural motion
 	IdleLookTargetYaw   float32
 	IdleLookTargetPitch float32
 	IdleLookTargetType  string
@@ -143,12 +178,21 @@ type Bot struct {
 	Hunger int
 
 	// Inventory tracking
-	InventoryMap   map[uint32]protocol.ItemStack
-	ItemNames      map[int32]string
-	Recipes        map[string]uint32
-	RecipesByNetID map[uint32]RecipeInfo
-	HeldSlot       uint32
-	StackRequestID int32
+	InventoryMap    map[uint32]protocol.ItemStack
+	StackNetworkIDs map[uint32]int32
+	ItemNames       map[int32]string
+	Recipes         map[string]uint32
+	RecipesByNetID  map[uint32]RecipeInfo
+	HeldSlot        uint32
+	StackRequestID  int32
+
+	// Pending craft requests: maps ItemStackRequest.RequestID to a pending
+	// craft entry. Used by CraftItem to synchronously wait for the server's
+	// ItemStackResponse instead of fire-and-forget. The outputNetworkID is
+	// the item type NetworkID of the recipe's output, used to fill in the
+	// item type when the server creates a new slot (the response only carries
+	// the stack instance ID, not the item type).
+	pendingCrafts map[int32]pendingCraft
 
 	// Emotes / Animations state
 	EmoteState string
@@ -168,6 +212,44 @@ type Bot struct {
 	ScaffoldingActive   bool
 }
 
+// pendingCraft tracks a single in-flight CraftItem request. The channel
+// receives a craftResult when the server's ItemStackResponse arrives.
+// outputNetID is the recipe output's item type NetworkID, used by the
+// response handler to tag newly-created inventory slots.
+type pendingCraft struct {
+	ch          chan craftResult
+	outputNetID int32
+}
+
+// craftResult is sent to a pending craft's channel when the server's
+// ItemStackResponse arrives. accepted=false means the server rejected the
+// request (non-zero status).
+type craftResult struct {
+	accepted bool
+}
+
+// CraftResult creates a craftResult value. Exported so the network/player
+// package can send results to pending craft channels.
+func CraftResult(accepted bool) craftResult {
+	return craftResult{accepted: accepted}
+}
+
+// PendingCraftLookup returns the channel and output NetworkID for a pending
+// craft request. Returns ok=false if no pending craft exists for requestID.
+// Caller MUST hold b.Mu.
+func (b *Bot) PendingCraftLookup(requestID int32) (chan craftResult, int32, bool) {
+	pc, ok := b.pendingCrafts[requestID]
+	if !ok {
+		return nil, 0, false
+	}
+	return pc.ch, pc.outputNetID, true
+}
+
+// PendingCraftDelete removes a pending craft entry. Caller MUST hold b.Mu.
+func (b *Bot) PendingCraftDelete(requestID int32) {
+	delete(b.pendingCrafts, requestID)
+}
+
 type DialerFunc func() (*minecraft.Conn, error)
 
 func newBot(opts ...Option) (*Bot, error) {
@@ -183,9 +265,11 @@ func newBot(opts ...Option) (*Bot, error) {
 		Language:            "Indonesian",
 		StatePath:           "data/bot_state.json",
 		InventoryMap:        make(map[uint32]protocol.ItemStack),
+		StackNetworkIDs:     make(map[uint32]int32),
 		ItemNames:           make(map[int32]string),
 		Recipes:             make(map[string]uint32),
 		RecipesByNetID:      make(map[uint32]RecipeInfo),
+		pendingCrafts:       make(map[int32]pendingCraft),
 		StackRequestID:      -1,
 		Health:              20,
 		Hunger:              20,

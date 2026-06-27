@@ -4,10 +4,20 @@ import (
 	"math"
 
 	"bedrock-ai/internal/debuglog"
+
 	"github.com/go-gl/mathgl/mgl32"
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
 	"github.com/sandertv/gophertunnel/minecraft/protocol/packet"
 )
+
+// interactNoise returns a tiny, smooth, non-repeating angular offset that
+// simulates sub-degree mouse jitter on the interact (crosshair) channels.
+// amp is the peak amplitude in degrees; phase offsets the waveform so yaw
+// and pitch noise don't move in lockstep.
+func interactNoise(tick uint64, amp, phase float32) float32 {
+	t := float64(tick) + float64(phase)
+	return amp * float32(math.Sin(t*0.087)+0.4*math.Sin(t*0.191+1.1))
+}
 
 func (tc *TickContext) writePlayerAuthInputPacket() {
 	// PlayerAuthInput is the client heartbeat: a real Bedrock client sends it
@@ -166,20 +176,29 @@ func (tc *TickContext) writePlayerAuthInputPacket() {
 	}
 	tc.B.Yaw = tc.Yaw
 	tc.B.Pitch = tc.Pitch
+	tc.B.HeadYaw = tc.HeadYaw
 	tc.B.Mu.Unlock()
 
 	pk := &packet.PlayerAuthInput{
-		Position:           tc.CurrPos.Add(mgl32.Vec3{0, 1.62, 0}),
-		Pitch:              tc.Pitch,
-		Yaw:                tc.Yaw,
-		HeadYaw:            tc.Yaw,
+		Position: tc.CurrPos.Add(mgl32.Vec3{0, 1.62, 0}),
+		Pitch:    tc.Pitch,
+		Yaw:      tc.Yaw,
+		// HeadYaw is decoupled from body Yaw so the head leads the torso
+		// during turns — the way a real player's view arrives before their
+		// body finishes rotating. This is the single biggest contributor to
+		// natural-looking head motion on normal servers.
+		HeadYaw: tc.HeadYaw,
+		// InteractYaw/InteractPitch represent the crosshair / aim direction.
+		// A real client derives these from the head angle with sub-degree
+		// mouse jitter, so we add a faint continuous noise to avoid sending
+		// a mathematically identical value every tick.
+		InteractPitch:      tc.Pitch + interactNoise(tc.Tick, 0.06, 0.0),
+		InteractYaw:        normalizeYaw(tc.HeadYaw + interactNoise(tc.Tick, 0.08, 1.3)),
 		MoveVector:         tc.MoveVec,
 		InputData:          inputData,
 		InputMode:          packet.InputModeTouch,
 		PlayMode:           packet.PlayModeNormal,
 		InteractionModel:   packet.InteractionModelTouch,
-		InteractPitch:      tc.Pitch,
-		InteractYaw:        tc.Yaw,
 		Tick:               tc.Tick,
 		Delta:              tc.MoveDelta,
 		AnalogueMoveVector: tc.MoveVec,

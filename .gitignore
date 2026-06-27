@@ -17,6 +17,9 @@ configs/token.json
 
 configs/bot.yaml
 
+# Local env file (contains API keys — never commit)
+.env
+
 # Debug session logs
 logs/
 debug-090ce4.log

@@ -15,14 +15,15 @@ import (
 	"bedrock-ai/internal/bot/building/planner"
 	"bedrock-ai/internal/bot/building/scanner"
 	"bedrock-ai/internal/bot/building/templates"
+	"bedrock-ai/internal/event"
 )
 
 // BuilderAgent coordinates the high-level planning, scanning, materials preparation, and execution of build projects.
 type BuilderAgent struct {
-	bot         BotInterface
-	logger      *slog.Logger
-	aiClient    *ai.NvidiaClient
-	
+	bot      BotInterface
+	logger   *slog.Logger
+	aiClient *ai.NvidiaClient
+
 	// Sub-components
 	library     *templates.TemplateLibrary
 	executor    *templates.TemplateExecutor
@@ -33,13 +34,13 @@ type BuilderAgent struct {
 	placer      *placer.BlockPlacer
 
 	// Build State
-	mu                  sync.Mutex
-	isBuilding          bool
-	cancelFn            context.CancelFunc
-	placedHistory       []common.BlockEntry
-	status              string
-	blocksPlaced        int
-	totalBlocks         int
+	mu            sync.Mutex
+	isBuilding    bool
+	cancelFn      context.CancelFunc
+	placedHistory []common.BlockEntry
+	status        string
+	blocksPlaced  int
+	totalBlocks   int
 }
 
 // NewBuilderAgent creates a new BuilderAgent orchestrator.
@@ -75,9 +76,9 @@ func (ba *BuilderAgent) StopBuilding() {
 		ba.cancelFn()
 		ba.isBuilding = false
 		ba.status = "Ready"
-		ba.bot.SendSafeChat("Pembangunan dihentikan!")
+		ba.bot.ReportActionStatus("", event.ActionStatus{Action: "build", Success: false, Error: "stopped"})
 	} else {
-		ba.bot.SendSafeChat("Aku nggak lagi bangun apa-apa kok.")
+		ba.bot.ReportActionStatus("", event.ActionStatus{Action: "build", Success: false, Error: "not building"})
 	}
 }
 

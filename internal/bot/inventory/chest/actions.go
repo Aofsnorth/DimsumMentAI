@@ -67,12 +67,15 @@ func (ic *Container) GiveItem(ctx context.Context, itemName string, playerName s
 	// a 180° rotation if it was facing away from the player.
 	synced := ic.bot.WaitForYawSync(yaw, 800*time.Millisecond)
 
-	// Aim with a slight upward angle so the item arcs forward into the
-	// player's pickup radius instead of falling into our own. 28° gives
-	// enough flight time for the ~0.3 m/s base velocity to cover a 1-block
-	// toss; flatter pitches (~22°) land just in front of the bot.
-	ic.bot.OverrideLookPitch(-28)
-	time.Sleep(250 * time.Millisecond)
+	// Force-set both body yaw AND head yaw to the exact target, plus a slight
+	// upward pitch so the item arcs forward into the player's pickup radius.
+	// Using SetLookAngles instead of OverrideLookPitch ensures the body Yaw
+	// (which Bedrock uses for drop direction) is pinned to the target, not
+	// left lagging behind HeadYaw through the eased look interpolation.
+	ic.bot.SetLookAngles(yaw, -28)
+	// Wait for at least 2 movement ticks (50ms each) so the PlayerAuthInput
+	// carrying these exact values is transmitted before we drop.
+	time.Sleep(120 * time.Millisecond)
 	ic.logger.Info("dropping item",
 		"target_yaw", yaw,
 		"target_player", playerName,

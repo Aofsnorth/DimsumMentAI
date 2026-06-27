@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"bedrock-ai/internal/bot/building/common"
+	"bedrock-ai/internal/event"
+
 	"github.com/go-gl/mathgl/mgl32"
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
 	"github.com/sandertv/gophertunnel/minecraft/protocol/packet"
@@ -42,7 +44,7 @@ func (ba *BuilderAgent) executeBlockList(ctx context.Context, blocks []common.Bl
 		}
 
 		if (idx+1)%15 == 0 {
-			ba.bot.SendSafeChat(fmt.Sprintf("Progress pembangunan: %d%% (%d/%d)", int(float32(idx+1)/float32(len(blocks))*100), idx+1, len(blocks)))
+			ba.bot.ReportActionStatus("", event.ActionStatus{Action: "build", Count: int(float32(idx+1) / float32(len(blocks)) * 100), Success: true})
 		}
 	}
 
@@ -71,13 +73,13 @@ func (ba *BuilderAgent) UndoBuild(ctx context.Context, count int) {
 	ba.mu.Lock()
 	if ba.isBuilding {
 		ba.mu.Unlock()
-		ba.bot.SendSafeChat("Aku lagi sibuk membangun. Hentikan dulu pake 'stopbuild' sebelum undo!")
+		ba.bot.ReportActionStatus("", event.ActionStatus{Action: "undo", Success: false, Error: "busy building"})
 		return
 	}
 
 	if len(ba.placedHistory) == 0 {
 		ba.mu.Unlock()
-		ba.bot.SendSafeChat("Belum ada blok yang aku tempatkan untuk dibatalkan.")
+		ba.bot.ReportActionStatus("", event.ActionStatus{Action: "undo", Success: false, Error: "no blocks placed"})
 		return
 	}
 
@@ -97,7 +99,7 @@ func (ba *BuilderAgent) UndoBuild(ctx context.Context, count int) {
 			ba.mu.Unlock()
 		}()
 
-		ba.bot.SendSafeChat(fmt.Sprintf("Membatalkan %d blok terakhir...", count))
+		ba.bot.ReportActionStatus("", event.ActionStatus{Action: "undo", Count: count, Success: true})
 		ba.executeUndoLoop(ctx, count)
 	}()
 }
@@ -158,5 +160,5 @@ func (ba *BuilderAgent) executeUndoLoop(ctx context.Context, count int) {
 		ba.bot.GetLocalWorldModel().SetSolid(int32(entry.X), int32(entry.Y), int32(entry.Z), false)
 		time.Sleep(150 * time.Millisecond)
 	}
-	ba.bot.SendSafeChat("Undo selesai!")
+	ba.bot.ReportActionStatus("", event.ActionStatus{Action: "undo", Success: true})
 }

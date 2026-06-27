@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"bedrock-ai/internal/bot/entity"
+	"bedrock-ai/internal/event"
+
 	"github.com/go-gl/mathgl/mgl32"
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
 	"github.com/sandertv/gophertunnel/minecraft/protocol/packet"
@@ -28,10 +30,12 @@ type Bot interface {
 	EquipItem(slot uint32) error
 	UnequipItem() error
 	SendChat(msg string)
+	ReportActionStatus(user string, status event.ActionStatus)
 	GetEntityRuntimeID() uint64
 	GetLocalWorldModel() entity.WorldModel
 	DropItem(name string, count int) error
 	GetBlockName(x, y, z int32) (string, bool)
+	FormatItemName(name string) string
 }
 
 type ResourceGatherer struct {
@@ -112,7 +116,11 @@ func (rg *ResourceGatherer) GatherWoodType(ctx context.Context, preferred string
 	defer rg.SetGathering(false)
 
 	if !rg.EnsureInventorySpace(ctx) {
-		rg.bot.SendChat("Inventory aku penuh banget, tolong kosongin dulu dong!")
+		rg.bot.ReportActionStatus("", event.ActionStatus{
+			Action:  "gather",
+			Success: false,
+			Error:   "inventory penuh",
+		})
 		return
 	}
 
@@ -124,7 +132,11 @@ func (rg *ResourceGatherer) GatherBlock(ctx context.Context, blockName string, t
 	defer rg.SetGathering(false)
 
 	if !rg.EnsureInventorySpace(ctx) {
-		rg.bot.SendChat("Inventory aku penuh banget, tolong kosongin dulu!")
+		rg.bot.ReportActionStatus("", event.ActionStatus{
+			Action:  "gather",
+			Success: false,
+			Error:   "inventory penuh",
+		})
 		return
 	}
 

@@ -106,54 +106,73 @@ func (tc *TickContext) updateLookDirection() {
 
 // applyEasedLook performs ease-out yaw/pitch interpolation toward the
 // resolved target, tuned to read as a human head movement rather than a
-// constant-rate servo. maxStep is taken from the caller's computed speeds so
-// large corrections (e.g. ladder turns) still snap quickly.
+// constant-rate servo.
+//
+// Natural-motion model:
+//  1. The HEAD eases toward the target first (lead) — a real player turns
+//     their eyes/head before their torso follows.
+//  2. The BODY (tc.Yaw) eases toward the head yaw (lag) — the torso catches
+//     up, producing a brief, organic strafe component while turning.
+//  3. A continuous organic drift (sum of incommensurate sines) is added to
+//     the head yaw and pitch every tick. This replaces the old deterministic
+//     tick-parity jitter and mimics breathing, micro-saccades and postural
+//     sway — the gaze is never mathematically frozen.
 func (tc *TickContext) applyEasedLook(wantsToMove bool, yawMax, pitchMax float32) {
-	// ease = fraction of remaining angle consumed per tick. Lower = softer,
-	// longer settle. Moving needs a touch more authority to face travel dir.
-	yawEase := float32(0.14)
-	pitchEase := float32(0.1)
-	yawMin := float32(0.18)
-	pitchMin := float32(0.12)
+	// --- Head (leads) -------------------------------------------------------
+	// Head eases toward the target faster than the body so it arrives first.
+	headEase := float32(0.20)
+	headMin := float32(0.25)
+	headCap := float32(12.0)
+	if tc.IsLadderActive {
+		headCap = 16.0
+	}
 	if wantsToMove {
-		yawEase = 0.2
-		yawMin = 0.35
+		headEase = 0.26
+		headMin = 0.45
+	}
+	if yawMax > headCap {
+		yawMax = headCap
 	}
 
-	// The caller's yawMax/pitchMax (25–60°/tick) are tuned for the old constant
-	// -speed interpolator and feel like a whip-pan with easing. Cap the per-tick
-	// step so even large turns stay smooth; ladder turns get a little more room.
-	yawCap := float32(9.0)
-	pitchCap := float32(6.0)
-	if tc.IsLadderActive {
-		yawCap = 14.0
-	}
-	if yawMax > yawCap {
-		yawMax = yawCap
-	}
+	pitchEase := float32(0.12)
+	pitchMin := float32(0.15)
+	pitchCap := float32(7.0)
 	if pitchMax > pitchCap {
 		pitchMax = pitchCap
 	}
 
-	tc.Yaw = EaseAngle(tc.Yaw, tc.TargetYaw, yawMin, yawMax, yawEase)
+	// Smoothly ease head toward target.
+	tc.HeadYaw = EaseAngle(tc.HeadYaw, tc.TargetYaw, headMin, yawMax, headEase)
 	tc.Pitch = EasePitch(tc.Pitch, tc.TargetPitch, pitchMin, pitchMax, pitchEase)
 
-	// Faint idle micro-jitter: only when essentially settled and not walking,
-	// so a stationary bot still has a living, breathing gaze instead of a
-	// frozen stare. Deterministic-ish via tick parity to avoid Math.rand churn.
-	if !wantsToMove {
-		yawDiff := angleDifference(tc.TargetYaw, tc.Yaw)
-		if math.Abs(float64(yawDiff)) < 0.6 {
-			switch tc.Tick % 11 {
-			case 0:
-				tc.Yaw = normalizeYaw(tc.Yaw + 0.12)
-			case 5:
-				tc.Yaw = normalizeYaw(tc.Yaw - 0.1)
-			case 8:
-				tc.Pitch = clampFloat32(tc.Pitch+0.08, -90, 90)
-			}
-		}
+	// --- Organic drift ------------------------------------------------------
+	// Continuous, non-repeating micro-motion via incommensurate sine
+	// frequencies. Amplitude is larger when idle (breathing / looking around)
+	// and nearly imperceptible when actively moving.
+	ampYaw := float32(0.35)
+	ampPitch := float32(0.45)
+	if wantsToMove {
+		ampYaw = 0.10
+		ampPitch = 0.12
 	}
+	dYaw, dPitch := organicLookDrift(tc.Tick, ampYaw, ampPitch)
+	tc.HeadYaw = normalizeYaw(tc.HeadYaw + dYaw)
+	tc.Pitch = clampFloat32(tc.Pitch+dPitch, -90, 90)
+
+	// --- Body (lags, follows head) -----------------------------------------
+	// Body yaw eases toward the head yaw with a softer rate, so the torso
+	// trails the head by a few degrees during a turn and settles after it.
+	bodyEase := float32(0.12)
+	bodyMin := float32(0.15)
+	bodyCap := float32(8.0)
+	if tc.IsLadderActive {
+		bodyCap = 14.0
+	}
+	if wantsToMove {
+		bodyEase = 0.18
+		bodyMin = 0.30
+	}
+	tc.Yaw = EaseAngle(tc.Yaw, tc.HeadYaw, bodyMin, bodyCap, bodyEase)
 }
 
 func (tc *TickContext) applyTrackedLookTarget() bool {

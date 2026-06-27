@@ -2,6 +2,8 @@ package common
 
 import (
 	"bedrock-ai/internal/bot/entity"
+	"bedrock-ai/internal/event"
+
 	"github.com/go-gl/mathgl/mgl32"
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
 	"github.com/sandertv/gophertunnel/minecraft/protocol/packet"
@@ -15,6 +17,7 @@ type BotInterface interface {
 	GetEntities() map[uint64]*entity.Info
 	GetLocalWorldModel() entity.WorldModel
 	SendSafeChat(msg string)
+	ReportActionStatus(user string, status event.ActionStatus)
 	WritePacket(pk packet.Packet) error
 	GetHeldItemSlot() uint32
 	EquipItem(slot uint32) error

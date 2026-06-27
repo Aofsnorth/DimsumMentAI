@@ -222,11 +222,17 @@ func TestAbs32_Zero(t *testing.T) {
 	}
 }
 
-func TestKey_Format(t *testing.T) {
+func TestKey_Pack(t *testing.T) {
 	t.Parallel()
-	got := key(1, 2, 3)
-	want := "1,2,3"
-	if got != want {
-		t.Errorf("key(1,2,3) = %q, want %q", got, want)
+	// packKey should produce unique values for different coordinates
+	k1 := packKey(1, 2, 3)
+	k2 := packKey(3, 2, 1)
+	if k1 == k2 {
+		t.Errorf("packKey(1,2,3) == packKey(3,2,1) = %d, expected different", k1)
+	}
+	// Same coordinates should produce same key
+	k3 := packKey(1, 2, 3)
+	if k1 != k3 {
+		t.Errorf("packKey(1,2,3) != packKey(1,2,3): %d vs %d", k1, k3)
 	}
 }

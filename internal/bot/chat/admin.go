@@ -6,6 +6,7 @@ import (
 
 	"bedrock-ai/internal/bot"
 	"bedrock-ai/internal/bot/action"
+	"bedrock-ai/internal/event"
 )
 
 // HandleAdminCommand executes special administrative actions prefixed with '!'
@@ -27,22 +28,44 @@ func HandleAdminCommand(b *bot.Bot, cmd string, user string) {
 		}
 	case "status":
 		hp, hunger, coords := b.GetStatusDetails()
-		b.SendSafeChat(fmt.Sprintf("[Admin Status] HP: %d/20, Hunger: %d/20, Coords: %s", hp, hunger, coords))
+		b.ReportActionStatus(user, event.ActionStatus{Action: "status", Item: fmt.Sprintf("HP:%d Hunger:%d Coords:%s", hp, hunger, coords), Success: true})
 	case "inv":
-		b.SendSafeChat(fmt.Sprintf("[Admin Inventory] %s", b.GetInventorySummary()))
+		b.ReportActionStatus(user, event.ActionStatus{Action: "inventory", Item: b.GetInventorySummary(), Success: true})
 	case "follow":
 		target := param
 		if target == "" {
 			target = user
 		}
 		b.FollowPlayer(target)
-		b.SendSafeChat(fmt.Sprintf("Following %s", target))
+		b.ReportActionStatus(user, event.ActionStatus{Action: "follow", Item: target, Success: true})
 	case "goto":
 		action.Execute(b, "goto", param, user)
-		b.SendSafeChat(fmt.Sprintf("Walking to %s", param))
+		b.ReportActionStatus(user, event.ActionStatus{Action: "goto", Item: param, Success: true})
 	case "stop":
 		b.Stop()
-		b.SendSafeChat("Stopped all movements")
+		if b.Planner != nil {
+			b.Planner.Cancel()
+		}
+		b.ReportActionStatus(user, event.ActionStatus{Action: "stop", Success: true})
+	case "todo":
+		if b.Planner != nil && b.Planner.TodoIsActive() {
+			summary := b.Planner.TodoRenderForChat()
+			if summary != "" {
+				b.ReportActionStatus(user, event.ActionStatus{Action: "todo", Item: summary, Success: true})
+			} else {
+				b.ReportActionStatus(user, event.ActionStatus{Action: "todo", Success: true, Error: "plan aktif tapi belum ada progress"})
+			}
+		} else {
+			b.ReportActionStatus(user, event.ActionStatus{Action: "todo", Success: true, Error: "gak ada plan yang aktif"})
+		}
+	case "cancelplan":
+		if b.Planner != nil && b.Planner.IsRunning() {
+			b.Planner.Cancel()
+			b.Planner.TodoClear()
+			b.ReportActionStatus(user, event.ActionStatus{Action: "cancelplan", Success: true})
+		} else {
+			b.ReportActionStatus(user, event.ActionStatus{Action: "cancelplan", Success: true, Error: "gak ada plan yang aktif"})
+		}
 	default:
 		b.Logger.Warn("Unknown admin command", "command", act)
 	}

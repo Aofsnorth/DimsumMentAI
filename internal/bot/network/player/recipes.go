@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"bedrock-ai/internal/bot"
+
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
 	"github.com/sandertv/gophertunnel/minecraft/protocol/packet"
 )
@@ -71,6 +72,7 @@ func handleCraftingData(b *bot.Bot, p *packet.CraftingData) {
 					Ingredients: recipe.Input,
 					Output:      outItem,
 					Block:       recipe.Block,
+					Shapeless:   true,
 				}
 			}
 		case *protocol.ShapedRecipe:
@@ -86,6 +88,9 @@ func handleCraftingData(b *bot.Bot, p *packet.CraftingData) {
 					Ingredients: recipe.Input,
 					Output:      outItem,
 					Block:       recipe.Block,
+					Shapeless:   false,
+					Width:       recipe.Width,
+					Height:      recipe.Height,
 				}
 			}
 		}

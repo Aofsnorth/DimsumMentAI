@@ -29,6 +29,7 @@ concurrency:
 env:
   GO_VERSION: "1.26"
   GOFLAGS: "-count=1"
+  COVERAGE_MIN: "0"
 
 jobs:
   # ---------------------------------------------------------------------------
@@ -101,6 +102,10 @@ jobs:
       # --- Computational sensor: architecture fitness ---
       - name: Run architecture fitness sensor
         run: go test -count=1 -v ./internal/harness/architecture/...
+
+      # --- Computational sensor: unified harness CLI ---
+      - name: Run harness CLI (all sensors & guides)
+        run: go run ./cmd/harness
 
       # --- Computational sensor: race detector ---
       - name: Run race detector

@@ -468,10 +468,13 @@ yang meregulasi codebase menuju kondisi yang diinginkan. Lihat
 **Sebelum menulis kode:**
 1. Jalankan `make harness` untuk memastikan baseline hijau sebelum mulai.
 2. Baca aturan dependency di `internal/harness/architecture/architecture.go`
-   (`DefaultRules`) — jangan membuat package leaf (ai, config, event) import
-   package yang lebih tinggi (bot, handler).
+   (`DefaultRules`) — jangan membuat package leaf (ai, config, event,
+   debuglog, servercompat) import package yang lebih tinggi (bot, handler,
+   connection, skin). Lihat layering di `docs/HARNESS_ENGINEERING.md`.
 3. Ikuti konfigurasi linter di `.golangci.yml` — itu adalah computational
    guide yang mencegah issue sebelum terjadi.
+4. Jalankan `go run ./cmd/harness -list` untuk melihat semua sensor & guide
+   terdaftar.
 
 **Saat menulis kode:**
 4. Setiap function pure-logic baru **wajib** punya unit test. Tulis test
@@ -505,12 +508,16 @@ yang meregulasi codebase menuju kondisi yang diinginkan. Lihat
 ### Quick Commands
 
 ```bash
-make help          # List semua target
-make harness       # Fast: fmt-check, vet, lint, build, test, arch
-make harness-full  # Full: + race detector + coverage
-make test          # Unit tests saja
-make lint          # golangci-lint saja
-make arch          # Architecture fitness saja
-make cover         # Coverage report
-make install-hooks # Install pre-commit hook
+make help              # List semua target
+make harness           # Fast: fmt, vet, lint, build, test, arch, harness-sensors
+make harness-full      # Full: + race detector + coverage + cover-check
+make test              # Unit tests saja
+make lint              # golangci-lint saja
+make arch              # Architecture fitness saja
+make harness-sensors   # Run unified harness CLI (all sensors & guides)
+make harness-json      # Harness CLI with JSON output
+make harness-list      # List all registered harness checks
+make cover             # Coverage report
+make cover-check       # Coverage with threshold enforcement (COVERAGE_MIN)
+make install-hooks     # Install pre-commit hook
 ```

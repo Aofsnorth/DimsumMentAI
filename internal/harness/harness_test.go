@@ -3,6 +3,7 @@ package harness
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"sync/atomic"
 	"testing"
 )
@@ -319,4 +320,64 @@ func stringContains(s, substr string) bool {
 		}
 	}
 	return false
+}
+
+// --- JSONReporter tests ---
+
+func TestJSONReporter(t *testing.T) {
+	t.Parallel()
+	var buf strings.Builder
+	reporter := NewJSONReporter(&buf)
+	result := Result{
+		SensorCount: 2,
+		GuideCount:  1,
+		Findings: []Finding{
+			{Check: "test.sensor", Category: CategoryMaintainability, Severity: SeverityWarning, Message: "watch out"},
+			{Check: "test.guide", Category: CategoryArchitecture, Severity: SeverityError, Message: "broken", File: "main.go", Line: 42},
+		},
+	}
+	if err := reporter.Report(result); err != nil {
+		t.Fatalf("Report error: %v", err)
+	}
+	output := buf.String()
+	if output == "" {
+		t.Fatal("JSONReporter should produce output")
+	}
+	if !strings.Contains(output, "test.sensor") {
+		t.Error("JSON output should contain sensor name")
+	}
+	if !strings.Contains(output, "test.guide") {
+		t.Error("JSON output should contain guide name")
+	}
+	if !strings.Contains(output, `"passed": false`) {
+		t.Error("JSON output should show passed=false for error findings")
+	}
+}
+
+func TestJSONReporter_PassedResult(t *testing.T) {
+	t.Parallel()
+	var buf strings.Builder
+	reporter := NewJSONReporter(&buf)
+	result := Result{
+		SensorCount: 1,
+		Findings:    []Finding{{Check: "ok", Severity: SeverityInfo, Message: "all good"}},
+	}
+	if err := reporter.Report(result); err != nil {
+		t.Fatalf("Report error: %v", err)
+	}
+	if !strings.Contains(buf.String(), `"passed": true`) {
+		t.Error("JSON output should show passed=true for info-only findings")
+	}
+}
+
+func TestJSONReporter_EmptyResult(t *testing.T) {
+	t.Parallel()
+	var buf strings.Builder
+	reporter := NewJSONReporter(&buf)
+	if err := reporter.Report(Result{}); err != nil {
+		t.Fatalf("Report error: %v", err)
+	}
+	if !strings.Contains(buf.String(), `"findings": []`) {
+		t.Error("JSON output should have empty findings array")
+	}
 }

@@ -68,21 +68,22 @@ func envVarForProvider(provider string) string {
 }
 
 // NewNvidiaClient constructs a client preconfigured for the NVIDIA NIM endpoint.
+// The API key is read from the NVIDIA_API_KEY environment variable.
 // Kept for backward compatibility with existing call sites.
-func NewNvidiaClient(apiKey, model string) *NvidiaClient {
-	return NewLLMClient("nvidia", apiKey, model, "")
+func NewNvidiaClient(model string) *NvidiaClient {
+	return NewLLMClient("nvidia", model, "")
 }
 
 // NewLLMClient constructs an OpenAI-compatible chat-completion client for the
-// given provider. baseURL may be empty for known providers (nvidia, minimax);
-// it is required for opengateway / openai_compatible.
-func NewLLMClient(provider, apiKey, model, baseURL string) *NvidiaClient {
+// given provider. The API key is sourced from the provider's conventional
+// environment variable (NVIDIA_API_KEY, MINIMAX_API_KEY, or OPENAI_API_KEY).
+// baseURL may be empty for known providers (nvidia, minimax); it is required
+// for opengateway / openai_compatible.
+func NewLLMClient(provider, model, baseURL string) *NvidiaClient {
 	if provider == "" {
 		provider = "nvidia"
 	}
-	if apiKey == "" {
-		apiKey = os.Getenv(envVarForProvider(provider))
-	}
+	apiKey := os.Getenv(envVarForProvider(provider))
 	if baseURL == "" {
 		baseURL = defaultBaseURL(provider)
 	}
@@ -272,4 +273,65 @@ func (nc *NvidiaClient) Ask(user, systemPrompt, message string) (string, error) 
 	nc.History.AddMessage(user, "assistant", parsed.CleanReply)
 
 	return reply, nil
+}
+
+// AskPlanner queries the LLM without storing conversation history. Used by
+// the planner's agentic loop for plan generation and step re-evaluation, so
+// internal planner messages don't pollute the player's chat context.
+func (nc *NvidiaClient) AskPlanner(systemPrompt, message string) (string, error) {
+	var rawMessages []Message
+	rawMessages = append(rawMessages, Message{Role: "system", Content: systemPrompt})
+	rawMessages = append(rawMessages, Message{Role: "user", Content: message})
+
+	messages := FixMessages(rawMessages)
+
+	reqBody := ChatCompletionRequest{
+		Model:       nc.model,
+		Messages:    messages,
+		Temperature: 0.3, // slightly lower for structured plan output
+		MaxTokens:   512,
+	}
+
+	bodyBytes, err := json.Marshal(reqBody)
+	if err != nil {
+		return "", fmt.Errorf("marshal request: %w", err)
+	}
+
+	url := nc.baseURL
+	if url == "" {
+		url = endpointNvidia
+	}
+
+	req, err := http.NewRequest("POST", url, bytes.NewBuffer(bodyBytes))
+	if err != nil {
+		return "", fmt.Errorf("create HTTP request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+nc.apiKey)
+
+	resp, err := nc.client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("HTTP request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	responseBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("read response body: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("HTTP %d from %s API: %s", resp.StatusCode, nc.provider, string(responseBody))
+	}
+
+	var completionResp ChatCompletionResponse
+	if err := json.Unmarshal(responseBody, &completionResp); err != nil {
+		return "", fmt.Errorf("unmarshal response: %w", err)
+	}
+
+	if len(completionResp.Choices) == 0 || completionResp.Choices[0].Message.Content == "" {
+		return "", fmt.Errorf("empty choices from %s API response", nc.provider)
+	}
+
+	return completionResp.Choices[0].Message.Content, nil
 }

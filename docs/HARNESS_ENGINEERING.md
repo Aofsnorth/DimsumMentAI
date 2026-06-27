@@ -85,20 +85,103 @@ Package ini mendefinisikan abstraksi SOLID untuk harness:
 ### Architecture Fitness: `internal/harness/architecture/`
 
 Sensor komputasional yang mem-parse import statements dan memvalidasi
-aturan dependency antar package:
+aturan dependency antar package. Aturan mengikuti layering berikut:
+
+```
+Layer 0 (leaves):  debuglog, servercompat, config, event, ai
+                     → tidak boleh import package internal lainnya
+Layer 1:           skin (→config), connection (→config, servercompat)
+Layer 2:           handler (→event, debuglog)
+Layer 3:           bot (→ai, config, event, handler, ...)
+Meta-layer:        harness (observes all, imports nothing in internal)
+```
 
 ```
 cmd/              → boleh import apapun di internal/
-internal/harness/ → TIDAK boleh import bot/ai/handler (meta-layer)
-internal/ai/      → TIDAK boleh import internal/bot (leaf service)
-internal/config/  → TIDAK boleh import bot/ai (leaf)
-internal/event/   → TIDAK boleh import bot/ai (leaf)
-internal/bot/     → boleh import ai, config, event, handler
+internal/harness/ → TIDAK boleh import bot/ai/handler/connection/skin/... (meta-layer)
+internal/ai/      → TIDAK boleh import bot/handler/connection/skin/... (leaf service)
+internal/config/  → TIDAK boleh import bot/ai/handler/connection/skin/... (leaf)
+internal/event/   → TIDAK boleh import bot/ai/handler/connection/skin/... (leaf)
+internal/debuglog → TIDAK boleh import package internal lainnya (leaf)
+internal/servercompat → TIDAK boleh import package internal lainnya (leaf)
+internal/skin/    → hanya boleh import config
+internal/connection/ → hanya boleh import config, servercompat
+internal/handler/ → hanya boleh import event, debuglog
+internal/bot/     → boleh import ai, config, event, handler, ...
 ```
 
 Setiap violation menghasilkan `Finding` dengan `Suggest` field yang berisi
 instruksi perbaikan — ini adalah "positive prompt injection" untuk
 self-correction oleh coding agent.
+
+### Maintainability Sensors
+
+#### File Size Sensor: `internal/harness/filesize/`
+
+Sensor komputasional yang mendeteksi file Go yang melebihi threshold
+baris atau bytes. File yang terlalu besar sulit dinavigasi, di-review,
+dan dites.
+
+- **Default thresholds:** 500 lines (non-test), 800 lines (test), 20KB bytes
+- **Severity:** Warning (tidak memblok build)
+- **Suggest:** "consider splitting {file} into smaller files"
+
+#### TODO Debt Sensor: `internal/harness/tododebt/`
+
+Sensor komputasional yang menscan marker `TODO`, `FIXME`, `HACK`, `XXX`,
+dan `BUG` di komentar Go. Memberikan visibility ke technical debt yang
+terakumulasi tanpa memblok build.
+
+- **Severity:** Info (hanya pelaporan)
+- **MaxFindings:** 100 (default, untuk mencegah flooding output)
+- **Suggest:** "track this {marker} in your issue tracker or resolve it"
+
+#### Cyclomatic Complexity Sensor: `internal/harness/complexity/`
+
+Sensor komputasional yang mengukur cyclomatic complexity (McCabe) dari
+setiap function Go menggunakan `go/ast` parser. Function dengan complexity
+tinggi berkorelasi dengan bug dan sulit di-test.
+
+- **Default threshold:** 15
+- **Severity:** Warning (tidak memblok build)
+- **Decision points dihitung:** if, for, range, switch case, &&, ||
+- **Suggest:** "refactor {function} by extracting helper functions..."
+
+### Maintainability Guides
+
+#### License Header Guide: `internal/harness/license/`
+
+Guide komputasional (feedforward) yang memverifikasi setiap file Go
+(non-test) memiliki comment block sebelum deklarasi package. Memastikan
+konsistensi licensing dan dokumentasi package.
+
+- **Severity:** Warning
+- **SkipTestFiles:** true (default)
+- **RequiredKeywords:** configurable (default: hanya cek keberadaan comment block)
+- **Suggest:** "add a package doc comment or license header..."
+
+### Reporters
+
+| Reporter | Output | Use Case |
+|----------|--------|----------|
+| `ConsoleReporter` | Human-readable text | Local development, terminal |
+| `JSONReporter` | Structured JSON | CI integration, dashboards, SARIF conversion |
+| `NullReporter` | None | Testing, programmatic inspection of Result |
+
+### Unified Harness CLI: `cmd/harness/`
+
+CLI entry point yang menggabungkan semua sensor dan guide ke dalam Runner,
+mengeksekusi secara concurrent, dan melaporkan hasil.
+
+```bash
+go run ./cmd/harness              # run all checks, text output
+go run ./cmd/harness -json        # JSON output for CI
+go run ./cmd/harness -list        # list all registered checks
+go run ./cmd/harness -sensor arch # run only architecture sensor
+go run ./cmd/harness -guide lic   # run only license guide
+```
+
+Exit codes: 0 = pass, 1 = error-severity findings, 2 = fatal execution error.
 
 ---
 
@@ -107,13 +190,17 @@ self-correction oleh coding agent.
 ### Quick Reference
 
 ```bash
-make help          # List semua target
-make harness       # Fast checks: fmt-check, vet, lint, build, test, arch
-make harness-full  # Full checks: + race detector + coverage
-make test          # Unit tests saja
-make lint          # golangci-lint saja
-make arch          # Architecture fitness saja
-make cover         # Coverage report
+make help              # List semua target
+make harness           # Fast: fmt, vet, lint, build, test, arch, harness-sensors
+make harness-full      # Full: + race detector + coverage + cover-check
+make test              # Unit tests saja
+make lint              # golangci-lint saja
+make arch              # Architecture fitness saja
+make harness-sensors   # Run unified harness CLI (all sensors & guides)
+make harness-json      # Harness CLI with JSON output
+make harness-list      # List all registered harness checks
+make cover             # Coverage report
+make cover-check       # Coverage with threshold enforcement (COVERAGE_MIN)
 ```
 
 ### Pre-commit Hook
@@ -130,7 +217,7 @@ package yang berubah — sebelum commit dibuat.
 GitHub Actions workflow (`.github/workflows/harness.yml`) menjalankan:
 
 1. **Guides job:** gofmt check, go vet, golangci-lint
-2. **Sensors job:** build, unit tests, architecture fitness, race detector, coverage
+2. **Sensors job:** build, unit tests, architecture fitness, harness CLI, race detector, coverage
 3. **Summary gate:** gagal jika salah satu job gagal
 
 ---
@@ -186,8 +273,12 @@ result, _ := runner.Run()
 | `internal/bot/pathfinder` | `astar_test.go` | A* pathfinding, fallback, reconstructPath, target reachability |
 | `internal/config` | `loader_test.go` | YAML loading, defaults, validation, error cases |
 | `internal/event` | `bus_test.go` | Pub/sub, multiple subscribers, event type isolation, concurrency |
-| `internal/harness` | `harness_test.go` | Runner orchestration, finding aggregation, reporter |
-| `internal/harness/architecture` | `architecture_test.go` | Dependency rule enforcement, file filtering, custom rules |
+| `internal/harness` | `harness_test.go` | Runner orchestration, finding aggregation, ConsoleReporter, JSONReporter, NullReporter |
+| `internal/harness/architecture` | `architecture_test.go` | Dependency rule enforcement, file filtering, custom rules, all layer rules |
+| `internal/harness/filesize` | `filesize_test.go` | Line/byte thresholds, test file leniency, non-Go filtering, empty dir |
+| `internal/harness/tododebt` | `tododebt_test.go` | TODO/FIXME/HACK detection, non-comment filtering, max findings limit |
+| `internal/harness/complexity` | `complexity_test.go` | Cyclomatic complexity detection, binary ops, test file ignoring |
+| `internal/harness/license` | `license_test.go` | Missing header detection, required keywords, test file skipping |
 
 ---
 

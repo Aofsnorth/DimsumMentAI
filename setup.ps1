@@ -69,10 +69,11 @@ skin:
   arm_size: "slim" # "slim" (Alex) or "wide" (Steve)
 
 # --- AI & LLM Settings ---
+# API key is loaded from .env (NVIDIA_API_KEY / MINIMAX_API_KEY / OPENAI_API_KEY).
+# Copy .env.example to .env and fill in your key. See README.md for details.
 ai:
-  provider: "nvidia" # "nvidia" or "none"
+  provider: "nvidia" # "nvidia", "minimax", "opengateway", "openai_compatible", or "none"
   model: "openai/gpt-oss-120b"
-  api_key: "" # Leave empty to load from NVIDIA_API_KEY environment variable
   main_player: ".OnyxStygian" # Primary player/owner username
   respond_only_to_linked_player: false
   respond_only_when_tagged: false # true = only respond when tagged/named in chat (e.g. Luna or @Luna)
@@ -84,13 +85,27 @@ ai:
     Write-Host "Existing configuration file found at $configPath" -ForegroundColor Gray
 }
 
+# Ensure a .env file exists so the bot can find its API key.
+$envPath = ".env"
+if (-Not (Test-Path $envPath)) {
+    if (Test-Path ".env.example") {
+        Copy-Item ".env.example" $envPath
+        Write-Host "Created .env from .env.example - edit it and paste your API key." -ForegroundColor Yellow
+    } else {
+        Write-Host "WARNING: no .env or .env.example found. API key must be set as a shell env var." -ForegroundColor Red
+    }
+} else {
+    Write-Host "Existing .env file found at $envPath" -ForegroundColor Gray
+}
+
 Write-Host ""
 Write-Host "==================================================" -ForegroundColor Green
 Write-Host "             SETUP COMPLETED SUCCESSFULLY         " -ForegroundColor Green
 Write-Host "==================================================" -ForegroundColor Green
 Write-Host ""
 Write-Host "To run your bot:" -ForegroundColor Yellow
-Write-Host "  1. Set your NVIDIA API Key in environment (optional):" -ForegroundColor Gray
+Write-Host "  1. Put your API key in .env (e.g. NVIDIA_API_KEY=nvapi-...)" -ForegroundColor Gray
+Write-Host "     Alternatively set it in your shell:" -ForegroundColor Gray
 Write-Host "     `$env:NVIDIA_API_KEY = 'your-key-here'" -ForegroundColor Gray
 Write-Host "  2. Start the bot:" -ForegroundColor Gray
 Write-Host "     .\bot.exe" -ForegroundColor Gray

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"bedrock-ai/internal/bot/pathfinder"
+
 	"github.com/go-gl/mathgl/mgl32"
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
 )
@@ -152,44 +153,63 @@ func (tc *TickContext) performActiveSteering() {
 					tc.B.LastTickPos = tc.CurrPos
 				}
 
-				if tc.B.TicksStuck >= 20 {
+				if tc.B.TicksStuck >= 12 {
 					tc.B.TicksStuck = 0
 					tc.B.ConsecutiveStuckCount++
-					tc.B.Logger.Debug("Stuck detected, recalculating path", "consecutive_count", tc.B.ConsecutiveStuckCount, "hasPath", tc.HasPath)
+					tc.B.Logger.Debug("Stuck detected", "consecutive_count", tc.B.ConsecutiveStuckCount, "hasPath", tc.HasPath)
 
-					// On the SECOND consecutive stuck, try breaking whatever is
-					// in front of the bot at head height. First stuck just
-					// retries pathing; if a wall really is blocking us we'll
-					// arrive here again and break through.
-					if tc.B.ConsecutiveStuckCount >= 2 && tc.HasPath && tc.B.PathIndex < len(tc.B.CurrentPath) {
+					// First stuck: try a jump to unstick before expensive recalc.
+					// Many "stuck" situations are just the bot needing to hop up
+					// a block that the path expects but the physics missed.
+					needRecalc := true
+					if tc.B.ConsecutiveStuckCount == 1 && tc.HasPath && tc.B.PathIndex < len(tc.B.CurrentPath) {
 						node := tc.B.CurrentPath[tc.B.PathIndex]
-						obs := protocol.BlockPos{node.X, node.Y, node.Z}
-						tc.B.Mu.Unlock()
-						tc.B.BreakObstacleAt(obs)
-						// Also try the block above (head height) in case the
-						// floor block is fine but a ceiling overhang is.
-						tc.B.BreakObstacleAt(protocol.BlockPos{node.X, node.Y + 1, node.Z})
-						tc.B.Mu.Lock()
-					}
-
-					if tc.HasPath && tc.B.PathIndex < len(tc.B.CurrentPath) {
-						node := tc.B.CurrentPath[tc.B.PathIndex]
-						if node.Y == int32(math.Floor(float64(tc.CurrPos.Y()))) {
-							tc.B.WorldModel.SetTempSolid(node.X, node.Y, node.Z, 5*time.Second)
+						baseY := int32(math.Floor(float64(tc.CurrPos.Y() + 0.1)))
+						if node.Y >= baseY {
+							tc.B.Mu.Unlock()
+							tc.ShouldJump = true
+							tc.JumpReason = "Stuck-recovery jump"
+							tc.B.Logger.Debug("Stuck-recovery jump triggered", "node_y", node.Y, "base_y", baseY)
+							tc.B.Mu.Lock()
+							needRecalc = false
 						}
-						tc.B.Mu.Unlock()
-						RecalculatePath(tc.B)
-						tc.B.Mu.Lock()
-					} else {
-						tc.B.Mu.Unlock()
-						RecalculatePath(tc.B)
-						tc.B.Mu.Lock()
 					}
 
-					if tc.B.ConsecutiveStuckCount >= 3 {
-						tc.B.Logger.Warn("Multiple stuck detections, attempting direct movement fallback", "consecutive_count", tc.B.ConsecutiveStuckCount)
-						tc.B.CurrentPath = nil
-						tc.B.ConsecutiveStuckCount = 0
+					if needRecalc {
+						// On the SECOND consecutive stuck, try breaking whatever is
+						// in front of the bot at head height. First stuck just
+						// retries pathing; if a wall really is blocking us we'll
+						// arrive here again and break through.
+						if tc.B.ConsecutiveStuckCount >= 2 && tc.HasPath && tc.B.PathIndex < len(tc.B.CurrentPath) {
+							node := tc.B.CurrentPath[tc.B.PathIndex]
+							obs := protocol.BlockPos{node.X, node.Y, node.Z}
+							tc.B.Mu.Unlock()
+							tc.B.BreakObstacleAt(obs)
+							// Also try the block above (head height) in case the
+							// floor block is fine but a ceiling overhang is.
+							tc.B.BreakObstacleAt(protocol.BlockPos{node.X, node.Y + 1, node.Z})
+							tc.B.Mu.Lock()
+						}
+
+						if tc.HasPath && tc.B.PathIndex < len(tc.B.CurrentPath) {
+							node := tc.B.CurrentPath[tc.B.PathIndex]
+							if node.Y == int32(math.Floor(float64(tc.CurrPos.Y()))) {
+								tc.B.WorldModel.SetTempSolid(node.X, node.Y, node.Z, 5*time.Second)
+							}
+							tc.B.Mu.Unlock()
+							RecalculatePath(tc.B)
+							tc.B.Mu.Lock()
+						} else {
+							tc.B.Mu.Unlock()
+							RecalculatePath(tc.B)
+							tc.B.Mu.Lock()
+						}
+
+						if tc.B.ConsecutiveStuckCount >= 3 {
+							tc.B.Logger.Warn("Multiple stuck detections, attempting direct movement fallback", "consecutive_count", tc.B.ConsecutiveStuckCount)
+							tc.B.CurrentPath = nil
+							tc.B.ConsecutiveStuckCount = 0
+						}
 					}
 				}
 				tc.B.Mu.Unlock()

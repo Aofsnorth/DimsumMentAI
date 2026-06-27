@@ -7,6 +7,8 @@ import (
 
 	"bedrock-ai/internal/bot/building/common"
 	"bedrock-ai/internal/bot/building/house"
+	"bedrock-ai/internal/event"
+
 	"github.com/go-gl/mathgl/mgl32"
 )
 
@@ -65,13 +67,13 @@ func (ba *BuilderAgent) generateFallbackHouse(request string, bx, by, bz int) []
 	var blocksToPlace []common.BlockEntry
 	if strings.Contains(strings.ToLower(request), "mewah") || strings.Contains(strings.ToLower(request), "super") {
 		blocksToPlace = house.GenerateSuperModern()
-		ba.bot.SendSafeChat("Aku buatin Villa Quartz Super Modern yang mewah ya!")
+		ba.bot.ReportActionStatus("", event.ActionStatus{Action: "build", Item: "super_modern_villa", Success: true})
 	} else if strings.Contains(strings.ToLower(request), "modern") {
 		blocksToPlace = house.GenerateModern()
-		ba.bot.SendSafeChat("Aku buatin rumah modern dari concrete ya!")
+		ba.bot.ReportActionStatus("", event.ActionStatus{Action: "build", Item: "modern_house", Success: true})
 	} else {
 		blocksToPlace = house.GenerateMinimalist()
-		ba.bot.SendSafeChat("Aku buatin rumah kayu minimalis aja ya!")
+		ba.bot.ReportActionStatus("", event.ActionStatus{Action: "build", Item: "minimalist_house", Success: true})
 	}
 
 	for i := range blocksToPlace {
@@ -83,8 +85,8 @@ func (ba *BuilderAgent) generateFallbackHouse(request string, bx, by, bz int) []
 }
 
 func (ba *BuilderAgent) generateAIBlueprint(user, request string, available []common.BuildItem, bx, by, bz int) []common.BlockEntry {
-	ba.bot.SendSafeChat("Aku rancang blueprint custom pake AI dulu ya...")
-	
+	ba.bot.ReportActionStatus("", event.ActionStatus{Action: "build", Item: "custom_blueprint", Success: true})
+
 	analysisCtx := map[string]interface{}{
 		"materials":   ba.getMaterialsSummary(available),
 		"totalBlocks": 150,

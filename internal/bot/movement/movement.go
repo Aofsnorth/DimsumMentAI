@@ -7,6 +7,7 @@ import (
 
 	"bedrock-ai/internal/bot"
 	"bedrock-ai/internal/debuglog"
+
 	"github.com/go-gl/mathgl/mgl32"
 	"github.com/sandertv/gophertunnel/minecraft"
 )
@@ -20,6 +21,7 @@ type TickContext struct {
 	TPos                mgl32.Vec3
 	Yaw                 float32
 	Pitch               float32
+	HeadYaw             float32
 	VelY                float32
 	FeetX, FeetY, FeetZ int32
 	IsLadderActive      bool
@@ -55,7 +57,7 @@ func SendInputLoop(ctx context.Context, b *bot.Bot, gd minecraft.GameData) {
 	b.Mu.Lock()
 	initPos := b.Pos
 	b.Mu.Unlock()
-	
+
 	var lastPredictedY float32 = initPos.Y()
 	prevPos := initPos
 
@@ -83,6 +85,7 @@ func SendInputLoop(ctx context.Context, b *bot.Bot, gd minecraft.GameData) {
 			tc.TPos = b.TargetPos
 			tc.Yaw = b.Yaw
 			tc.Pitch = b.Pitch
+			tc.HeadYaw = b.HeadYaw
 			tc.VelY = b.VelY
 			b.Mu.Unlock()
 

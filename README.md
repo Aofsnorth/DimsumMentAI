@@ -80,8 +80,14 @@ Minecraft Bedrock AI/
 1. Open the [configs/bot.yaml](configs/bot.yaml) file:
    * **`server`**: Specify your Minecraft server's host and port. Set `offline: true` if your local server does not have Xbox Live authentication enabled.
    * **`bot`**: Set the bot's in-game display name.
-   * **`ai`**: Insert your Nvidia API key (`api_key`) and specify your main player name (`main_player`).
-2. If you prefer to keep keys out of the config files, define the key in your environment variables:
+   * **`ai`**: Set `provider`, `model`, and `main_player`. API keys are **not** stored in the YAML — they live in environment variables (see step 2).
+2. Provide your API key via a `.env` file (recommended) or a shell environment variable. The config loader auto-loads `.env` from the project root on startup; existing shell env vars always take precedence.
+   ```bash
+   # Copy the template and fill in your key
+   cp .env.example .env
+   # then edit .env: NVIDIA_API_KEY=nvapi-...
+   ```
+   Or set it directly in your shell:
    ```bash
    # Windows PowerShell
    $env:NVIDIA_API_KEY="your-api-key-here"
@@ -89,6 +95,7 @@ Minecraft Bedrock AI/
    # Linux/macOS
    export NVIDIA_API_KEY="your-api-key-here"
    ```
+   The env var name depends on the `ai.provider` setting: `NVIDIA_API_KEY` (nvidia), `MINIMAX_API_KEY` (minimax), or `OPENAI_API_KEY` (opengateway / openai_compatible).
 
 ### Running the Bot
 Run the compiled binary directly or execute via Go:

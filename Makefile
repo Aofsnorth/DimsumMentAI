@@ -26,6 +26,10 @@ GOFLAGS     := -count=1
 TEST_PKGS   := ./internal/...
 BUILD_PKGS  := ./cmd/... ./internal/...
 
+# Coverage threshold (0–100). The harness fails if total coverage falls
+# below this percentage. Set to 0 to disable the gate.
+COVERAGE_MIN ?= 0
+
 # Colors for output (disabled on Windows CI).
 ifeq ($(OS),Windows_NT)
 	CLR_PASS :=
@@ -119,6 +123,22 @@ cover: ## Run tests with coverage report
 	@$(GO) tool cover -func=coverage.out | tail -1
 	@echo "  Full report: $(GO) tool cover -html=coverage.out"
 
+.PHONY: cover-check
+cover-check: ## Run tests with coverage and enforce minimum threshold (COVERAGE_MIN)
+	@echo "$(CLR_INFO)→ coverage check (min $(COVERAGE_MIN)%)$(CLR_RESET)"
+	@$(GO) test $(GOFLAGS) -coverprofile=coverage.out $(TEST_PKGS) 2>/dev/null
+	@total=$$($(GO) tool cover -func=coverage.out | tail -1 | grep -oE '[0-9]+\.[0-9]+' | head -1); \
+	if [ -z "$$total" ]; then \
+		echo "$(CLR_FAIL)✗ Could not parse coverage$(CLR_RESET)"; \
+		exit 1; \
+	fi; \
+	echo "  Coverage: $$total%"; \
+	if [ "$(COVERAGE_MIN)" -gt 0 ] && [ $$(echo "$$total < $(COVERAGE_MIN)" | bc -l 2>/dev/null || echo 0) -eq 1 ]; then \
+		echo "$(CLR_FAIL)✗ Coverage $$total% is below minimum $(COVERAGE_MIN)%$(CLR_RESET)"; \
+		exit 1; \
+	fi; \
+	echo "$(CLR_PASS)✓ Coverage threshold met$(CLR_RESET)"
+
 .PHONY: cover-html
 cover-html: ## Generate HTML coverage report
 	@$(GO) test $(GOFLAGS) -coverprofile=coverage.out $(TEST_PKGS)
@@ -131,17 +151,30 @@ arch: ## Run architecture fitness sensor (module boundary checks)
 	@$(GO) test $(GOFLAGS) -run TestArchitecture ./internal/harness/architecture/... -v 2>/dev/null || \
 		$(GO) test $(GOFLAGS) ./internal/harness/architecture/...
 
+.PHONY: harness-sensors
+harness-sensors: ## Run the unified harness CLI (all sensors & guides)
+	@echo "$(CLR_INFO)→ harness sensors & guides$(CLR_RESET)"
+	@$(GO) run ./cmd/harness
+
+.PHONY: harness-json
+harness-json: ## Run harness CLI with JSON output
+	@$(GO) run ./cmd/harness -json
+
+.PHONY: harness-list
+harness-list: ## List all registered harness checks
+	@$(GO) run ./cmd/harness -list
+
 # =============================================================================
 # Aggregate targets — run the full harness
 # =============================================================================
 
 .PHONY: harness
-harness: fmt-check vet lint build test arch ## Run fast harness checks (guides + sensors)
+harness: fmt-check vet lint build test arch harness-sensors ## Run fast harness checks (guides + sensors)
 	@echo ""
 	@echo "$(CLR_PASS)✓ Harness PASSED — all fast checks green$(CLR_RESET)"
 
 .PHONY: harness-full
-harness-full: fmt-check vet lint build test race cover arch ## Run full harness including race detector and coverage
+harness-full: fmt-check vet lint build test race cover arch harness-sensors cover-check ## Run full harness including race detector and coverage
 	@echo ""
 	@echo "$(CLR_PASS)✓ Full harness PASSED — all checks green$(CLR_RESET)"
 

@@ -5,10 +5,30 @@ import (
 	"os"
 	"strings"
 
+	"github.com/joho/godotenv"
 	"gopkg.in/yaml.v3"
 )
 
+// LoadEnv attempts to load a .env file from the current working directory.
+// A missing .env file is not an error — environment variables may already be
+// set in the shell. Loaded variables do NOT overwrite existing env vars
+// (godotenv default), so explicit shell exports always win.
+func LoadEnv() error {
+	if err := godotenv.Load(); err != nil {
+		// Only treat read errors (e.g. malformed file) as fatal; a missing
+		// .env is fine when the vars are already in the environment.
+		if _, ok := err.(*os.PathError); !ok {
+			return fmt.Errorf("load .env: %w", err)
+		}
+	}
+	return nil
+}
+
 func Load(path string) (*Config, error) {
+	// Load .env from the working directory so API keys and other secrets can
+	// live outside the YAML. Existing env vars take precedence over .env.
+	_ = LoadEnv()
+
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("read config file: %w", err)
@@ -48,6 +68,11 @@ func applyDefaults(cfg *Config) {
 	if cfg.Chat.MaxMessagesPerWindow <= 0 {
 		cfg.Chat.MaxMessagesPerWindow = 100
 	}
+	// Proactive conversation: disabled by default (interval=0). When
+	// enabled, default chance is 0.3 (30% of ticks actually query the LLM).
+	if cfg.AI.ProactiveChance <= 0 && cfg.AI.ProactiveIntervalSec > 0 {
+		cfg.AI.ProactiveChance = 0.3
+	}
 }
 
 func validate(cfg *Config) error {
@@ -75,22 +100,22 @@ func validate(cfg *Config) error {
 	case "", "none":
 		// AI disabled
 	case "nvidia":
-		if cfg.AI.ApiKey == "" && os.Getenv("NVIDIA_API_KEY") == "" {
-			return fmt.Errorf("ai.api_key or NVIDIA_API_KEY environment variable is required when provider is 'nvidia'")
+		if os.Getenv("NVIDIA_API_KEY") == "" {
+			return fmt.Errorf("NVIDIA_API_KEY environment variable is required when provider is 'nvidia'")
 		}
 		if cfg.AI.Model == "" {
 			return fmt.Errorf("ai.model is required when provider is 'nvidia'")
 		}
 	case "minimax":
-		if cfg.AI.ApiKey == "" && os.Getenv("MINIMAX_API_KEY") == "" {
-			return fmt.Errorf("ai.api_key or MINIMAX_API_KEY environment variable is required when provider is 'minimax'")
+		if os.Getenv("MINIMAX_API_KEY") == "" {
+			return fmt.Errorf("MINIMAX_API_KEY environment variable is required when provider is 'minimax'")
 		}
 		if cfg.AI.Model == "" {
 			return fmt.Errorf("ai.model is required when provider is 'minimax'")
 		}
 	case "opengateway", "openai_compatible":
-		if cfg.AI.ApiKey == "" && os.Getenv("OPENAI_API_KEY") == "" {
-			return fmt.Errorf("ai.api_key or OPENAI_API_KEY environment variable is required when provider is '%s'", cfg.AI.Provider)
+		if os.Getenv("OPENAI_API_KEY") == "" {
+			return fmt.Errorf("OPENAI_API_KEY environment variable is required when provider is '%s'", cfg.AI.Provider)
 		}
 		if cfg.AI.BaseURL == "" {
 			return fmt.Errorf("ai.base_url is required when provider is '%s'", cfg.AI.Provider)

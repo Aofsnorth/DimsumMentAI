@@ -15,6 +15,11 @@
 //	internal/handler/    → may import internal/event, internal/config
 //	internal/bot/action/ → may import internal/bot (action dispatch)
 //
+// Expanded rules also enforce that leaf packages (debuglog, servercompat,
+// config, event) do not depend on higher-level packages, and that
+// mid-layer packages (skin, connection, handler) only depend on their
+// designated lower layers.
+//
 // Violations produce error-severity findings with a suggested fix so that
 // coding agents can self-correct.
 package architecture
@@ -41,17 +46,96 @@ type DependencyRule struct {
 
 // DefaultRules returns the dependency rules that encode the project's
 // intended layering. These can be extended or overridden by callers.
+//
+// The layering is:
+//
+//	Layer 0 (leaves):     debuglog, servercompat, config, event, ai
+//	Layer 1:              skin (→config), connection (→config, servercompat)
+//	Layer 2:              handler (→event, debuglog)
+//	Layer 3:              bot (→ai, config, event, handler, ...)
+//	Meta-layer:           harness (observes all, imports nothing in internal)
 func DefaultRules(moduleName string) []DependencyRule {
 	mi := moduleName + "/internal/"
 	return []DependencyRule{
+		// --- Meta-layer: harness must not import any application package ---
 		{mi + "harness", mi + "bot", "harness must not depend on bot — it is the meta-layer"},
 		{mi + "harness", mi + "ai", "harness must not depend on ai — it is the meta-layer"},
 		{mi + "harness", mi + "handler", "harness must not depend on handler — it is the meta-layer"},
+		{mi + "harness", mi + "connection", "harness must not depend on connection — it is the meta-layer"},
+		{mi + "harness", mi + "skin", "harness must not depend on skin — it is the meta-layer"},
+		{mi + "harness", mi + "debuglog", "harness must not depend on debuglog — it is the meta-layer"},
+		{mi + "harness", mi + "servercompat", "harness must not depend on servercompat — it is the meta-layer"},
+		{mi + "harness", mi + "config", "harness must not depend on config — it is the meta-layer"},
+		{mi + "harness", mi + "event", "harness must not depend on event — it is the meta-layer"},
+
+		// --- Layer 0 leaves: no internal deps allowed (except their own subpackages) ---
 		{mi + "ai", mi + "bot", "ai must not depend on bot — AI is a leaf service layer"},
+		{mi + "ai", mi + "handler", "ai must not depend on handler — AI is a leaf service layer"},
+		{mi + "ai", mi + "connection", "ai must not depend on connection — AI is a leaf service layer"},
+		{mi + "ai", mi + "skin", "ai must not depend on skin — AI is a leaf service layer"},
+		{mi + "ai", mi + "debuglog", "ai must not depend on debuglog — AI is a leaf service layer"},
+		{mi + "ai", mi + "servercompat", "ai must not depend on servercompat — AI is a leaf service layer"},
+
 		{mi + "config", mi + "bot", "config must not depend on bot — config is a leaf"},
 		{mi + "config", mi + "ai", "config must not depend on ai — config is a leaf"},
+		{mi + "config", mi + "handler", "config must not depend on handler — config is a leaf"},
+		{mi + "config", mi + "connection", "config must not depend on connection — config is a leaf"},
+		{mi + "config", mi + "skin", "config must not depend on skin — config is a leaf"},
+		{mi + "config", mi + "event", "config must not depend on event — config is a leaf"},
+		{mi + "config", mi + "debuglog", "config must not depend on debuglog — config is a leaf"},
+		{mi + "config", mi + "servercompat", "config must not depend on servercompat — config is a leaf"},
+
 		{mi + "event", mi + "bot", "event must not depend on bot — event is a leaf"},
 		{mi + "event", mi + "ai", "event must not depend on ai — event is a leaf"},
+		{mi + "event", mi + "handler", "event must not depend on handler — event is a leaf"},
+		{mi + "event", mi + "connection", "event must not depend on connection — event is a leaf"},
+		{mi + "event", mi + "skin", "event must not depend on skin — event is a leaf"},
+		{mi + "event", mi + "config", "event must not depend on config — event is a leaf"},
+		{mi + "event", mi + "debuglog", "event must not depend on debuglog — event is a leaf"},
+		{mi + "event", mi + "servercompat", "event must not depend on servercompat — event is a leaf"},
+
+		{mi + "debuglog", mi + "bot", "debuglog must not depend on bot — debuglog is a leaf"},
+		{mi + "debuglog", mi + "ai", "debuglog must not depend on ai — debuglog is a leaf"},
+		{mi + "debuglog", mi + "handler", "debuglog must not depend on handler — debuglog is a leaf"},
+		{mi + "debuglog", mi + "connection", "debuglog must not depend on connection — debuglog is a leaf"},
+		{mi + "debuglog", mi + "config", "debuglog must not depend on config — debuglog is a leaf"},
+		{mi + "debuglog", mi + "event", "debuglog must not depend on event — debuglog is a leaf"},
+		{mi + "debuglog", mi + "skin", "debuglog must not depend on skin — debuglog is a leaf"},
+		{mi + "debuglog", mi + "servercompat", "debuglog must not depend on servercompat — debuglog is a leaf"},
+
+		{mi + "servercompat", mi + "bot", "servercompat must not depend on bot — servercompat is a leaf"},
+		{mi + "servercompat", mi + "ai", "servercompat must not depend on ai — servercompat is a leaf"},
+		{mi + "servercompat", mi + "handler", "servercompat must not depend on handler — servercompat is a leaf"},
+		{mi + "servercompat", mi + "connection", "servercompat must not depend on connection — servercompat is a leaf"},
+		{mi + "servercompat", mi + "config", "servercompat must not depend on config — servercompat is a leaf"},
+		{mi + "servercompat", mi + "event", "servercompat must not depend on event — servercompat is a leaf"},
+		{mi + "servercompat", mi + "skin", "servercompat must not depend on skin — servercompat is a leaf"},
+		{mi + "servercompat", mi + "debuglog", "servercompat must not depend on debuglog — servercompat is a leaf"},
+
+		// --- Layer 1: skin may only depend on config ---
+		{mi + "skin", mi + "bot", "skin must not depend on bot — skin is a low-level utility"},
+		{mi + "skin", mi + "ai", "skin must not depend on ai — skin is a low-level utility"},
+		{mi + "skin", mi + "handler", "skin must not depend on handler — skin is a low-level utility"},
+		{mi + "skin", mi + "connection", "skin must not depend on connection — skin is a low-level utility"},
+		{mi + "skin", mi + "event", "skin must not depend on event — skin is a low-level utility"},
+		{mi + "skin", mi + "debuglog", "skin must not depend on debuglog — skin is a low-level utility"},
+		{mi + "skin", mi + "servercompat", "skin must not depend on servercompat — skin is a low-level utility"},
+
+		// --- Layer 1: connection may only depend on config, servercompat ---
+		{mi + "connection", mi + "bot", "connection must not depend on bot — connection is a low-level layer"},
+		{mi + "connection", mi + "ai", "connection must not depend on ai — connection is a low-level layer"},
+		{mi + "connection", mi + "handler", "connection must not depend on handler — connection is a low-level layer"},
+		{mi + "connection", mi + "event", "connection must not depend on event — connection is a low-level layer"},
+		{mi + "connection", mi + "skin", "connection must not depend on skin — connection is a low-level layer"},
+		{mi + "connection", mi + "debuglog", "connection must not depend on debuglog — connection is a low-level layer"},
+
+		// --- Layer 2: handler may only depend on event, debuglog ---
+		{mi + "handler", mi + "bot", "handler must not depend on bot — handler is a mid-level layer"},
+		{mi + "handler", mi + "ai", "handler must not depend on ai — handler is a mid-level layer"},
+		{mi + "handler", mi + "connection", "handler must not depend on connection — handler is a mid-level layer"},
+		{mi + "handler", mi + "skin", "handler must not depend on skin — handler is a mid-level layer"},
+		{mi + "handler", mi + "config", "handler must not depend on config — handler is a mid-level layer"},
+		{mi + "handler", mi + "servercompat", "handler must not depend on servercompat — handler is a mid-level layer"},
 	}
 }
 

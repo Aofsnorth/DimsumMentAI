@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"bedrock-ai/internal/bot/entity"
+	"bedrock-ai/internal/event"
 
 	"github.com/go-gl/mathgl/mgl32"
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
@@ -29,6 +30,7 @@ type Bot interface {
 	GetItemNames() map[int32]string
 	EquipItem(slot uint32) error
 	SendChat(msg string)
+	ReportActionStatus(user string, status event.ActionStatus)
 	GetEntityRuntimeID() uint64
 	GetLocalWorldModel() entity.WorldModel
 	GetBlockName(x, y, z int32) (string, bool)
@@ -36,9 +38,9 @@ type Bot interface {
 
 // Explorer handles systematic exploration of the world
 type Explorer struct {
-	bot       Bot
-	logger    *slog.Logger
-	mu        sync.Mutex
+	bot         Bot
+	logger      *slog.Logger
+	mu          sync.Mutex
 	isExploring bool
 
 	// Visited chunks/areas to avoid revisiting
@@ -80,7 +82,13 @@ func (e *Explorer) ExploreSpiral(ctx context.Context, maxRadius int, waypointInt
 	for radius <= float64(maxRadius) {
 		select {
 		case <-ctx.Done():
-			e.bot.SendChat("Explorasi dihentikan.")
+			e.bot.ReportActionStatus("", event.ActionStatus{
+				Action:  "explore",
+				Item:    "spiral",
+				Count:   waypoints,
+				Success: false,
+				Error:   "dihentikan",
+			})
 			return waypoints
 		default:
 		}
@@ -116,7 +124,12 @@ func (e *Explorer) ExploreSpiral(ctx context.Context, maxRadius int, waypointInt
 		}
 	}
 
-	e.bot.SendChat("Explorasi spiral selesai!")
+	e.bot.ReportActionStatus("", event.ActionStatus{
+		Action:  "explore",
+		Item:    "spiral",
+		Count:   waypoints,
+		Success: true,
+	})
 	return waypoints
 }
 
@@ -138,7 +151,13 @@ func (e *Explorer) ExploreRandom(ctx context.Context, duration time.Duration) in
 	for time.Now().Before(deadline) {
 		select {
 		case <-ctx.Done():
-			e.bot.SendChat("Explorasi dihentikan.")
+			e.bot.ReportActionStatus("", event.ActionStatus{
+				Action:  "explore",
+				Item:    "random",
+				Count:   waypoints,
+				Success: false,
+				Error:   "dihentikan",
+			})
 			return waypoints
 		default:
 		}
@@ -160,7 +179,12 @@ func (e *Explorer) ExploreRandom(ctx context.Context, duration time.Duration) in
 		e.logger.Info("Random exploration waypoint", "pos", target)
 	}
 
-	e.bot.SendChat("Explorasi random selesai!")
+	e.bot.ReportActionStatus("", event.ActionStatus{
+		Action:  "explore",
+		Item:    "random",
+		Count:   waypoints,
+		Success: true,
+	})
 	return waypoints
 }
 
@@ -196,7 +220,13 @@ func (e *Explorer) ExploreDirection(ctx context.Context, direction string, dista
 	case "southwest", "barat_daya":
 		angle = 135
 	default:
-		e.bot.SendChat("Arah tidak dikenal: " + direction)
+		e.bot.ReportActionStatus("", event.ActionStatus{
+			Action:  "exploredir",
+			Item:    direction,
+			Count:   0,
+			Success: false,
+			Error:   "arah tidak dikenal",
+		})
 		return 0
 	}
 
@@ -221,7 +251,12 @@ func (e *Explorer) ExploreDirection(ctx context.Context, direction string, dista
 		waypoints++
 	}
 
-	e.bot.SendChat("Explorasi ke arah " + direction + " selesai!")
+	e.bot.ReportActionStatus("", event.ActionStatus{
+		Action:  "exploredir",
+		Item:    direction,
+		Count:   distance,
+		Success: true,
+	})
 	return waypoints
 }
 
@@ -232,11 +267,22 @@ func (e *Explorer) ReturnToOrigin(ctx context.Context) bool {
 	e.mu.Unlock()
 
 	if origin.X() == 0 && origin.Y() == 0 && origin.Z() == 0 {
-		e.bot.SendChat("Aku gak tau posisi asal.")
+		e.bot.ReportActionStatus("", event.ActionStatus{
+			Action:  "returnhome",
+			Item:    "origin",
+			Count:   0,
+			Success: false,
+			Error:   "tidak tahu posisi asal",
+		})
 		return false
 	}
 
-	e.bot.SendChat("Aku balik ke posisi awal ya!")
+	e.bot.ReportActionStatus("", event.ActionStatus{
+		Action:  "returnhome",
+		Item:    "origin",
+		Count:   0,
+		Success: true,
+	})
 	e.bot.NavigateTo(origin)
 
 	deadline := time.After(60 * time.Second)
@@ -253,7 +299,12 @@ func (e *Explorer) ReturnToOrigin(ctx context.Context) bool {
 			pos := e.bot.GetCoords()
 			if pos.Sub(origin).Len() < 5.0 {
 				e.bot.StopMovement()
-				e.bot.SendChat("Sampai di posisi asal!")
+				e.bot.ReportActionStatus("", event.ActionStatus{
+					Action:  "returnhome",
+					Item:    "origin",
+					Count:   0,
+					Success: true,
+				})
 				return true
 			}
 		}

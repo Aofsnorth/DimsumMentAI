@@ -17,13 +17,14 @@ import (
 	"bedrock-ai/internal/bot/chat"
 	"bedrock-ai/internal/bot/movement"
 	"bedrock-ai/internal/bot/network"
+	"bedrock-ai/internal/bot/planner"
+	"bedrock-ai/internal/bot/visualizer"
 	"bedrock-ai/internal/config"
 	"bedrock-ai/internal/connection"
 	"bedrock-ai/internal/debuglog"
 	"bedrock-ai/internal/event"
 	"bedrock-ai/internal/handler"
 	"bedrock-ai/internal/skin"
-	"bedrock-ai/internal/bot/visualizer"
 
 	"github.com/google/uuid"
 	"github.com/sandertv/gophertunnel/minecraft/protocol/login"
@@ -115,7 +116,7 @@ func main() {
 			slog.String("model", cfg.AI.Model),
 			slog.String("base_url", cfg.AI.BaseURL),
 		)
-		aiClient = ai.NewLLMClient(cfg.AI.Provider, cfg.AI.ApiKey, cfg.AI.Model, cfg.AI.BaseURL)
+		aiClient = ai.NewLLMClient(cfg.AI.Provider, cfg.AI.Model, cfg.AI.BaseURL)
 		aiClient.SetLanguage(cfg.Bot.Language)
 		if cfg.AI.CustomPersonality != "" {
 			aiClient.SetPersona(cfg.AI.CustomPersonality)
@@ -143,6 +144,12 @@ func main() {
 	// Chat listener and action hooks
 	bot.InitChatListenerFunc = chat.Init
 	bot.ExecuteActionFunc = action.Execute
+	bot.StartProactiveLoopFunc = chat.StartProactiveLoop
+
+	// Planner (agentic plan → execute → observe → decide loop)
+	bot.NewPlannerFunc = func(b *bot.Bot, client *ai.NvidiaClient) bot.PlannerInterface {
+		return planner.New(b, client)
+	}
 
 	// --- Bot ---
 	b, err := bot.New(
@@ -161,6 +168,11 @@ func main() {
 	if err != nil {
 		logger.Error("failed to create bot", slog.String("error", err.Error()))
 		os.Exit(1)
+	}
+
+	// Initialize the agentic planner now that the bot and AI client exist.
+	if bot.NewPlannerFunc != nil {
+		b.Planner = bot.NewPlannerFunc(b, aiClient)
 	}
 
 	logger.Info("starting bot",

@@ -9,6 +9,8 @@ import (
 	"github.com/go-gl/mathgl/mgl32"
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
 	"github.com/sandertv/gophertunnel/minecraft/protocol/packet"
+
+	"bedrock-ai/internal/event"
 )
 
 // ===================== BED SLEEPING =====================
@@ -55,7 +57,7 @@ func (m *Manager) SleepInBed(ctx context.Context) bool {
 
 	bedPos, found := m.FindNearbyBed(12)
 	if !found {
-		m.bot.SendChat("Aku gak nemu kasur di sekitar sini.")
+		m.bot.ReportActionStatus("", event.ActionStatus{Action: "sleep", Item: "bed", Success: false, Error: "no bed found nearby"})
 		return false
 	}
 
@@ -89,7 +91,7 @@ func (m *Manager) SleepInBed(ctx context.Context) bool {
 	}
 
 	m.logger.Info("Sleeping in bed", "pos", bedPos)
-	m.bot.SendChat("Aku tidur dulu ya, selamat malam! 🌙")
+	m.bot.ReportActionStatus("", event.ActionStatus{Action: "sleep", Item: "bed", Count: 1, Success: true})
 	return true
 }
 
@@ -200,6 +202,7 @@ func (m *Manager) BuildEmergencyShelter(ctx context.Context) bool {
 
 	// Find building material (dirt, cobblestone, etc.)
 	var buildSlot uint32
+	var buildMaterial string
 	buildCount := 0
 	found := false
 
@@ -212,6 +215,7 @@ func (m *Manager) BuildEmergencyShelter(ctx context.Context) bool {
 			name := names[item.NetworkID]
 			if containsAny(name, mat) {
 				buildSlot = slot
+				buildMaterial = mat
 				buildCount = int(item.Count)
 				found = true
 				break
@@ -223,11 +227,15 @@ func (m *Manager) BuildEmergencyShelter(ctx context.Context) bool {
 	}
 
 	if !found || buildCount < 12 {
-		m.bot.SendChat("Gak punya cukup bahan buat bikin shelter darurat.")
+		errMsg := "no building materials found"
+		if found {
+			errMsg = "insufficient building materials"
+		}
+		m.bot.ReportActionStatus("", event.ActionStatus{Action: "shelter", Item: buildMaterial, Count: buildCount, Success: false, Error: errMsg})
 		return false
 	}
 
-	m.bot.SendChat("Aku bikin shelter darurat dulu ya! 🏠")
+	m.bot.ReportActionStatus("", event.ActionStatus{Action: "shelter", Item: buildMaterial, Count: buildCount, Success: true})
 
 	pos := m.bot.GetCoords()
 	bx := int32(math.Floor(float64(pos.X())))
@@ -290,7 +298,7 @@ func (m *Manager) BuildEmergencyShelter(ctx context.Context) bool {
 		}
 	}
 
-	m.bot.SendChat("Shelter darurat selesai! Aman dari mob malam ini.")
+	m.bot.ReportActionStatus("", event.ActionStatus{Action: "shelter", Item: buildMaterial, Count: placed, Success: true})
 	return true
 }
 
@@ -300,11 +308,11 @@ func (m *Manager) BuildEmergencyShelter(ctx context.Context) bool {
 func (m *Manager) RecoverFromDeath(ctx context.Context) bool {
 	deathPos, has := m.GetDeathPos()
 	if !has {
-		m.bot.SendChat("Aku gak inget mati di mana.")
+		m.bot.ReportActionStatus("", event.ActionStatus{Action: "recover", Success: false, Error: "no death position recorded"})
 		return false
 	}
 
-	m.bot.SendChat("Aku pergi ambil barang-barang yang jatuh ya!")
+	m.bot.ReportActionStatus("", event.ActionStatus{Action: "recover", Item: "items", Count: 1, Success: true})
 	m.bot.NavigateTo(deathPos)
 
 	// Wait for arrival (max 60 seconds)
@@ -317,7 +325,7 @@ func (m *Manager) RecoverFromDeath(ctx context.Context) bool {
 		case <-ctx.Done():
 			return false
 		case <-deadline:
-			m.bot.SendChat("Gak bisa sampai ke lokasi mati, terlalu jauh kayaknya.")
+			m.bot.ReportActionStatus("", event.ActionStatus{Action: "recover", Success: false, Error: "could not reach death location in time"})
 			m.ClearDeath()
 			return false
 		case <-ticker.C:
@@ -326,7 +334,7 @@ func (m *Manager) RecoverFromDeath(ctx context.Context) bool {
 			if dist < 3.0 {
 				m.bot.StopMovement()
 				m.ClearDeath()
-				m.bot.SendChat("Aku sampai di lokasi mati, aku ambil barang-barangnya!")
+				m.bot.ReportActionStatus("", event.ActionStatus{Action: "recover", Item: "items", Count: 1, Success: true})
 				return true
 			}
 		}

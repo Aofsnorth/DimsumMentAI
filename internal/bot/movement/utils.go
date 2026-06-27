@@ -5,8 +5,31 @@ import (
 	"time"
 
 	"bedrock-ai/internal/bot"
+
 	"github.com/go-gl/mathgl/mgl32"
 )
+
+// organicLookDrift produces a smooth, non-repeating micro-drift for head yaw
+// and pitch using a sum of incommensurate sine frequencies. This mimics the
+// subtle, continuous motion of a human head that is never perfectly still —
+// breathing, micro-saccades, and postural sway — without the mechanical
+// pattern of fixed tick-parity jumps. The frequencies are chosen to be
+// mutually irrational so the combined waveform never repeats within any
+// practical session length.
+func organicLookDrift(tick uint64, ampYaw, ampPitch float32) (float32, float32) {
+	t := float64(tick)
+	yawDrift := ampYaw * float32(
+		math.Sin(t*0.0131)+
+			0.35*math.Sin(t*0.0297+1.7)+
+			0.15*math.Sin(t*0.0613+3.1),
+	)
+	pitchDrift := ampPitch * float32(
+		math.Sin(t*0.0183+0.5)+
+			0.30*math.Sin(t*0.0411+2.3)+
+			0.12*math.Sin(t*0.0791+4.7),
+	)
+	return yawDrift, pitchDrift
+}
 
 // InterpolateAngle smoothly moves current angle towards target by at most maxStep, handling 360 wrap-around
 func InterpolateAngle(current, target, maxStep float32) float32 {
@@ -156,6 +179,9 @@ func LookAt(b *bot.Bot, pos mgl32.Vec3) {
 	if b.Yaw < 0 {
 		b.Yaw += 360
 	}
+	// Keep head yaw in sync with body yaw for an explicit look-at so the
+	// next eased tick doesn't have to re-converge from a stale head angle.
+	b.HeadYaw = b.Yaw
 
 	pitchRad := -math.Atan2(float64(dy), distH)
 	b.Pitch = float32(pitchRad * 180 / math.Pi)

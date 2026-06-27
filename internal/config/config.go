@@ -34,14 +34,15 @@ type SkinConfig struct {
 }
 
 type AIConfig struct {
-	Provider                  string `yaml:"provider"` // nvidia, minimax, opengateway, openai_compatible
-	Model                     string `yaml:"model"`
-	ApiKey                    string `yaml:"api_key"`
-	BaseURL                   string `yaml:"base_url"` // override default endpoint; required for opengateway/openai_compatible
-	MainPlayer                string `yaml:"main_player"`
-	RespondOnlyToLinkedPlayer bool   `yaml:"respond_only_to_linked_player"`
-	RespondOnlyWhenTagged     bool   `yaml:"respond_only_when_tagged"`
-	CustomPersonality         string `yaml:"custom_personality"`
+	Provider                  string  `yaml:"provider"` // nvidia, minimax, opengateway, openai_compatible
+	Model                     string  `yaml:"model"`
+	BaseURL                   string  `yaml:"base_url"` // override default endpoint; required for opengateway/openai_compatible
+	MainPlayer                string  `yaml:"main_player"`
+	RespondOnlyToLinkedPlayer bool    `yaml:"respond_only_to_linked_player"`
+	RespondOnlyWhenTagged     bool    `yaml:"respond_only_when_tagged"`
+	CustomPersonality         string  `yaml:"custom_personality"`
+	ProactiveIntervalSec      int     `yaml:"proactive_interval_sec"` // 0 = disabled. Periodic autonomous conversation tick.
+	ProactiveChance           float64 `yaml:"proactive_chance"`       // 0.0-1.0, probability of actually querying LLM each tick.
 }
 
 type ChatConfig struct {

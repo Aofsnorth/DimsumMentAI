@@ -10,6 +10,8 @@ import (
 	"bedrock-ai/internal/bot/inventory/chest"
 	"bedrock-ai/internal/bot/inventory/crafting"
 	"bedrock-ai/internal/bot/inventory/furnace"
+	"bedrock-ai/internal/event"
+
 	"github.com/go-gl/mathgl/mgl32"
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
 	"github.com/sandertv/gophertunnel/minecraft/protocol/packet"
@@ -30,6 +32,7 @@ type Bot interface {
 	EquipItem(slot uint32) error
 	UnequipItem() error
 	SendChat(msg string)
+	ReportActionStatus(user string, status event.ActionStatus)
 	GetEntityRuntimeID() uint64
 	GetLocalWorldModel() entity.WorldModel
 	GetBlockName(x, y, z int32) (string, bool)

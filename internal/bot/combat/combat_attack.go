@@ -1,6 +1,7 @@
 package combat
 
 import (
+	"bedrock-ai/internal/event"
 	"context"
 	"fmt"
 	"math"
@@ -47,7 +48,7 @@ func (cm *CombatManager) Tick(ctx context.Context) {
 	if friendly && target.Type == "player" && target.Health <= 4 {
 		cm.logger.Info("Friendly PVP: stopping attack as target is low health", "target", target.Name)
 		cm.Disengage()
-		cm.bot.SendChat("🤝 Friendly PVP: Kamu sudah sekarat, aku stop ya!")
+		cm.bot.ReportActionStatus("", event.ActionStatus{Action: "combat", Success: true, Error: "friendly PVP stop"})
 		return
 	}
 
@@ -86,7 +87,7 @@ func (cm *CombatManager) attack(targetID uint64, targetPos mgl32.Vec3) {
 	slot := cm.bot.GetHeldItemSlot()
 	inv := cm.bot.GetInventorySlots()
 	item, ok := inv[slot]
-	
+
 	var rawItem protocol.ItemInstance
 	if ok && item.Count > 0 {
 		rawItem = protocol.ItemInstance{

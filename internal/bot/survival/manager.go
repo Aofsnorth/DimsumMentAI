@@ -11,6 +11,7 @@ import (
 	"github.com/sandertv/gophertunnel/minecraft/protocol/packet"
 
 	"bedrock-ai/internal/bot/entity"
+	"bedrock-ai/internal/event"
 )
 
 // Bot interface for survival subsystem
@@ -29,6 +30,7 @@ type Bot interface {
 	EquipItem(slot uint32) error
 	UnequipItem() error
 	SendChat(msg string)
+	ReportActionStatus(user string, status event.ActionStatus)
 	GetEntityRuntimeID() uint64
 	GetLocalWorldModel() entity.WorldModel
 	GetBlockName(x, y, z int32) (string, bool)
@@ -42,20 +44,20 @@ type Manager struct {
 	mu     sync.Mutex
 
 	// Auto-eat state
-	lastEatTime  time.Time
-	autoEatOn    bool
-	hungerLevel  int
+	lastEatTime time.Time
+	autoEatOn   bool
+	hungerLevel int
 
 	// Auto-armor state
 	autoArmorOn bool
 
 	// Time tracking
-	worldTime   int64 // 0-24000 ticks (0=dawn, 6000=noon, 12000=dusk, 18000=midnight)
-	isNight     bool
-	isDay       bool
+	worldTime int64 // 0-24000 ticks (0=dawn, 6000=noon, 12000=dusk, 18000=midnight)
+	isNight   bool
+	isDay     bool
 
 	// Death recovery
-	lastDeathPos   mgl32.Vec3
+	lastDeathPos    mgl32.Vec3
 	hasDiedRecently bool
 	deathTime       time.Time
 
@@ -73,10 +75,10 @@ type Manager struct {
 	shieldActive bool
 
 	// Configuration
-	EatThreshold    int  // hunger level to trigger auto-eat (default 10)
-	ArmorEnabled    bool
-	AutoTorchEnabled bool
-	AutoSleepEnabled bool
+	EatThreshold       int // hunger level to trigger auto-eat (default 10)
+	ArmorEnabled       bool
+	AutoTorchEnabled   bool
+	AutoSleepEnabled   bool
 	AutoShelterEnabled bool
 }
 
@@ -255,12 +257,12 @@ func (m *Manager) eatFoodItem(slot uint32, item protocol.ItemStack) bool {
 	// Send use item packet (eating)
 	tx := &packet.InventoryTransaction{
 		TransactionData: &protocol.UseItemTransactionData{
-			ActionType:    protocol.UseItemActionClickBlock,
-			BlockPosition: protocol.BlockPos{0, -1, 0},
-			BlockFace:     255, // self-use
-			HotBarSlot:    int32(slot),
-			HeldItem:      protocol.ItemInstance{Stack: item},
-			Position:      m.bot.GetCoords(),
+			ActionType:      protocol.UseItemActionClickBlock,
+			BlockPosition:   protocol.BlockPos{0, -1, 0},
+			BlockFace:       255, // self-use
+			HotBarSlot:      int32(slot),
+			HeldItem:        protocol.ItemInstance{Stack: item},
+			Position:        m.bot.GetCoords(),
 			ClickedPosition: mgl32.Vec3{0, 0, 0},
 		},
 	}
@@ -282,8 +284,8 @@ func (m *Manager) EnableAutoEat(enabled bool) {
 
 // Armor slots: 0=helmet, 1=chestplate, 2=leggings, 3=boots
 var armorSlots = []struct {
-	name    string
-	slotID  uint32
+	name     string
+	slotID   uint32
 	keywords []string
 }{
 	{"helmet", 0, []string{"helmet", "cap", "crown"}},
@@ -376,38 +378,38 @@ func (m *Manager) EnableAutoArmor(enabled bool) {
 
 // Tool mapping: block type -> best tool type
 var blockToolMap = map[string][]string{
-	"stone":      {"pickaxe"},
-	"cobblestone": {"pickaxe"},
-	"deepslate":  {"pickaxe"},
-	"iron_ore":   {"pickaxe"},
-	"gold_ore":   {"pickaxe"},
-	"diamond_ore": {"pickaxe"},
-	"coal_ore":   {"pickaxe"},
-	"redstone_ore": {"pickaxe"},
-	"lapis_ore":  {"pickaxe"},
-	"emerald_ore": {"pickaxe"},
-	"copper_ore":  {"pickaxe"},
-	"netherrack": {"pickaxe"},
-	"obsidian":   {"pickaxe"},
-	"oak_log":    {"axe"},
-	"birch_log":  {"axe"},
-	"spruce_log": {"axe"},
-	"jungle_log": {"axe"},
-	"acacia_log": {"axe"},
-	"dark_oak_log": {"axe"},
-	"oak_planks": {"axe"},
+	"stone":          {"pickaxe"},
+	"cobblestone":    {"pickaxe"},
+	"deepslate":      {"pickaxe"},
+	"iron_ore":       {"pickaxe"},
+	"gold_ore":       {"pickaxe"},
+	"diamond_ore":    {"pickaxe"},
+	"coal_ore":       {"pickaxe"},
+	"redstone_ore":   {"pickaxe"},
+	"lapis_ore":      {"pickaxe"},
+	"emerald_ore":    {"pickaxe"},
+	"copper_ore":     {"pickaxe"},
+	"netherrack":     {"pickaxe"},
+	"obsidian":       {"pickaxe"},
+	"oak_log":        {"axe"},
+	"birch_log":      {"axe"},
+	"spruce_log":     {"axe"},
+	"jungle_log":     {"axe"},
+	"acacia_log":     {"axe"},
+	"dark_oak_log":   {"axe"},
+	"oak_planks":     {"axe"},
 	"crafting_table": {"axe"},
-	"chest":      {"axe"},
-	"dirt":       {"shovel"},
-	"sand":       {"shovel"},
-	"gravel":     {"shovel"},
-	"clay":       {"shovel"},
-	"soul_sand":  {"shovel"},
-	"snow":       {"shovel"},
-	"grass_block": {"shovel"},
-	"hay_block":  {"hoe"},
-	"wheat":      {"hoe"},
-	"leaves":     {"shears"},
+	"chest":          {"axe"},
+	"dirt":           {"shovel"},
+	"sand":           {"shovel"},
+	"gravel":         {"shovel"},
+	"clay":           {"shovel"},
+	"soul_sand":      {"shovel"},
+	"snow":           {"shovel"},
+	"grass_block":    {"shovel"},
+	"hay_block":      {"hoe"},
+	"wheat":          {"hoe"},
+	"leaves":         {"shears"},
 }
 
 // Tool tier priority (best first)
@@ -527,12 +529,12 @@ func (m *Manager) UseHealingPotion() bool {
 				// Use the potion (same as eating)
 				tx := &packet.InventoryTransaction{
 					TransactionData: &protocol.UseItemTransactionData{
-						ActionType:    protocol.UseItemActionClickBlock,
-						BlockPosition: protocol.BlockPos{0, -1, 0},
-						BlockFace:     255,
-						HotBarSlot:    int32(slot),
-						HeldItem:      protocol.ItemInstance{Stack: item},
-						Position:      m.bot.GetCoords(),
+						ActionType:      protocol.UseItemActionClickBlock,
+						BlockPosition:   protocol.BlockPos{0, -1, 0},
+						BlockFace:       255,
+						HotBarSlot:      int32(slot),
+						HeldItem:        protocol.ItemInstance{Stack: item},
+						Position:        m.bot.GetCoords(),
 						ClickedPosition: mgl32.Vec3{0, 0, 0},
 					},
 				}

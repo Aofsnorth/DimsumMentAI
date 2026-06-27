@@ -6,6 +6,8 @@ import (
 	"time"
 
 	"bedrock-ai/internal/bot/building/schematic"
+	"bedrock-ai/internal/event"
+
 	"github.com/go-gl/mathgl/mgl32"
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
 	"github.com/sandertv/gophertunnel/minecraft/protocol/packet"
@@ -50,9 +52,9 @@ func (bp *BlockPlacer) TowerUp(ctx context.Context, targetY int) bool {
 			EntityRuntimeID: bp.bot.GetEntityRuntimeID(),
 			ActionType:      protocol.PlayerActionJump,
 		})
-		
+
 		botPos = mgl32.Vec3{botPos.X(), botPos.Y() + 1.1, botPos.Z()}
-		
+
 		scaffPos := protocol.BlockPos{bx, int32(by), bz}
 		tx := &packet.InventoryTransaction{
 			TransactionData: &protocol.UseItemTransactionData{
@@ -113,7 +115,7 @@ func (bp *BlockPlacer) CleanupScaffolds(ctx context.Context) {
 	}
 
 	bp.logger.Info("Starting scaffolding cleanup", "count", len(bp.ScaffoldHistory))
-	bp.bot.SendSafeChat("Aku beresin scaffolding temporary dulu ya.")
+	bp.bot.ReportActionStatus("", event.ActionStatus{Action: "scaffold", Count: len(bp.ScaffoldHistory), Success: true})
 
 	for i := len(bp.ScaffoldHistory) - 1; i >= 0; i-- {
 		select {

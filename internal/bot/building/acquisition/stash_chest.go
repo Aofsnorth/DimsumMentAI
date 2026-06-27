@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"bedrock-ai/internal/bot/building/common"
+	"bedrock-ai/internal/event"
+
 	"github.com/go-gl/mathgl/mgl32"
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
 	"github.com/sandertv/gophertunnel/minecraft/protocol/packet"
@@ -45,7 +47,7 @@ func (ia *InventoryAcquisition) placeAndStash(ctx context.Context, inv map[uint3
 		targetPos = protocol.BlockPos{bx + 2, by, bz}
 	}
 
-	ia.bot.SendSafeChat("Inventory penuh, aku buat chest dulu ya buat simpan barang.")
+	ia.bot.ReportActionStatus("", event.ActionStatus{Action: "materials", Item: "chest", Success: true})
 	ia.logger.Info("Placing chest", "x", targetPos.X(), "y", targetPos.Y(), "z", targetPos.Z())
 
 	_ = ia.bot.EquipItem(chestSlot)

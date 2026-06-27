@@ -2,11 +2,11 @@ package coordinator
 
 import (
 	"context"
-	"fmt"
 	"strings"
 
 	"bedrock-ai/internal/bot/building/common"
 	"bedrock-ai/internal/bot/building/schematic"
+	"bedrock-ai/internal/event"
 )
 
 // Build triggers the building pipeline from a user request.
@@ -14,7 +14,7 @@ func (ba *BuilderAgent) Build(ctx context.Context, user string, request string) 
 	ba.mu.Lock()
 	if ba.isBuilding {
 		ba.mu.Unlock()
-		ba.bot.SendSafeChat("Aku lagi sibuk bangun yang lain sekarang. Sebentar ya!")
+		ba.bot.ReportActionStatus("", event.ActionStatus{Action: "build", Success: false, Error: "already building"})
 		return
 	}
 
@@ -36,7 +36,7 @@ func (ba *BuilderAgent) Build(ctx context.Context, user string, request string) 
 		}()
 
 		ba.logger.Info("Builder agent started build flow", "request", request, "user", user)
-		ba.bot.SendSafeChat("Oke, aku denger request kamu. Bentar ya, aku rencanain dulu...")
+		ba.bot.ReportActionStatus("", event.ActionStatus{Action: "build", Item: "planning", Success: true})
 
 		inv := ba.bot.GetInventorySlots()
 		names := ba.bot.GetItemNames()
@@ -100,15 +100,15 @@ func (ba *BuilderAgent) Build(ctx context.Context, user string, request string) 
 		ba.status = "Building..."
 		ba.mu.Unlock()
 
-		ba.bot.SendSafeChat(fmt.Sprintf("Mulai membangun! Total ada %d blok.", len(blocksToPlace)))
+		ba.bot.ReportActionStatus("", event.ActionStatus{Action: "build", Count: len(blocksToPlace), Success: true})
 		success := ba.executeBlockList(buildCtx, blocksToPlace, bx, bz)
 
 		ba.placer.CleanupScaffolds(buildCtx)
 
 		if success {
-			ba.bot.SendSafeChat("Hore! Rumah kamu udah selesai aku bangun. Silakan dilihat!")
+			ba.bot.ReportActionStatus("", event.ActionStatus{Action: "build", Success: true})
 		} else {
-			ba.bot.SendSafeChat("Maaf ya, pembangunannya kepotong atau ada masalah di jalan.")
+			ba.bot.ReportActionStatus("", event.ActionStatus{Action: "build", Success: false, Error: "interrupted"})
 		}
 	}()
 }

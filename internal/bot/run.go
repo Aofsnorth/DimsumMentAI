@@ -57,6 +57,7 @@ func (b *Bot) Run(ctx context.Context) error {
 	b.Mu.Lock()
 	b.Pos = gd.PlayerPosition.Sub(mgl32.Vec3{0, 1.62, 0})
 	b.Yaw = gd.Yaw
+	b.HeadYaw = gd.Yaw
 	b.Pitch = gd.Pitch
 	// Initialize item names map from StartGame packet
 	for _, entry := range gd.Items {
@@ -144,6 +145,12 @@ func (b *Bot) Run(ctx context.Context) error {
 	// Register chat listener via registered function pointer
 	if InitChatListenerFunc != nil {
 		InitChatListenerFunc(ctx, b)
+	}
+
+	// Start proactive conversation loop (AGI layer — bot can initiate
+	// conversation autonomously without player trigger).
+	if StartProactiveLoopFunc != nil {
+		go StartProactiveLoopFunc(ctx, b)
 	}
 
 	// Start sending PlayerAuthInput so the server registers

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"bedrock-ai/internal/bot/entity"
+	"bedrock-ai/internal/event"
 
 	"github.com/go-gl/mathgl/mgl32"
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
@@ -29,6 +30,7 @@ type Bot interface {
 	GetItemNames() map[int32]string
 	EquipItem(slot uint32) error
 	SendChat(msg string)
+	ReportActionStatus(user string, status event.ActionStatus)
 	GetEntityRuntimeID() uint64
 	GetLocalWorldModel() entity.WorldModel
 	GetBlockName(x, y, z int32) (string, bool)
@@ -121,21 +123,21 @@ func (f *Fisher) GoFish(ctx context.Context, maxCatches int) int {
 	// Find fishing rod
 	rodSlot, found := f.FindFishingRod()
 	if !found {
-		f.bot.SendChat("Aku gak punya fishing rod!")
+		f.bot.ReportActionStatus("", event.ActionStatus{Action: "fish", Item: "fishing_rod", Success: false, Error: "gak punya fishing rod"})
 		return 0
 	}
 
 	// Find water
 	waterPos, found := f.FindWater(12)
 	if !found {
-		f.bot.SendChat("Gak ada air di sekitar sini buat mancing!")
+		f.bot.ReportActionStatus("", event.ActionStatus{Action: "fish", Item: "water", Success: false, Error: "gak ada air di sekitar"})
 		return 0
 	}
 
 	// Navigate to water's edge
 	approach := protocol.BlockPos{waterPos.X(), waterPos.Y() + 1, waterPos.Z() + 1}
 	if !f.bot.NavigateToBlock(approach.X(), approach.Y(), approach.Z(), 3.0) {
-		f.bot.SendChat("Gak bisa sampai ke air buat mancing.")
+		f.bot.ReportActionStatus("", event.ActionStatus{Action: "fish", Item: "water", Success: false, Error: "gak bisa sampai ke air"})
 		return 0
 	}
 	f.bot.StopMovement()
@@ -145,7 +147,7 @@ func (f *Fisher) GoFish(ctx context.Context, maxCatches int) int {
 		return 0
 	}
 
-	f.bot.SendChat("Aku mancing dulu ya! 🎣")
+	f.bot.ReportActionStatus("", event.ActionStatus{Action: "fish", Item: "fish", Success: true, Count: 0})
 
 	// Look at water
 	f.bot.LookAt(mgl32.Vec3{float32(waterPos.X()) + 0.5, float32(waterPos.Y()) + 0.5, float32(waterPos.Z()) + 0.5})
@@ -182,7 +184,7 @@ func (f *Fisher) GoFish(ctx context.Context, maxCatches int) int {
 	}
 
 	if caught > 0 {
-		f.bot.SendChat(f.fishReport(caught))
+		f.bot.ReportActionStatus("", f.fishReport(caught))
 	}
 	return caught
 }
@@ -253,6 +255,6 @@ func (f *Fisher) IsFishing() bool {
 	return f.isFishing
 }
 
-func (f *Fisher) fishReport(count int) string {
-	return "Selesai mancing! Dapat sekitar " + string(rune('0'+count%10)) + " ikan. 🐟"
+func (f *Fisher) fishReport(count int) event.ActionStatus {
+	return event.ActionStatus{Action: "fish", Item: "fish", Count: count, Success: true}
 }

@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"bedrock-ai/internal/bot/entity"
+	"bedrock-ai/internal/event"
 
 	"github.com/go-gl/mathgl/mgl32"
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
@@ -36,6 +37,7 @@ type Bot interface {
 	LookAt(pos mgl32.Vec3)
 	WritePacket(pk packet.Packet) error
 	SendChat(msg string)
+	ReportActionStatus(user string, status event.ActionStatus)
 	FindItemSlotByName(name string) (uint32, bool)
 	CraftItem(recipeNetID uint32, count int) error
 	GetRecipes() map[string]uint32
@@ -99,20 +101,20 @@ func (m *Manager) EnsureCraftingTableForItem(ctx context.Context, targetItem str
 			}
 		}
 		if !ok {
-			m.bot.SendChat("Aku gak punya crafting_table dan gak nemu juga di sekitar.")
+			m.bot.ReportActionStatus("", event.ActionStatus{Action: "craft", Item: "crafting_table", Success: false, Error: "no crafting table available"})
 			return protocol.BlockPos{}, false
 		}
 	}
 
 	placePos, supportPos, faceID, found := m.findPlacementSpot()
 	if !found {
-		m.bot.SendChat("Aku gak nemu tempat kosong buat naruh crafting_table.")
+		m.bot.ReportActionStatus("", event.ActionStatus{Action: "craft", Item: "crafting_table", Success: false, Error: "no empty spot"})
 		return protocol.BlockPos{}, false
 	}
 
 	if err := m.placeCraftingTable(ctx, tableSlot, placePos, supportPos, faceID); err != nil {
 		m.logger.Warn("failed to place crafting_table", "err", err)
-		m.bot.SendChat("Aku gagal naruh crafting_table.")
+		m.bot.ReportActionStatus("", event.ActionStatus{Action: "craft", Item: "crafting_table", Success: false, Error: "failed to place"})
 		return protocol.BlockPos{}, false
 	}
 	m.logger.Info("placed crafting_table", "pos", placePos)

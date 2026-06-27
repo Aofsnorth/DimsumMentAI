@@ -98,6 +98,29 @@ func (b *Bot) TriggerEmoteFor(name string, ticks int) {
 	b.Logger.Debug("Emote triggered", "name", name)
 }
 
+// FormatItemName converts a raw Minecraft item/block ID (e.g.
+// "minecraft:oak_planks" or "oak_planks") into a human-friendly display name
+// (e.g. "Oak Planks"). Use this everywhere the bot prints item names in chat.
+func FormatItemName(name string) string {
+	name = strings.TrimSpace(name)
+	name = strings.TrimPrefix(name, "minecraft:")
+	name = strings.ReplaceAll(name, "_", " ")
+	words := strings.Fields(name)
+	for i, w := range words {
+		if len(w) > 0 {
+			words[i] = strings.ToUpper(w[:1]) + strings.ToLower(w[1:])
+		}
+	}
+	return strings.Join(words, " ")
+}
+
+// FormatItemName is a method wrapper so *Bot satisfies the Bot interfaces in
+// subpackages (gathering, husbandry, etc.) without those subpackages needing to
+// import the bot package.
+func (b *Bot) FormatItemName(name string) string {
+	return FormatItemName(name)
+}
+
 // GetInventorySummary returns a human-readable list of items in the inventory
 func (b *Bot) GetInventorySummary() string {
 	b.Mu.Lock()
@@ -114,9 +137,7 @@ func (b *Bot) GetInventorySummary() string {
 		if name == "" {
 			name = fmt.Sprintf("item_%d", stack.NetworkID)
 		}
-		name = strings.ReplaceAll(name, "minecraft:", "")
-		name = strings.ReplaceAll(name, "_", " ")
-		itemCounts[name] += int(stack.Count)
+		itemCounts[FormatItemName(name)] += int(stack.Count)
 	}
 
 	for name, count := range itemCounts {
@@ -140,9 +161,7 @@ func (b *Bot) GetHeldItem() string {
 	if name == "" {
 		return fmt.Sprintf("item_%d", stack.NetworkID)
 	}
-	name = strings.ReplaceAll(name, "minecraft:", "")
-	name = strings.ReplaceAll(name, "_", " ")
-	return name
+	return FormatItemName(name)
 }
 
 // GetStatusDetails returns current health, hunger, and coordinates
