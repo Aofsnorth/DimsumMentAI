@@ -1,3 +1,4 @@
+// Package chat handles player chat messages and AI-driven bot responses.
 package chat
 
 import (
@@ -19,13 +20,6 @@ import (
 // context about its surroundings and asks the LLM whether it wants to say
 // something. The LLM can respond with chat text, actions, <followup> for
 // chained messages, or <silent/> to stay quiet.
-//
-// This is the "AGI" layer — the bot is not purely reactive. It can:
-//   - Greet players who come nearby
-//   - Comment on events (night falling, found resources, took damage)
-//   - Warn about danger (low HP, hostile mobs nearby)
-//   - Suggest activities ("aku lihat ada iron ore deket sini, mau aku tambang?")
-//   - Just chat naturally when bored
 func StartProactiveLoop(ctx context.Context, b *bot.Bot) {
 	intervalSec := b.AiCfg.ProactiveIntervalSec
 	if intervalSec <= 0 {
@@ -87,20 +81,38 @@ func proactiveTick(ctx context.Context, b *bot.Bot) {
 		return
 	}
 
-	// Gather nearby players.
-	nearbyPlayers := getNearbyPlayers(b)
-	if len(nearbyPlayers) == 0 {
-		// No one nearby — only proactive-talk if MainPlayer is set
-		// (the bot might want to comment to itself or about the world).
-		if b.AiCfg.MainPlayer == "" {
-			return
-		}
-		nearbyPlayers = []string{b.AiCfg.MainPlayer}
+	targetPlayer, ok := selectProactiveTarget(b)
+	if !ok {
+		return
 	}
 
-	// Pick the closest player as the "target" of the proactive message.
-	targetPlayer := nearbyPlayers[0]
+	systemPrompt, proactivePrompt := buildProactivePrompt(b, targetPlayer)
 
+	reply, err := b.AiClient.Ask(targetPlayer, systemPrompt, proactivePrompt)
+	if err != nil {
+		b.Logger.Debug("proactive LLM call failed", "error", err)
+		return
+	}
+
+	dispatchProactiveResponse(b, targetPlayer, reply)
+}
+
+// selectProactiveTarget picks the closest player, or falls back to MainPlayer
+// if no one is nearby. It returns false when no valid target exists.
+func selectProactiveTarget(b *bot.Bot) (string, bool) {
+	nearbyPlayers := getNearbyPlayers(b)
+	if len(nearbyPlayers) > 0 {
+		return nearbyPlayers[0], true
+	}
+	if b.AiCfg.MainPlayer == "" {
+		return "", false
+	}
+	return b.AiCfg.MainPlayer, true
+}
+
+// buildProactivePrompt synthesizes the system prompt and proactive user prompt
+// for the LLM.
+func buildProactivePrompt(b *bot.Bot, targetPlayer string) (string, string) {
 	hp, hunger, botCoords := b.GetStatusDetails()
 	heldItem := b.GetHeldItem()
 	invSummary := b.GetInventorySummary()
@@ -111,7 +123,6 @@ func proactiveTick(ctx context.Context, b *bot.Bot) {
 
 	b.Mu.Lock()
 	botName := b.Name
-	// Gather nearby actors (mobs, items) for context.
 	nearbyActorSummary := getNearbyActorSummary(b)
 	b.Mu.Unlock()
 
@@ -131,7 +142,6 @@ func proactiveTick(ctx context.Context, b *bot.Bot) {
 		}
 	}
 
-	// Build the proactive prompt — ask the LLM to decide whether to speak.
 	proactivePrompt := fmt.Sprintf(
 		`[PROACTIVE TICK] Waktu: %s. Pemain terdekat: %s. Aktor/mob terdekat: %s.
 Kamu lagi nggak diajak ngobrol oleh siapapun. Apakah kamu mau mulai ngobrol atau ngelakuin sesuatu sendiri?
@@ -143,31 +153,28 @@ Pilihan:
 
 JANGAN paksa diri untuk ngomong kalau gak ada yang menarik. Kadang diam lebih baik.`,
 		time.Now().Format("15:04"),
-		strings.Join(nearbyPlayers, ", "),
+		strings.Join(getNearbyPlayers(b), ", "),
 		nearbyActorSummary,
 	)
 
-	reply, err := b.AiClient.Ask(targetPlayer, systemPrompt, proactivePrompt)
-	if err != nil {
-		b.Logger.Debug("proactive LLM call failed", "error", err)
-		return
-	}
+	return systemPrompt, proactivePrompt
+}
 
+// dispatchProactiveResponse parses the LLM reply and sends chat, executes
+// actions, routes plans, and schedules followups.
+func dispatchProactiveResponse(b *bot.Bot, targetPlayer, reply string) {
 	parsed := ai.Parse(reply)
 
-	// Check for <silent/> — LLM decided not to speak.
 	if isSilentResponse(reply) {
 		b.Logger.Debug("proactive tick: LLM chose to stay silent")
 		return
 	}
 
-	// Send chat if any.
 	if parsed.CleanReply != "" {
 		b.Logger.Info("proactive reply sending", slog.String("reply", parsed.CleanReply))
 		b.SendSafeChat(parsed.CleanReply)
 	}
 
-	// Execute any actions.
 	if len(parsed.Actions) > 0 {
 		steps := make([]action.Step, 0, len(parsed.Actions))
 		for _, act := range parsed.Actions {
@@ -176,7 +183,6 @@ JANGAN paksa diri untuk ngomong kalau gak ada yang menarik. Kadang diam lebih ba
 		action.ExecutePlan(b, steps, targetPlayer)
 	}
 
-	// Handle plan if emitted.
 	if len(parsed.PlanSteps) > 0 && b.Planner != nil {
 		b.Logger.Info("proactive plan detected, routing through planner",
 			"steps", len(parsed.PlanSteps))
@@ -184,7 +190,6 @@ JANGAN paksa diri untuk ngomong kalau gak ada yang menarik. Kadang diam lebih ba
 		return
 	}
 
-	// Schedule follow-up if requested.
 	if parsed.FollowupSec > 0 {
 		scheduleFollowup(b, targetPlayer, parsed.FollowupSec)
 	}
