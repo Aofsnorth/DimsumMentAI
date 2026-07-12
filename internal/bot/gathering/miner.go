@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"bedrock-ai/internal/bot/entity"
 	"bedrock-ai/internal/event"
 
 	"github.com/go-gl/mathgl/mgl32"
@@ -119,31 +120,9 @@ func (bm *BlockMiner) findBestMineStep(resolvedName string, dugPositions map[str
 			for dz := int32(-12); dz <= 12; dz++ {
 				tx, ty, tz := bx+dx, by+dy, bz+dz
 				target := protocol.BlockPos{tx, ty, tz}
-				if dugPositions[mineKey(target)] {
+				step, stepName, ok := bm.evaluateMineCandidate(target, botPos, bx, by, bz, resolvedName, dugPositions, world)
+				if !ok {
 					continue
-				}
-				if tx == bx && tz == bz && (ty == by || ty == by-1) {
-					continue
-				}
-				if !world.IsSolid(tx, ty, tz) {
-					continue
-				}
-				name, ok := bot.GetBlockName(tx, ty, tz)
-				if !ok || !blockNameMatches(name, resolvedName) {
-					continue
-				}
-
-				step, ok := planMineStep(world, botPos, target)
-				if !ok || dugPositions[mineKey(step.Position)] {
-					continue
-				}
-				stepName := name
-				if step.Position != target {
-					var stepNameOK bool
-					stepName, stepNameOK = bot.GetBlockName(step.Position.X(), step.Position.Y(), step.Position.Z())
-					if !stepNameOK || strings.EqualFold(stepName, "minecraft:bedrock") {
-						continue
-					}
 				}
 
 				dist := bm.distance(botPos, mgl32.Vec3{float32(tx) + 0.5, float32(ty) + 0.5, float32(tz) + 0.5})
@@ -162,6 +141,39 @@ func (bm *BlockMiner) findBestMineStep(resolvedName string, dugPositions map[str
 	}
 
 	return bestStep, bestBlockName, foundCandidate
+}
+
+func (bm *BlockMiner) evaluateMineCandidate(target protocol.BlockPos, botPos mgl32.Vec3, bx, by, bz int32, resolvedName string, dugPositions map[string]bool, world entity.WorldModel) (mineStep, string, bool) {
+	if dugPositions[mineKey(target)] {
+		return mineStep{}, "", false
+	}
+	if target.X() == bx && target.Z() == bz && (target.Y() == by || target.Y() == by-1) {
+		return mineStep{}, "", false
+	}
+	if !world.IsSolid(target.X(), target.Y(), target.Z()) {
+		return mineStep{}, "", false
+	}
+
+	name, ok := bm.rg.bot.GetBlockName(target.X(), target.Y(), target.Z())
+	if !ok || !blockNameMatches(name, resolvedName) {
+		return mineStep{}, "", false
+	}
+
+	step, ok := planMineStep(world, botPos, target)
+	if !ok || dugPositions[mineKey(step.Position)] {
+		return mineStep{}, "", false
+	}
+
+	stepName := name
+	if step.Position != target {
+		var stepNameOK bool
+		stepName, stepNameOK = bm.rg.bot.GetBlockName(step.Position.X(), step.Position.Y(), step.Position.Z())
+		if !stepNameOK || strings.EqualFold(stepName, "minecraft:bedrock") {
+			return mineStep{}, "", false
+		}
+	}
+
+	return step, stepName, true
 }
 
 func (bm *BlockMiner) breakBlock(ctx context.Context, step mineStep, blockName string) bool {

@@ -43,26 +43,36 @@ func blockNameMatches(blockName, requested string) bool {
 }
 
 func (bm *BlockMiner) equipBestTool(resolvedName string) {
+	requiredType := bm.requiredToolType(resolvedName)
+	if requiredType == "" {
+		_ = bm.rg.bot.UnequipItem()
+		return
+	}
+	if !bm.equipToolByType(requiredType) {
+		_ = bm.rg.bot.UnequipItem()
+	}
+}
+
+func (bm *BlockMiner) requiredToolType(resolvedName string) string {
+	if strings.Contains(resolvedName, "stone") || strings.Contains(resolvedName, "ore") ||
+		strings.Contains(resolvedName, "brick") || strings.Contains(resolvedName, "cobble") {
+		return "pickaxe"
+	}
+	if strings.Contains(resolvedName, "dirt") || strings.Contains(resolvedName, "sand") ||
+		strings.Contains(resolvedName, "gravel") || strings.Contains(resolvedName, "clay") {
+		return "shovel"
+	}
+	if strings.Contains(resolvedName, "log") || strings.Contains(resolvedName, "wood") ||
+		strings.Contains(resolvedName, "plank") {
+		return "axe"
+	}
+	return ""
+}
+
+func (bm *BlockMiner) equipToolByType(requiredType string) bool {
 	bot := bm.rg.bot
 	inv := bot.GetInventorySlots()
 	names := bot.GetItemNames()
-
-	var requiredType string
-	if strings.Contains(resolvedName, "stone") || strings.Contains(resolvedName, "ore") ||
-		strings.Contains(resolvedName, "brick") || strings.Contains(resolvedName, "cobble") {
-		requiredType = "pickaxe"
-	} else if strings.Contains(resolvedName, "dirt") || strings.Contains(resolvedName, "sand") ||
-		strings.Contains(resolvedName, "gravel") || strings.Contains(resolvedName, "clay") {
-		requiredType = "shovel"
-	} else if strings.Contains(resolvedName, "log") || strings.Contains(resolvedName, "wood") ||
-		strings.Contains(resolvedName, "plank") {
-		requiredType = "axe"
-	}
-
-	if requiredType == "" {
-		_ = bot.UnequipItem()
-		return
-	}
 
 	priority := []string{
 		"netherite_" + requiredType,
@@ -81,12 +91,11 @@ func (bm *BlockMiner) equipBestTool(resolvedName string) {
 			name := names[item.NetworkID]
 			if strings.Contains(strings.ToLower(name), toolName) {
 				_ = bot.EquipItem(slot)
-				return
+				return true
 			}
 		}
 	}
-
-	_ = bot.UnequipItem()
+	return false
 }
 
 func (bm *BlockMiner) distance(a mgl32.Vec3, b mgl32.Vec3) float32 {
