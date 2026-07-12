@@ -1,3 +1,4 @@
+// Package chat handles player chat messages and AI-driven bot responses.
 package chat
 
 import (
