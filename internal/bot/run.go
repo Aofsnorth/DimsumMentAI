@@ -1,3 +1,5 @@
+// Package bot implements the bot core, including connection lifecycle,
+// subsystem initialization, and main run loop.
 package bot
 
 import (
@@ -20,20 +22,38 @@ import (
 
 	"github.com/go-gl/mathgl/mgl32"
 	"github.com/google/uuid"
+	"github.com/sandertv/gophertunnel/minecraft"
 )
 
 func (b *Bot) Run(ctx context.Context) error {
-	conn, err := b.Dialer()
+	conn, gd, err := b.connect(ctx)
 	if err != nil {
-		return fmt.Errorf("dial: %w", err)
+		return err
 	}
 	b.Conn = conn
 	defer b.Conn.Close()
 
+	b.initSpawn(gd)
+	defer b.SaveLastStandingPosition()
+	b.initSubsystems(gd)
+	b.startLoops(ctx, gd)
+
+	if PacketLoopFunc != nil {
+		return PacketLoopFunc(ctx, b)
+	}
+	return nil
+}
+
+func (b *Bot) connect(ctx context.Context) (*minecraft.Conn, minecraft.GameData, error) {
+	conn, err := b.Dialer()
+	if err != nil {
+		return nil, minecraft.GameData{}, fmt.Errorf("dial: %w", err)
+	}
+
 	go func() {
 		<-ctx.Done()
 		b.Logger.Info("shutdown requested, closing connection")
-		_ = b.Conn.Close()
+		_ = conn.Close()
 	}()
 
 	if parsedUUID, err := uuid.Parse(conn.IdentityData().Identity); err == nil {
@@ -48,45 +68,34 @@ func (b *Bot) Run(ctx context.Context) error {
 		slog.Bool("UseBlockNetworkIDHashes", conn.GameData().UseBlockNetworkIDHashes),
 	)
 
-	if err := b.Conn.DoSpawn(); err != nil {
-		return fmt.Errorf("spawn: %w", err)
+	if err := conn.DoSpawn(); err != nil {
+		return nil, minecraft.GameData{}, fmt.Errorf("spawn: %w", err)
 	}
+	gd := conn.GameData()
+	return conn, gd, nil
+}
 
-	gd := b.Conn.GameData()
+func (b *Bot) initSpawn(gd minecraft.GameData) {
 	b.WorldCache.SetUseBlockNetworkIDHashes(gd.UseBlockNetworkIDHashes)
 	b.Mu.Lock()
 	b.Pos = gd.PlayerPosition.Sub(mgl32.Vec3{0, 1.62, 0})
 	b.Yaw = gd.Yaw
 	b.HeadYaw = gd.Yaw
 	b.Pitch = gd.Pitch
-	// Initialize item names map from StartGame packet
 	for _, entry := range gd.Items {
 		b.ItemNames[int32(entry.RuntimeID)] = entry.Name
 	}
 	b.Mu.Unlock()
 
-	// Validate spawn position - if in void (y > 320 or y < -64), set to safe height
-	spawnY := gd.PlayerPosition.Y() - 1.62
-	if spawnY > 320 || spawnY < -64 {
-		b.Logger.Warn("Bot spawned in void, setting to safe height",
-			slog.Float64("y", float64(spawnY)),
-		)
-		b.Mu.Lock()
-		b.Pos = mgl32.Vec3{gd.PlayerPosition.X(), 100, gd.PlayerPosition.Z()}
-		b.Mu.Unlock()
-	} else {
-		b.Mu.Lock()
-		b.Pos = gd.PlayerPosition.Sub(mgl32.Vec3{0, 1.62, 0})
-		b.Mu.Unlock()
-	}
+	b.clampSpawnPosition(gd)
 
 	b.Mu.Lock()
 	actualPos := b.Pos
 	b.IsGrounded = true
 	b.RewindMovement = gd.PlayerMovementSettings.RewindHistorySize > 0
-	// gd.Time is world day-time, not the server tick used by PlayerAuthInput / rewind.
 	b.ServerTick = 0
 	b.Mu.Unlock()
+
 	b.Logger.Info("spawned in world",
 		slog.String("name", b.Name),
 		slog.Float64("x", float64(actualPos.X())),
@@ -94,7 +103,7 @@ func (b *Bot) Run(ctx context.Context) error {
 		slog.Float64("z", float64(actualPos.Z())),
 		slog.Bool("client_cache_enabled", b.Conn.ClientCacheEnabled()),
 	)
-	// #region agent log
+
 	debuglog.Log("F", "run.go:spawned", "bot spawned", map[string]any{
 		"clientCacheEnabled": b.Conn.ClientCacheEnabled(),
 		"chunkRadius":        b.Conn.ChunkRadius(),
@@ -106,7 +115,7 @@ func (b *Bot) Run(ctx context.Context) error {
 		"serverTickInit":     0,
 		"runId":              "tick-fix",
 	})
-	// #endregion
+
 	if lastPos, ok := b.LoadLastStandingPosition(); ok {
 		b.Logger.Debug("loaded last standing position",
 			slog.Float64("x", float64(lastPos.X())),
@@ -115,9 +124,25 @@ func (b *Bot) Run(ctx context.Context) error {
 		)
 	}
 	b.SaveLastStandingPosition()
-	defer b.SaveLastStandingPosition()
+}
 
-	// Initialize subsystems
+func (b *Bot) clampSpawnPosition(gd minecraft.GameData) {
+	spawnY := gd.PlayerPosition.Y() - 1.62
+	if spawnY > 320 || spawnY < -64 {
+		b.Logger.Warn("Bot spawned in void, setting to safe height",
+			slog.Float64("y", float64(spawnY)),
+		)
+		b.Mu.Lock()
+		b.Pos = mgl32.Vec3{gd.PlayerPosition.X(), 100, gd.PlayerPosition.Z()}
+		b.Mu.Unlock()
+		return
+	}
+	b.Mu.Lock()
+	b.Pos = gd.PlayerPosition.Sub(mgl32.Vec3{0, 1.62, 0})
+	b.Mu.Unlock()
+}
+
+func (b *Bot) initSubsystems(gd minecraft.GameData) {
 	b.WorldCache.SetLogger(b.Logger)
 	b.WorldModel.SetChunkQuerier(b.WorldCache)
 
@@ -134,79 +159,46 @@ func (b *Bot) Run(ctx context.Context) error {
 
 	b.Bus.Publish(event.SpawnEvent{GameData: gd})
 
-	// Tell the server we finished loading
 	if SendLoadingScreenDoneFunc != nil {
 		SendLoadingScreenDoneFunc(b)
 	}
+}
+
+func (b *Bot) startLoops(ctx context.Context, gd minecraft.GameData) {
 	if b.VenityCompat && VenityCompatLoopFunc != nil {
 		go VenityCompatLoopFunc(ctx, b)
 	}
-
-	// Register chat listener via registered function pointer
 	if InitChatListenerFunc != nil {
 		InitChatListenerFunc(ctx, b)
 	}
-
-	// Start proactive conversation loop (AGI layer — bot can initiate
-	// conversation autonomously without player trigger).
 	if StartProactiveLoopFunc != nil {
 		go StartProactiveLoopFunc(ctx, b)
 	}
-
-	// Start sending PlayerAuthInput so the server registers
-	// the bot's physical position and broadcasts it to other players.
 	if SendInputLoopFunc != nil {
 		go SendInputLoopFunc(ctx, b, gd)
 	}
 	go b.StartPositionSaver(ctx.Done())
 
-	// Start combat and threat detector loops
-	go func() {
-		ticker := time.NewTicker(200 * time.Millisecond)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				b.CombatMgr.Tick(ctx)
-			}
-		}
-	}()
-
-	go func() {
-		ticker := time.NewTicker(1200 * time.Millisecond)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				b.ThreatDet.Scan(ctx)
-			}
-		}
-	}()
-
-	// Survival automation loop: auto-eat, auto-armor, time-based actions
-	go func() {
-		ticker := time.NewTicker(500 * time.Millisecond)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				b.SurvivalMgr.Tick()
-			}
-		}
-	}()
+	b.runTickerLoop(ctx, 200*time.Millisecond, func() { b.CombatMgr.Tick(ctx) })
+	b.runTickerLoop(ctx, 1200*time.Millisecond, func() { b.ThreatDet.Scan(ctx) })
+	b.runTickerLoop(ctx, 500*time.Millisecond, func() { b.SurvivalMgr.Tick() })
 
 	if ChunkRequesterLoopFunc != nil {
 		go ChunkRequesterLoopFunc(ctx, b)
 	}
+}
 
-	if PacketLoopFunc != nil {
-		return PacketLoopFunc(ctx, b)
-	}
-	return nil
+func (b *Bot) runTickerLoop(ctx context.Context, interval time.Duration, tick func()) {
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				tick()
+			}
+		}
+	}()
 }
