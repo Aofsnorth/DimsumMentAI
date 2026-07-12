@@ -1,3 +1,4 @@
+// Package world handles world-packet processing for chunk and block updates.
 package world
 
 import (
@@ -23,85 +24,99 @@ func LevelChunkReceivedCount() uint64 {
 func HandleWorldPacket(b *bot.Bot, pk packet.Packet) bool {
 	switch p := pk.(type) {
 	case *packet.LevelChunk:
-		n := levelChunkReceived.Add(1)
-		if n <= 2 || n%40 == 0 {
-			// #region agent log
-			debuglog.Log("G", "world.go:LevelChunk", "level chunk received", map[string]any{
-				"count":         n,
-				"subChunkCount": p.SubChunkCount,
-				"cacheEnabled":  p.CacheEnabled,
-				"payloadLen":    len(p.RawPayload),
-				"runId":         "post-fix-v2",
-			})
-			// #endregion
-		}
-
-		if p.CacheEnabled && len(p.BlobHashes) > 0 {
-			_ = b.Conn.WritePacket(&packet.ClientCacheBlobStatus{
-				MissHashes: append([]uint64(nil), p.BlobHashes...),
-			})
-			_ = b.Conn.Flush()
-		}
-
-		// Venity hub floods 400+ full chunks at spawn. Decode only chunks
-		// near the bot/active target so pathfinding has local ground data
-		// without making the packet loop chew through the whole flood.
-		if shouldDecodeLevelChunk(b, p) {
-			pkCopy := *p
-			if len(p.RawPayload) > 0 {
-				pkCopy.RawPayload = append([]byte(nil), p.RawPayload...)
-			}
-			go b.WorldCache.HandleLevelChunk(&pkCopy)
-		}
-
-		if p.SubChunkCount == protocol.SubChunkRequestModeLimitless || p.SubChunkCount == protocol.SubChunkRequestModeLimited {
-			b.Mu.Lock()
-			b.SubChunkRequestMode = true
-			b.Mu.Unlock()
-
-			highestY := int32(25)
-			if p.SubChunkCount == protocol.SubChunkRequestModeLimited {
-				highestY = int32(p.HighestSubChunk)
-			}
-
-			var offsets []protocol.SubChunkOffset
-			for y := int32(-4); y <= highestY; y++ {
-				offsets = append(offsets, protocol.SubChunkOffset{0, safecast.To[int8](y), 0})
-			}
-
-			_ = b.Conn.WritePacket(&packet.SubChunkRequest{
-				Dimension: p.Dimension,
-				Position: protocol.SubChunkPos{
-					p.Position[0],
-					0,
-					p.Position[1],
-				},
-				Offsets: offsets,
-			})
-			_ = b.Conn.Flush()
-		}
+		handleLevelChunk(b, p)
 		return true
-
 	case *packet.ClientCacheMissResponse:
-		blobs := make(map[uint64][]byte, len(p.Blobs))
-		for _, blob := range p.Blobs {
-			blobs[blob.Hash] = blob.Payload
-		}
-		b.WorldCache.StoreBlobs(blobs)
+		handleClientCacheMissResponse(b, p)
 		return true
-
 	case *packet.SubChunk:
 		b.WorldCache.HandleSubChunk(p)
 		return true
-
 	case *packet.UpdateBlock:
-		b.WorldCache.SetBlockRID(p.Position.X(), p.Position.Y(), p.Position.Z(), p.NewBlockRuntimeID)
-		isSolid := b.WorldCache.IsRIDSolid(p.NewBlockRuntimeID)
-		b.WorldModel.SetSolid(p.Position.X(), p.Position.Y(), p.Position.Z(), isSolid)
+		handleUpdateBlock(b, p)
 		return true
 	}
-
 	return false
+}
+
+func handleLevelChunk(b *bot.Bot, p *packet.LevelChunk) {
+	n := levelChunkReceived.Add(1)
+	if n <= 2 || n%40 == 0 {
+		// #region agent log
+		debuglog.Log("G", "world.go:LevelChunk", "level chunk received", map[string]any{
+			"count":         n,
+			"subChunkCount": p.SubChunkCount,
+			"cacheEnabled":  p.CacheEnabled,
+			"payloadLen":    len(p.RawPayload),
+			"runId":         "post-fix-v2",
+		})
+		// #endregion
+	}
+
+	if p.CacheEnabled && len(p.BlobHashes) > 0 {
+		_ = b.Conn.WritePacket(&packet.ClientCacheBlobStatus{
+			MissHashes: append([]uint64(nil), p.BlobHashes...),
+		})
+		_ = b.Conn.Flush()
+	}
+
+	// Venity hub floods 400+ full chunks at spawn. Decode only chunks
+	// near the bot/active target so pathfinding has local ground data
+	// without making the packet loop chew through the whole flood.
+	if shouldDecodeLevelChunk(b, p) {
+		pkCopy := *p
+		if len(p.RawPayload) > 0 {
+			pkCopy.RawPayload = append([]byte(nil), p.RawPayload...)
+		}
+		go b.WorldCache.HandleLevelChunk(&pkCopy)
+	}
+
+	handleLevelChunkSubChunkRequest(b, p)
+}
+
+func handleLevelChunkSubChunkRequest(b *bot.Bot, p *packet.LevelChunk) {
+	if p.SubChunkCount != protocol.SubChunkRequestModeLimitless && p.SubChunkCount != protocol.SubChunkRequestModeLimited {
+		return
+	}
+
+	b.Mu.Lock()
+	b.SubChunkRequestMode = true
+	b.Mu.Unlock()
+
+	highestY := int32(25)
+	if p.SubChunkCount == protocol.SubChunkRequestModeLimited {
+		highestY = int32(p.HighestSubChunk)
+	}
+
+	offsets := make([]protocol.SubChunkOffset, 0, highestY+4)
+	for y := int32(-4); y <= highestY; y++ {
+		offsets = append(offsets, protocol.SubChunkOffset{0, safecast.To[int8](y), 0})
+	}
+
+	_ = b.Conn.WritePacket(&packet.SubChunkRequest{
+		Dimension: p.Dimension,
+		Position: protocol.SubChunkPos{
+			p.Position[0],
+			0,
+			p.Position[1],
+		},
+		Offsets: offsets,
+	})
+	_ = b.Conn.Flush()
+}
+
+func handleClientCacheMissResponse(b *bot.Bot, p *packet.ClientCacheMissResponse) {
+	blobs := make(map[uint64][]byte, len(p.Blobs))
+	for _, blob := range p.Blobs {
+		blobs[blob.Hash] = blob.Payload
+	}
+	b.WorldCache.StoreBlobs(blobs)
+}
+
+func handleUpdateBlock(b *bot.Bot, p *packet.UpdateBlock) {
+	b.WorldCache.SetBlockRID(p.Position.X(), p.Position.Y(), p.Position.Z(), p.NewBlockRuntimeID)
+	isSolid := b.WorldCache.IsRIDSolid(p.NewBlockRuntimeID)
+	b.WorldModel.SetSolid(p.Position.X(), p.Position.Y(), p.Position.Z(), isSolid)
 }
 
 func shouldDecodeLevelChunk(b *bot.Bot, p *packet.LevelChunk) bool {
