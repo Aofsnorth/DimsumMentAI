@@ -74,7 +74,7 @@ var (
 // PlannerInterface is implemented by bot/planner.Planner. Defined here to
 // break the circular dependency (bot/planner imports bot, bot can't import
 // bot/planner). The interface exposes only what the bot and chat handler
-// need: running plans, cancelling, and rendering the todo list.
+// need: running plans, canceling, and rendering the todo list.
 type PlannerInterface interface {
 	Run(goal, user string, actions []string)
 	RunFromChat(user, request string)

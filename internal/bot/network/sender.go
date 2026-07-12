@@ -9,6 +9,7 @@ import (
 
 	"bedrock-ai/internal/bot"
 	"bedrock-ai/internal/debuglog"
+
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
 	"github.com/sandertv/gophertunnel/minecraft/protocol/packet"
 )

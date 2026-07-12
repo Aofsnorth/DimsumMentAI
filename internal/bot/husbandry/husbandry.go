@@ -176,7 +176,7 @@ func (m *Manager) BreedAnimals(ctx context.Context, animalType string) bool {
 		if ent.Health <= 0 {
 			continue
 		}
-		if strings.ToLower(ent.Type) == typeLower {
+		if strings.EqualFold(ent.Type, typeLower) {
 			dist := pos.Sub(ent.Position).Len()
 			if dist <= 32 {
 				targets = append(targets, ent)
@@ -289,7 +289,7 @@ func (m *Manager) FeedAnimal(ctx context.Context, animalType string) bool {
 		if ent.Health <= 0 {
 			continue
 		}
-		if strings.ToLower(ent.Type) == typeLower {
+		if strings.EqualFold(ent.Type, typeLower) {
 			dist := pos.Sub(ent.Position).Len()
 			if dist < closestDist {
 				closestDist = dist
@@ -477,7 +477,7 @@ func (m *Manager) ShearSheep(ctx context.Context) bool {
 		if ent.Health <= 0 {
 			continue
 		}
-		if strings.ToLower(ent.Type) == "sheep" {
+		if strings.EqualFold(ent.Type, "sheep") {
 			dist := pos.Sub(ent.Position).Len()
 			if dist < closestDist {
 				closestDist = dist
@@ -576,7 +576,7 @@ func (m *Manager) tameWithItem(ctx context.Context, animalType, itemName, action
 		if ent.Health <= 0 {
 			continue
 		}
-		if strings.ToLower(ent.Type) == animalType {
+		if strings.EqualFold(ent.Type, animalType) {
 			dist := pos.Sub(ent.Position).Len()
 			if dist < closestDist {
 				closestDist = dist

@@ -43,9 +43,6 @@ type Farmer struct {
 	logger    *slog.Logger
 	mu        sync.Mutex
 	isFarming bool
-
-	// Known farm plot positions
-	farmPlots []protocol.BlockPos
 }
 
 func NewFarmer(bot Bot, logger *slog.Logger) *Farmer {

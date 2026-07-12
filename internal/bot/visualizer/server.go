@@ -12,6 +12,7 @@ import (
 	"bedrock-ai/internal/bot"
 	"bedrock-ai/internal/bot/movement"
 	"bedrock-ai/internal/bot/pathfinder"
+
 	"github.com/go-gl/mathgl/mgl32"
 	"github.com/gorilla/websocket"
 )
@@ -55,7 +56,14 @@ func StartServer(b *bot.Bot) {
 
 	go func() {
 		b.Logger.Info("Starting Visualizer server on :8080")
-		if err := http.ListenAndServe(":8080", http.HandlerFunc(handler)); err != nil {
+		srv := &http.Server{
+			Addr:         ":8080",
+			Handler:      http.HandlerFunc(handler),
+			ReadTimeout:  5 * time.Second,
+			WriteTimeout: 10 * time.Second,
+			IdleTimeout:  120 * time.Second,
+		}
+		if err := srv.ListenAndServe(); err != nil {
 			b.Logger.Error("Visualizer server failed", "error", err)
 		}
 	}()
@@ -136,7 +144,11 @@ func (s *Server) broadcastLoop() {
 
 		s.clientMu.Lock()
 		for conn := range s.clients {
-			conn.SetWriteDeadline(time.Now().Add(time.Second))
+			if err := conn.SetWriteDeadline(time.Now().Add(time.Second)); err != nil {
+				conn.Close()
+				delete(s.clients, conn)
+				continue
+			}
 			if err := conn.WriteMessage(websocket.TextMessage, msg); err != nil {
 				conn.Close()
 				delete(s.clients, conn)
@@ -229,7 +241,9 @@ func (s *Server) handleBlocks(w http.ResponseWriter, r *http.Request) {
 	s.b.Mu.Unlock()
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(s.collectBlocks(cx, cy, cz, radius))
+	if err := json.NewEncoder(w).Encode(s.collectBlocks(cx, cy, cz, radius)); err != nil {
+		s.b.Logger.Error("encode blocks response", "error", err)
+	}
 }
 
 type coordRequest struct {
@@ -289,7 +303,9 @@ func (s *Server) handlePathPreview(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(resp)
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
+		s.b.Logger.Error("encode path response", "error", err)
+	}
 }
 
 func (s *Server) handleWalk(w http.ResponseWriter, r *http.Request) {
@@ -313,10 +329,12 @@ func (s *Server) handleWalk(w http.ResponseWriter, r *http.Request) {
 	s.b.WalkTo(dest)
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{
+	if err := json.NewEncoder(w).Encode(map[string]any{
 		"ok":     true,
 		"target": map[string]float32{"x": dest.X(), "y": dest.Y(), "z": dest.Z()},
-	})
+	}); err != nil {
+		s.b.Logger.Error("encode walk response", "error", err)
+	}
 }
 
 func (s *Server) handleDebugBreak(w http.ResponseWriter, r *http.Request) {
@@ -354,7 +372,9 @@ func (s *Server) handleDebugBreak(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{"ok": true})
+	if err := json.NewEncoder(w).Encode(map[string]any{"ok": true}); err != nil {
+		s.b.Logger.Error("encode response", "error", err)
+	}
 }
 
 func (s *Server) handleDebugPlace(w http.ResponseWriter, r *http.Request) {
@@ -380,7 +400,9 @@ func (s *Server) handleDebugPlace(w http.ResponseWriter, r *http.Request) {
 	s.b.Mu.Unlock()
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{"ok": true})
+	if err := json.NewEncoder(w).Encode(map[string]any{"ok": true}); err != nil {
+		s.b.Logger.Error("encode response", "error", err)
+	}
 }
 
 func (s *Server) handleDebugInventory(w http.ResponseWriter, r *http.Request) {
@@ -410,8 +432,10 @@ func (s *Server) handleDebugInventory(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{
+	if err := json.NewEncoder(w).Encode(map[string]any{
 		"held_slot": heldSlot,
 		"slots":     slots,
-	})
+	}); err != nil {
+		s.b.Logger.Error("encode held response", "error", err)
+	}
 }

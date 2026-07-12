@@ -10,7 +10,7 @@ func TestItemNameMatches(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
 		itemName, ingredientName string
-		want                       bool
+		want                     bool
 	}{
 		{"oak_log", "oak_log", true},
 		{"minecraft:oak_log", "oak_log", true},

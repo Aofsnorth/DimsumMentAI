@@ -85,7 +85,7 @@ func (tc *TickContext) writePlayerAuthInputPacket() {
 	}
 	// HorizontalCollision must ONLY be set when we are genuinely blocked. A real
 	// client never reports a side collision while freely moving horizontally.
-	// Setting it unconditionally (the old behaviour) is harmless while idle but
+	// Setting it unconditionally (the old behavior) is harmless while idle but
 	// becomes a self-contradiction the moment we walk — "I'm wall-stuck" while
 	// posX/posZ change ~0.28/tick — which Venity's movement anticheat reads as a
 	// hack and silently closes the socket. Only flag it when we WANT to move but

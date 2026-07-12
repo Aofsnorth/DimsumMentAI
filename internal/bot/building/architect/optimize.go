@@ -16,9 +16,7 @@ func (ea *EnhancedAIArchitect) OptimizeBuildingOrder(blueprint []common.BlockEnt
 	flow := strings.ToLower(concept.BuildingFlow)
 	if flow == "layer" {
 		var sorted []common.BlockEntry
-		for _, b := range blueprint {
-			sorted = append(sorted, b)
-		}
+		sorted = append(sorted, blueprint...)
 		for i := 0; i < len(sorted); i++ {
 			for j := i + 1; j < len(sorted); j++ {
 				if sorted[i].Y > sorted[j].Y || (sorted[i].Y == sorted[j].Y && sorted[i].Z > sorted[j].Z) || (sorted[i].Y == sorted[j].Y && sorted[i].Z == sorted[j].Z && sorted[i].X > sorted[j].X) {

@@ -70,7 +70,7 @@ func FindPath(startNode, targetNode Node, world WorldModel, allowFallback bool) 
 
 	// Dynamic maxIterations based on distance to target
 	distanceToTarget := Distance(startNode, targetNode)
-	var maxIterations int32 = 10000
+	var maxIterations int32
 	if distanceToTarget < 20 {
 		maxIterations = 5000
 	} else if distanceToTarget < 50 {
@@ -80,8 +80,8 @@ func FindPath(startNode, targetNode Node, world WorldModel, allowFallback bool) 
 	}
 	iterations := int32(0)
 
-	var bestNode *Node = start
-	var closestDistance float32 = Distance(*start, targetNode)
+	var bestNode = start
+	var closestDistance = Distance(*start, targetNode)
 
 	for openSet.Len() > 0 && iterations < maxIterations {
 		iterations++
@@ -151,7 +151,7 @@ func FindPath(startNode, targetNode Node, world WorldModel, allowFallback bool) 
 }
 
 func reconstructPath(endNode *Node) []Node {
-	var path []Node
+	path := make([]Node, 0, 64)
 	curr := endNode
 	for curr != nil {
 		path = append(path, *curr)

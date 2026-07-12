@@ -7,6 +7,7 @@ import (
 
 	"bedrock-ai/internal/bot/building/common"
 	"bedrock-ai/internal/bot/building/schematic"
+
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
 )
 

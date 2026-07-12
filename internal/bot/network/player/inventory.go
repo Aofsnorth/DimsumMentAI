@@ -281,7 +281,7 @@ func applyInventoryTransaction(b *bot.Bot, p *packet.InventoryTransaction) {
 	defer b.Mu.Unlock()
 
 	updated := 0
-	var updatedSlots []uint32
+	updatedSlots := make([]uint32, 0, len(p.Actions))
 	for _, action := range p.Actions {
 		// Always log the action details so we can diagnose servers that use
 		// unexpected source/window combinations for item pickups.

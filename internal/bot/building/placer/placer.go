@@ -8,6 +8,7 @@ import (
 
 	"bedrock-ai/internal/bot/building/common"
 	"bedrock-ai/internal/bot/building/schematic"
+
 	"github.com/go-gl/mathgl/mgl32"
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
 	"github.com/sandertv/gophertunnel/minecraft/protocol/packet"
@@ -64,7 +65,6 @@ func (bp *BlockPlacer) PlaceBlockAt(ctx context.Context, x, y, z int, blockName 
 			return false
 		}
 		bp.logger.Info("Using substituted material", "original", blockName, "substitute", subName)
-		blockName = subName
 	}
 
 	_ = bp.bot.EquipItem(slot)

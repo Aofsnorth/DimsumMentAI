@@ -23,7 +23,7 @@ func (ba *BuilderAgent) executeBlockList(ctx context.Context, blocks []common.Bl
 	for idx, entry := range blocks {
 		select {
 		case <-ctx.Done():
-			ba.logger.Warn("Block placement loop cancelled by context")
+			ba.logger.Warn("Block placement loop canceled by context")
 			return false
 		default:
 		}

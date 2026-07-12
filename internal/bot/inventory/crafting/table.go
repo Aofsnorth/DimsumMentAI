@@ -128,7 +128,7 @@ func (m *Manager) EnsureCraftingTableForItem(ctx context.Context, targetItem str
 func (m *Manager) OpenCraftingTable(ctx context.Context, pos protocol.BlockPos) error {
 	m.bot.LookAt(mgl32.Vec3{float32(pos.X()) + 0.5, float32(pos.Y()) + 0.5, float32(pos.Z()) + 0.5})
 	if !sleepCtx(ctx, 150*time.Millisecond) {
-		return errors.New("cancelled")
+		return errors.New("canceled")
 	}
 
 	tx := &packet.InventoryTransaction{
@@ -152,7 +152,7 @@ func (m *Manager) OpenCraftingTable(ctx context.Context, pos protocol.BlockPos) 
 	// CraftItem's StackRequest carries the recipe network ID server already
 	// associates with crafting_table by class.
 	if !sleepCtx(ctx, 200*time.Millisecond) {
-		return errors.New("cancelled")
+		return errors.New("canceled")
 	}
 	return nil
 }
@@ -210,7 +210,7 @@ func (m *Manager) findCraftingTableInInventory() (uint32, bool) {
 	return 0, false
 }
 
-// findPlacementSpot picks an empty tile in one of the 4 horizontal neighbours
+// findPlacementSpot picks an empty tile in one of the 4 horizontal neighbors
 // of the bot whose tile below is solid, the tile itself is empty, and the
 // tile above is empty (so the table doesn't suffocate the bot's head).
 //
@@ -252,11 +252,11 @@ func (m *Manager) placeCraftingTable(ctx context.Context, slot uint32, place, su
 		return fmt.Errorf("equip: %w", err)
 	}
 	if !sleepCtx(ctx, 150*time.Millisecond) {
-		return errors.New("cancelled")
+		return errors.New("canceled")
 	}
 	m.bot.LookAt(mgl32.Vec3{float32(support.X()) + 0.5, float32(support.Y()) + 1.0, float32(support.Z()) + 0.5})
 	if !sleepCtx(ctx, 100*time.Millisecond) {
-		return errors.New("cancelled")
+		return errors.New("canceled")
 	}
 
 	inv := m.bot.GetInventorySlots()
@@ -278,12 +278,12 @@ func (m *Manager) placeCraftingTable(ctx context.Context, slot uint32, place, su
 	// see this block even before the server's chunk diff lands.
 	m.bot.GetLocalWorldModel().SetSolid(place.X(), place.Y(), place.Z(), true)
 	if !sleepCtx(ctx, 250*time.Millisecond) {
-		return errors.New("cancelled")
+		return errors.New("canceled")
 	}
 	return nil
 }
 
-// pickStandableAdjacent picks the first 4-cardinal neighbour of pos where the
+// pickStandableAdjacent picks the first 4-cardinal neighbor of pos where the
 // bot can stand (tile empty, tile above empty, tile below solid). Returns
 // nil when no side qualifies.
 func pickStandableAdjacent(bot Bot, pos protocol.BlockPos) *protocol.BlockPos {

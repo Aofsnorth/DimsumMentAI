@@ -42,7 +42,7 @@ func (ba *BuilderAgent) formatNearbyStructures(nearby []common.StructureInfo) st
 	if len(nearby) == 0 {
 		return ""
 	}
-	var list []string
+	list := make([]string, 0, len(nearby))
 	for _, st := range nearby {
 		list = append(list, fmt.Sprintf("%s(%d,%d,%d)", st.Name, st.X, st.Y, st.Z))
 	}

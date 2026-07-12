@@ -5,6 +5,7 @@ import (
 
 	"bedrock-ai/internal/bot"
 	"bedrock-ai/internal/bot/pathfinder"
+
 	"github.com/go-gl/mathgl/mgl32"
 )
 

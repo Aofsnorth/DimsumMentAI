@@ -19,7 +19,7 @@ import (
 	"bedrock-ai/internal/harness"
 )
 
-// Config controls the license-header guide behaviour.
+// Config controls the license-header guide behavior.
 type Config struct {
 	// RootDir is the root directory to scan. Default: ".".
 	RootDir string

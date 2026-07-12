@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"bedrock-ai/internal/bot/building/common"
+
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
 )
 
@@ -70,7 +71,7 @@ func IsScaffoldSafe(name string) bool {
 // FindSubstitute checks available inventory blocks to find a suitable substitute for a target block type.
 func FindSubstitute(target string, available []common.BuildItem) string {
 	target = strings.ReplaceAll(target, "minecraft:", "")
-	
+
 	for _, item := range available {
 		if item.Name == target {
 			return target

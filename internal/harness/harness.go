@@ -13,7 +13,7 @@ type Category string
 const (
 	CategoryMaintainability Category = "maintainability"
 	CategoryArchitecture    Category = "architecture"
-	CategoryBehaviour       Category = "behaviour"
+	CategoryBehaviour       Category = "behavior"
 )
 
 // ExecutionMode describes whether a check is deterministic or semantic.

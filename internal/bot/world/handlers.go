@@ -2,6 +2,7 @@ package world
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 
 	"github.com/df-mc/dragonfly/server/block/cube"
@@ -99,7 +100,7 @@ func (wc *WorldCache) HandleSubChunk(pk *packet.SubChunk) {
 					valid = false
 					break
 				}
-				if wc.logger != nil && wc.logger.Enabled(nil, -4) && storages[i] != nil && len(storages[i].palette) > 0 { // -4 is Debug
+				if wc.logger != nil && wc.logger.Enabled(context.TODO(), -4) && storages[i] != nil && len(storages[i].palette) > 0 { // -4 is Debug
 					var names []string
 					for _, rid := range storages[i].palette {
 						name, _, _ := chunk.RuntimeIDToState(rid)
@@ -142,7 +143,7 @@ func applyStorageToChunk(c *chunk.Chunk, airRID uint32, r cube.Range, subY int32
 		for ly := byte(0); ly < 16; ly++ {
 			for lz := byte(0); lz < 16; lz++ {
 				rid := primary.runtimeIDAt(lx, ly, lz)
-				worldY := int16(int32(baseWorldY) + int32(ly))
+				worldY := int16(baseWorldY + int32(ly))
 				if int(worldY) < r.Min() || int(worldY) > r.Max() {
 					continue
 				}

@@ -10,11 +10,11 @@ func sortAggressive(blocks []common.BlockEntry, minX, maxX, minY, minZ, maxZ int
 	if len(blocks) == 0 {
 		return []common.BlockEntry{}
 	}
-	var result []common.BlockEntry
 	remaining := make(map[int]bool)
 	for i := range blocks {
 		remaining[i] = true
 	}
+	result := make([]common.BlockEntry, 0, len(blocks))
 
 	centerX := float64(minX+maxX) / 2
 	centerZ := float64(minZ+maxZ) / 2

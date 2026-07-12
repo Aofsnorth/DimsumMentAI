@@ -72,8 +72,8 @@ func splitMessage(msg string, maxLen int) []string {
 		return []string{msg}
 	}
 
-	var chunks []string
 	runes := []rune(msg)
+	chunks := make([]string, 0, len(runes)/maxLen+1)
 	for len(runes) > 0 {
 		if len(runes) <= maxLen {
 			chunks = append(chunks, string(runes))

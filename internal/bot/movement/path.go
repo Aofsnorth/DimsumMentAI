@@ -8,6 +8,7 @@ import (
 
 	"bedrock-ai/internal/bot"
 	"bedrock-ai/internal/bot/pathfinder"
+
 	"github.com/df-mc/dragonfly/server/world/chunk"
 	"github.com/go-gl/mathgl/mgl32"
 )

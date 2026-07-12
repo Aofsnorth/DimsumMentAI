@@ -210,15 +210,3 @@ func (b *Bot) Run(ctx context.Context) error {
 	}
 	return nil
 }
-
-func (b *Bot) sendLoadingScreenDone() {
-	if SendLoadingScreenDoneFunc != nil {
-		SendLoadingScreenDoneFunc(b)
-	}
-}
-
-func (b *Bot) sendPlayerSkin() {
-	if SendPlayerSkinFunc != nil {
-		SendPlayerSkinFunc(b)
-	}
-}

@@ -155,7 +155,7 @@ func typeString(t ast.Expr) string {
 func cyclomaticComplexity(fn *ast.FuncDecl) int {
 	cc := 1
 	ast.Inspect(fn, func(n ast.Node) bool {
-		switch n.(type) {
+		switch n := n.(type) {
 		case *ast.IfStmt, *ast.ForStmt, *ast.RangeStmt:
 			cc++
 		case *ast.CaseClause:
@@ -164,10 +164,8 @@ func cyclomaticComplexity(fn *ast.FuncDecl) int {
 			cc++
 		case *ast.BinaryExpr:
 			// && and || add a path each.
-			if be, ok := n.(*ast.BinaryExpr); ok {
-				if be.Op == token.LAND || be.Op == token.LOR {
-					cc++
-				}
+			if n.Op == token.LAND || n.Op == token.LOR {
+				cc++
 			}
 		}
 		return true

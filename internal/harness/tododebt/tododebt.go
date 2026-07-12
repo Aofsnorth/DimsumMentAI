@@ -23,7 +23,7 @@ import (
 // comment's content (after // or /*).
 var markerPattern = regexp.MustCompile(`(?i)\b(TODO|FIXME|HACK|XXX|BUG)\b`)
 
-// Config controls the TODO-debt sensor behaviour.
+// Config controls the TODO-debt sensor behavior.
 type Config struct {
 	// RootDir is the root directory to scan. Default: ".".
 	RootDir string
@@ -114,7 +114,7 @@ func (s *Sensor) scanFile(path string) ([]harness.Finding, error) {
 	}
 	defer f.Close()
 
-	var findings []harness.Finding
+	findings := make([]harness.Finding, 0, s.cfg.MaxFindings)
 	scanner := bufio.NewScanner(f)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	lineNum := 0

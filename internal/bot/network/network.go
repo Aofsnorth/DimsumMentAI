@@ -12,6 +12,7 @@ import (
 	"bedrock-ai/internal/bot/network/world"
 	"bedrock-ai/internal/debuglog"
 	"bedrock-ai/internal/event"
+
 	"github.com/sandertv/gophertunnel/minecraft"
 	"github.com/sandertv/gophertunnel/minecraft/protocol/packet"
 )
@@ -81,7 +82,7 @@ func PacketLoop(ctx context.Context, b *bot.Bot) error {
 				slog.String("error", handleErr.Error()),
 			)
 		}
-		
+
 		handleMs := time.Since(handleStart).Milliseconds()
 		if handleMs > 50 {
 			// #region agent log

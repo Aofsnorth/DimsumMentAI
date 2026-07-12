@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"bedrock-ai/internal/bot/building/common"
+
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
 )
 

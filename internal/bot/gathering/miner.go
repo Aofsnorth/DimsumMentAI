@@ -335,18 +335,6 @@ func (bm *BlockMiner) inventoryCount(resolvedName string) int {
 	return inventoryCountMatching(bm.rg.bot.GetInventorySlots(), bm.rg.bot.GetItemNames(), resolvedName)
 }
 
-func (bm *BlockMiner) waitForInventoryCount(ctx context.Context, resolvedName string, previousCount int, timeout time.Duration) int {
-	deadline := time.Now().Add(timeout)
-	latest := bm.inventoryCount(resolvedName)
-	for latest <= previousCount && time.Now().Before(deadline) {
-		if !sleepContext(ctx, 100*time.Millisecond) {
-			return latest
-		}
-		latest = bm.inventoryCount(resolvedName)
-	}
-	return latest
-}
-
 func mineKey(pos protocol.BlockPos) string {
 	return fmt.Sprintf("%d,%d,%d", pos.X(), pos.Y(), pos.Z())
 }

@@ -22,10 +22,10 @@ const (
 // convention as <action> tags (e.g. "gather:oak_log,4").
 type TodoItem struct {
 	Index    int        `json:"index"`
-	Action   string     `json:"action"`   // e.g. "gather:oak_log,4"
-	Desc     string     `json:"desc"`     // human-readable, auto-generated if empty
+	Action   string     `json:"action"` // e.g. "gather:oak_log,4"
+	Desc     string     `json:"desc"`   // human-readable, auto-generated if empty
 	Status   TodoStatus `json:"status"`
-	Note     string     `json:"note"`     // feedback / error from execution
+	Note     string     `json:"note"` // feedback / error from execution
 	Started  time.Time  `json:"started"`
 	Finished time.Time  `json:"finished"`
 }

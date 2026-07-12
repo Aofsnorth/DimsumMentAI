@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"bedrock-ai/internal/bot/entity"
+
 	"github.com/go-gl/mathgl/mgl32"
 )
 
@@ -93,7 +94,7 @@ func (td *ThreatDetector) Scan(ctx context.Context) {
 		}
 		nameLower := strings.ToLower(entity.Name)
 		typeLower := strings.ToLower(entity.Type)
-		
+
 		isHostile := hostileMobs[nameLower] || hostileMobs[typeLower]
 		if !isHostile {
 			continue

@@ -130,7 +130,6 @@ func (b *Bot) GetInventorySummary() string {
 		return "Inventory kosong"
 	}
 
-	var items []string
 	itemCounts := make(map[string]int)
 	for _, stack := range b.InventoryMap {
 		name := b.ItemNames[stack.NetworkID]
@@ -140,6 +139,7 @@ func (b *Bot) GetInventorySummary() string {
 		itemCounts[FormatItemName(name)] += int(stack.Count)
 	}
 
+	items := make([]string, 0, len(itemCounts))
 	for name, count := range itemCounts {
 		items = append(items, fmt.Sprintf("%s x%d", name, count))
 	}

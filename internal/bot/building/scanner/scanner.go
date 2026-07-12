@@ -130,9 +130,7 @@ func (s *AreaScanner) ScanNearbyStructures() []common.StructureInfo {
 
 	botPos := s.bot.GetCoords()
 	var sorted []common.StructureInfo
-	for _, st := range s.placedStructures {
-		sorted = append(sorted, st)
-	}
+	sorted = append(sorted, s.placedStructures...)
 
 	for i := 0; i < len(sorted); i++ {
 		for j := i + 1; j < len(sorted); j++ {
@@ -158,20 +156,20 @@ func (s *AreaScanner) FindTargetStructure(request string, nearby []common.Struct
 	lower := strings.ToLower(request)
 
 	keywords := map[string]string{
-		"bed":            "bed",
-		"kasur":          "bed",
-		"tempat tidur":   "bed",
-		"chest":          "chest",
-		"peti":           "chest",
-		"furnace":        "furnace",
-		"tungku":         "furnace",
-		"crafting":       "crafting_table",
-		"meja craft":     "crafting_table",
-		"enchant":        "enchanting_table",
-		"anvil":          "anvil",
-		"beacon":         "beacon",
-		"spawner":        "spawner",
-		"brewing":        "brewing_stand",
+		"bed":          "bed",
+		"kasur":        "bed",
+		"tempat tidur": "bed",
+		"chest":        "chest",
+		"peti":         "chest",
+		"furnace":      "furnace",
+		"tungku":       "furnace",
+		"crafting":     "crafting_table",
+		"meja craft":   "crafting_table",
+		"enchant":      "enchanting_table",
+		"anvil":        "anvil",
+		"beacon":       "beacon",
+		"spawner":      "spawner",
+		"brewing":      "brewing_stand",
 	}
 
 	for kw, targetName := range keywords {

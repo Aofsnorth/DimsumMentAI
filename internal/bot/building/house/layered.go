@@ -47,7 +47,7 @@ func sortByLayerThenNearest(blocks []common.BlockEntry) []common.BlockEntry {
 		layers[b.Y] = append(layers[b.Y], b)
 	}
 
-	var ys []int
+	ys := make([]int, 0, len(layers))
 	for y := range layers {
 		ys = append(ys, y)
 	}
@@ -59,7 +59,7 @@ func sortByLayerThenNearest(blocks []common.BlockEntry) []common.BlockEntry {
 		}
 	}
 
-	var result []common.BlockEntry
+	result := make([]common.BlockEntry, 0, len(blocks))
 	var lastBlock *common.BlockEntry
 
 	for _, y := range ys {

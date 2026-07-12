@@ -55,7 +55,6 @@ var leadingThinkCloseRegex = regexp.MustCompile(`(?s)^.*?</think>\s*`)
 
 // Parse extracts clean text, actions, and plan steps from the AI's reply.
 func Parse(reply string) ParsedReply {
-	var actions []Action
 	var planSteps []string
 
 	// Strip chain-of-thought reasoning blocks first. Some models (Minimax M2,
@@ -79,11 +78,12 @@ func Parse(reply string) ParsedReply {
 	// Extract <followup>N</followup> delay (0 = no followup).
 	followupSec := 0
 	if fm := followupRegex.FindStringSubmatch(reply); len(fm) >= 2 {
-		fmt.Sscanf(fm[1], "%d", &followupSec)
+		_, _ = fmt.Sscanf(fm[1], "%d", &followupSec)
 	}
 
 	// Find all <action>...</action> matches
 	matches := actionRegex.FindAllStringSubmatch(reply, -1)
+	actions := make([]Action, 0, len(matches))
 	for _, match := range matches {
 		if len(match) < 2 {
 			continue

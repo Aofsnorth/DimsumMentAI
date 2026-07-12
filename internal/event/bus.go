@@ -6,7 +6,7 @@ import (
 )
 
 type Bus struct {
-	mu         sync.RWMutex
+	mu          sync.RWMutex
 	subscribers map[reflect.Type][]func(interface{})
 }
 

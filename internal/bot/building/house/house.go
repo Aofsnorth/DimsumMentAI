@@ -97,10 +97,10 @@ func GenerateModern() []common.BlockEntry {
 
 // GenerateSuperModern creates a 10x10x5 quartz modern villa schematic.
 func GenerateSuperModern() []common.BlockEntry {
-	var schematic []common.BlockEntry
 	width := 10
 	depth := 10
 	height := 5
+	schematic := make([]common.BlockEntry, 0, width*depth*height)
 
 	// Floor
 	for x := 0; x < width; x++ {

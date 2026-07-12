@@ -89,14 +89,14 @@ func (tl *TemplateLibrary) LoadEmbeddedTemplates() error {
 
 // GetLibrarySummary returns all templates registered.
 func (tl *TemplateLibrary) GetLibrarySummary() string {
-	var summary []string
+	summary := make([]string, 0, len(tl.templates))
 	for key, template := range tl.templates {
 		counts := make(map[string]int)
 		for _, b := range template.Blocks {
 			counts[b.Type]++
 		}
 
-		var reqs []string
+		reqs := make([]string, 0, len(counts))
 		for name, count := range counts {
 			reqs = append(reqs, fmt.Sprintf("%s:%d", name, count))
 		}

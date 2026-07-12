@@ -90,11 +90,11 @@ func (ba *BuilderAgent) GetBuildStatus() string {
 }
 
 func (ba *BuilderAgent) getMaterialsSummary(items []common.BuildItem) string {
-	var summary []string
 	counts := make(map[string]int)
 	for _, it := range items {
 		counts[it.Name] += it.Count
 	}
+	summary := make([]string, 0, len(counts))
 	for name, count := range counts {
 		summary = append(summary, fmt.Sprintf("%s:%d", name, count))
 	}

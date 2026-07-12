@@ -18,7 +18,7 @@
 //
 //   - Maintainability: code quality, complexity, style.
 //   - Architecture fitness: module boundaries, dependency direction.
-//   - Behaviour: functional correctness via tests.
+//   - Behavior: functional correctness via tests.
 //
 // Design follows SOLID principles:
 //

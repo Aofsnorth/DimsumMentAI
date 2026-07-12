@@ -98,7 +98,7 @@ func (tc *TreeChopper) GatherWood(ctx context.Context, targetCount int, preferre
 					score := hDist + dyAbs*0.5
 					matched := preferred == "" || matchesPreferredLog(name, preferred)
 					if !matched {
-						// Soft-prefer match: penalise non-matching logs heavily so
+						// Soft-prefer match: penalize non-matching logs heavily so
 						// they only win when no preferred logs exist nearby.
 						score += 64
 					}

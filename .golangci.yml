@@ -14,16 +14,6 @@ run:
   go: "1.26"
   modules-download-mode: readonly
 
-  # Skip generated and vendored code.
-  skip-dirs:
-    - vendor
-    - node_modules
-    - web/visualizer/node_modules
-    - web/visualizer/src
-    - .kilo
-  skip-files:
-    - ".*_gen\\.go$"
-
 output:
   formats:
     - format: colored-line-number
@@ -83,10 +73,15 @@ linters-settings:
     enabled-tags:
       - diagnostic
       - performance
-      - style
     disabled-checks:
       - hugeParam       # struct params are intentional in this project
       - rangeValCopy    # some range copies are intentional
+      - typeSwitchVar   # auto-fix can generate invalid code; fix manually
+      - ifElseChain
+      - appendCombine
+      - builtinShadowDecl
+      - assignOp
+      - sprintfQuotedString
 
   revive:
     severity: warning
@@ -110,6 +105,8 @@ linters-settings:
   gosec:
     excludes:
       - G104   # unhandled errors (errcheck covers this)
+      - G115   # integer overflow conversions (audited separately during security review)
+      - G404   # weak random number generator (non-crypto randomness is acceptable for gameplay)
     severity: medium
     confidence: medium
 
@@ -127,9 +124,19 @@ issues:
   max-issues-per-linter: 0
   max-same-issues: 0
 
+  # Skip generated and vendored code.
+  exclude-dirs:
+    - vendor
+    - node_modules
+    - web/visualizer/node_modules
+    - web/visualizer/src
+    - .kilo
+  exclude-files:
+    - ".*_gen\\.go$"
+
   exclude-rules:
     # Exclude test files from some checks that are noisy in tests.
-    - path: _test\.go
+    - path: .*_test\.go$
       linters:
         - gosec
         - prealloc

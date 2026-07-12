@@ -3,7 +3,6 @@ package combat
 import (
 	"bedrock-ai/internal/event"
 	"context"
-	"fmt"
 	"math"
 	"strings"
 	"time"
@@ -37,7 +36,7 @@ func (cm *CombatManager) Tick(ctx context.Context) {
 
 			go func() {
 				time.Sleep(1 * time.Second)
-				cm.bot.InjectAIEvent(fmt.Sprintf("[SYSTEM: Target eliminated. Drop collected or none found. Tell the player naturally.]"))
+				cm.bot.InjectAIEvent("[SYSTEM: Target eliminated. Drop collected or none found. Tell the player naturally.]")
 			}()
 			return
 		}

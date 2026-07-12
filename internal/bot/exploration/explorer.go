@@ -48,9 +48,6 @@ type Explorer struct {
 
 	// Exploration origin (where we started)
 	originPos mgl32.Vec3
-
-	// Current exploration direction (degrees, 0-360)
-	currentDir float64
 }
 
 func NewExplorer(bot Bot, logger *slog.Logger) *Explorer {

@@ -37,7 +37,7 @@ func (ia *InventoryAcquisition) GatherDroppedItems(ctx context.Context, radius f
 
 	if closestItem != nil {
 		ia.logger.Info("Walking to pick up dropped item on ground", "name", closestItem.Name, "dist", closestDist)
-		
+
 		reached := ia.bot.NavigateToBlock(
 			int32(math.Floor(float64(closestItem.Position.X()))),
 			int32(math.Floor(float64(closestItem.Position.Y()))),

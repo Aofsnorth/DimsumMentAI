@@ -99,14 +99,14 @@ func (tc *TickContext) resolveNextTarget() {
 	if tc.HasPath {
 		tc.AllowDirectSteering = true
 	} else {
-		var distanceToTarget float32 = 999.0
+		var distanceToTarget float32
 		if tc.MState == "follow" && tc.TPlayer != "" {
 			distanceToTarget = tc.DistToPlayer
 		} else {
 			distanceToTarget = tc.Dist
 		}
 
-		var hDiffToTarget float32 = 0.0
+		var hDiffToTarget float32
 		if tc.MState == "follow" && tc.TPlayer != "" {
 			if _, pPos, ok := tc.B.FindPlayer(tc.TPlayer); ok {
 				hDiffToTarget = float32(math.Abs(float64(pPos.Y() - tc.CurrPos.Y())))

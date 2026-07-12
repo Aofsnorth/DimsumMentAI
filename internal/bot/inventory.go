@@ -215,9 +215,9 @@ func (b *Bot) CraftItem(recipeNetID uint32, count int) error {
 	resultCh := make(chan craftResult, 1)
 	b.pendingCrafts[requestID] = pendingCraft{
 		ch:          resultCh,
-		outputNetID: int32(recipe.Output.NetworkID),
+		outputNetID: recipe.Output.NetworkID,
 	}
-	outputNetID := int32(recipe.Output.NetworkID)
+	outputNetID := recipe.Output.NetworkID
 	itemName := b.ItemNames[outputNetID]
 
 	b.Logger.Info("CraftItem request",

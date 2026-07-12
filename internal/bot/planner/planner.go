@@ -93,7 +93,7 @@ func (p *Planner) Cancel() {
 
 // Run starts the agentic loop for a plan in a background goroutine. The
 // goal and actions are stored in the todo list before execution begins.
-// If a plan is already running, it is cancelled first.
+// If a plan is already running, it is canceled first.
 func (p *Planner) Run(goal, user string, actions []string) {
 	if len(actions) == 0 {
 		return
@@ -174,7 +174,7 @@ func (p *Planner) loop() {
 		// Check cancellation.
 		select {
 		case <-cancel:
-			p.bot.Logger.Info("planner: cancelled by user")
+			p.bot.Logger.Info("planner: canceled by user")
 			p.markRemainingSkipped()
 			return
 		default:
@@ -200,8 +200,8 @@ func (p *Planner) loop() {
 		// Check cancellation after action.
 		select {
 		case <-cancel:
-			p.todo.MarkFailed(step.Index, "cancelled")
-			p.bot.Logger.Info("planner: cancelled mid-step")
+			p.todo.MarkFailed(step.Index, "canceled")
+			p.bot.Logger.Info("planner: canceled mid-step")
 			p.markRemainingSkipped()
 			return
 		default:
@@ -249,7 +249,7 @@ func (p *Planner) handleEvalReply(reply string, step TodoItem) {
 
 	if strings.Contains(rawLower, "<done") {
 		p.todo.MarkCompleted(step.Index, "done by LLM")
-		p.bot.Logger.Info("planner: LLM signalled done")
+		p.bot.Logger.Info("planner: LLM signaled done")
 		p.markRemainingSkipped()
 		return
 	}

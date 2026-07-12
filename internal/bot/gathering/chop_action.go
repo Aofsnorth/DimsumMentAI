@@ -24,7 +24,7 @@ func (tc *TreeChopper) chopTree(ctx context.Context, basePos protocol.BlockPos, 
 	visited := make(map[string]bool)
 	visited[fmt.Sprintf("%d,%d,%d", basePos.X(), basePos.Y(), basePos.Z())] = true
 
-	var logBlocks []protocol.BlockPos
+	logBlocks := make([]protocol.BlockPos, 0, targetCount)
 
 	for len(queue) > 0 && len(logBlocks) < targetCount {
 		curr := queue[0]

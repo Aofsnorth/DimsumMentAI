@@ -8,6 +8,7 @@ import (
 	"bedrock-ai/internal/bot"
 	"bedrock-ai/internal/bot/network/world"
 	"bedrock-ai/internal/debuglog"
+
 	"github.com/sandertv/gophertunnel/minecraft/protocol/packet"
 )
 
@@ -20,7 +21,7 @@ func VenityCompatLoop(ctx context.Context, b *bot.Bot) {
 		return
 	}
 	venityHandshakeSent.Store(false)
-	
+
 	// Send StartLoading as soon as we start listening, to mimic the real client
 	// notifying the server/proxy that it's beginning to process chunks.
 	_ = b.Conn.WritePacket(&packet.ServerBoundLoadingScreen{
@@ -80,10 +81,10 @@ func sendVenityLoadedHandshake(b *bot.Bot, chunkCount uint64) {
 
 	// #region agent log
 	debuglog.Log("L", "venity_compat.go:handshake", "venity post-load handshake sent", map[string]any{
-		"chunkCount":  chunkCount,
-		"tickSynced":  true,
+		"chunkCount":     chunkCount,
+		"tickSynced":     true,
 		"rewindMovement": b.RewindMovement,
-		"runId":       "venity-fix",
+		"runId":          "venity-fix",
 	})
 	// #endregion
 }

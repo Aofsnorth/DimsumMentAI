@@ -172,7 +172,7 @@ func (f *Fisher) GoFish(ctx context.Context, maxCatches int) int {
 		case <-ctx.Done():
 			f.reelIn(rodSlot)
 			return caught
-		case <-time.After(time.Duration(waitTime) * time.Second):
+		case <-time.After(waitTime * time.Second):
 		}
 
 		// Reel in

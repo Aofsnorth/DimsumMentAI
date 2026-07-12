@@ -117,11 +117,11 @@ func handleCorrectPrediction(b *bot.Bot, p *packet.CorrectPlayerMovePrediction) 
 
 func sendMovementPredictionSync(b *bot.Bot, entityUniqueID int64) {
 	pk := &packet.ClientMovementPredictionSync{
-		ActorFlags:            protocol.NewBitset(protocol.EntityDataFlagCount),
-		EntityUniqueID:        entityUniqueID,
-		BoundingBoxWidth:      0.6,
-		BoundingBoxHeight:     1.8,
-		MovementSpeed:         0.1,
+		ActorFlags:        protocol.NewBitset(protocol.EntityDataFlagCount),
+		EntityUniqueID:    entityUniqueID,
+		BoundingBoxWidth:  0.6,
+		BoundingBoxHeight: 1.8,
+		MovementSpeed:     0.1,
 	}
 	if err := b.Conn.WritePacket(pk); err != nil {
 		b.Logger.Warn("ClientMovementPredictionSync write failed", slog.String("error", err.Error()))

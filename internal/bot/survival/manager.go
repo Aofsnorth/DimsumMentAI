@@ -71,9 +71,6 @@ type Manager struct {
 	// Potion
 	lastPotionTime time.Time
 
-	// Shield
-	shieldActive bool
-
 	// Configuration
 	EatThreshold       int // hunger level to trigger auto-eat (default 10)
 	ArmorEnabled       bool

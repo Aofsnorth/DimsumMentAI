@@ -315,20 +315,3 @@ func (tc *TickContext) performActiveSteering() {
 		}
 	}
 }
-
-// pathAheadIsLevelOrDown is true when no remaining path node requires climbing higher.
-// Used to stop step-up / auto-jump at the top of block stairs.
-func (tc *TickContext) pathAheadIsLevelOrDown() bool {
-	tc.B.Mu.Lock()
-	defer tc.B.Mu.Unlock()
-	if !tc.HasPath || tc.B.PathIndex >= len(tc.B.CurrentPath) {
-		return true
-	}
-	baselineY := tc.B.CurrentPath[tc.B.PathIndex].Y
-	for i := tc.B.PathIndex + 1; i < len(tc.B.CurrentPath); i++ {
-		if tc.B.CurrentPath[i].Y > baselineY {
-			return false
-		}
-	}
-	return true
-}

@@ -21,8 +21,6 @@ func newMockWorld() *mockWorld {
 }
 
 func (m *mockWorld) setSolid(x, y, z int32)      { m.solid[[3]int32{x, y, z}] = true }
-func (m *mockWorld) setHazard(x, y, z int32)     { m.hazard[[3]int32{x, y, z}] = true }
-func (m *mockWorld) setLadder(x, y, z int32)     { m.ladder[[3]int32{x, y, z}] = true }
 func (m *mockWorld) IsSolid(x, y, z int32) bool  { return m.solid[[3]int32{x, y, z}] }
 func (m *mockWorld) IsHazard(x, y, z int32) bool { return m.hazard[[3]int32{x, y, z}] }
 func (m *mockWorld) IsLadder(x, y, z int32) bool { return m.ladder[[3]int32{x, y, z}] }

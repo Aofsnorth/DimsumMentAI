@@ -2,7 +2,6 @@ package harness
 
 import (
 	"errors"
-	"fmt"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -178,7 +177,9 @@ func TestRunner_AllChecksCalledOnce(t *testing.T) {
 	r.RegisterSensor(s)
 	r.RegisterGuide(g)
 
-	r.Run()
+	if _, err := r.Run(); err != nil {
+		t.Fatal(err)
+	}
 
 	if atomic.LoadInt32(&s.calls) != 1 {
 		t.Errorf("sensor called %d times, want 1", s.calls)
@@ -262,7 +263,7 @@ func TestResult_FindingsByCategory(t *testing.T) {
 		t.Errorf("architecture findings = %d, want 1", len(groups[CategoryArchitecture]))
 	}
 	if len(groups[CategoryBehaviour]) != 1 {
-		t.Errorf("behaviour findings = %d, want 1", len(groups[CategoryBehaviour]))
+		t.Errorf("behavior findings = %d, want 1", len(groups[CategoryBehaviour]))
 	}
 }
 
@@ -310,7 +311,7 @@ func TestRunner_ReporterError(t *testing.T) {
 }
 
 func contains(s, substr string) bool {
-	return len(s) >= len(substr) && fmt.Sprintf("%s", s) != "" && stringContains(s, substr)
+	return len(s) >= len(substr) && s != "" && stringContains(s, substr)
 }
 
 func stringContains(s, substr string) bool {

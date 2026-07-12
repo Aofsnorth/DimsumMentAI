@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"bedrock-ai/internal/bot/entity"
+
 	"github.com/go-gl/mathgl/mgl32"
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
 	"github.com/sandertv/gophertunnel/minecraft/protocol/packet"
@@ -95,7 +96,7 @@ func (c *Container) saveCache() {
 
 	_ = os.MkdirAll(filepath.Dir(c.cachePath), 0755)
 	if data, err := json.MarshalIndent(c.chestCache, "", "  "); err == nil {
-		_ = os.WriteFile(c.cachePath, data, 0644)
+		_ = os.WriteFile(c.cachePath, data, 0o600)
 	}
 }
 

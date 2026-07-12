@@ -94,7 +94,7 @@ func (te *TemplateExecutor) rotateStairs(metadata *int, orientation string) *int
 // TransformTemplate applies rotation and translations to a template relative to origin.
 func (te *TemplateExecutor) TransformTemplate(tmpl *common.Template, position common.Vec3i, orientation string) []common.BlockEntry {
 	matrix := te.getRotationMatrix(orientation)
-	var transformed []common.BlockEntry
+	transformed := make([]common.BlockEntry, 0, len(tmpl.Blocks))
 
 	for _, block := range tmpl.Blocks {
 		rot := te.applyRotation(block, matrix)
@@ -132,7 +132,7 @@ func (te *TemplateExecutor) ExecuteTemplate(plan *common.BuildPlan) ([]common.Bl
 	primaryOverride := plan.Materials.Primary
 	secondaryOverride := plan.Materials.Secondary
 
-	var resolved []common.BlockEntry
+	resolved := make([]common.BlockEntry, 0, len(transformed))
 	for _, entry := range transformed {
 		blockType := entry.Block
 

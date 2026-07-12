@@ -5,6 +5,7 @@ import (
 
 	"bedrock-ai/internal/bot/pathfinder"
 	"bedrock-ai/internal/debuglog"
+
 	"github.com/go-gl/mathgl/mgl32"
 )
 
@@ -299,7 +300,7 @@ func (tc *TickContext) groundSupportUnknownAt(x, z float32, feetY int32) bool {
 	return anyUnknown
 }
 
-// logVenityWalkBlocked records why a forward step was cancelled. This is the
+// logVenityWalkBlocked records why a forward step was canceled. This is the
 // primary signal for disambiguating the "bot can't walk on Venity" hypotheses:
 // H1 (ground unknown / unloaded), H2 (server pins position), H3 (input rejected).
 // Gated on debug logging (log_level: debug) and Venity only.
@@ -316,7 +317,7 @@ func (tc *TickContext) logVenityWalkBlocked(baseY int32, hasSupport, pathGap, de
 	mState := tc.B.MovementState
 	tc.B.Mu.Unlock()
 	// #region agent log
-	debuglog.Log("V", "speed_pos.go:walkBlocked", "venity forward step cancelled", map[string]any{
+	debuglog.Log("V", "speed_pos.go:walkBlocked", "venity forward step canceled", map[string]any{
 		"tick":          tc.Tick,
 		"mState":        mState,
 		"hasPath":       tc.HasPath,

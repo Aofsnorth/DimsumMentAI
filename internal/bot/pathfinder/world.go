@@ -36,7 +36,7 @@ type LocalWorldModel struct {
 
 	AllowScaffold bool
 
-	hasBounds bool
+	hasBounds                 bool
 	startX, startY, startZ    int32
 	targetX, targetY, targetZ int32
 }
@@ -49,10 +49,7 @@ func (w *LocalWorldModel) IsBreakable(x, y, z int32) bool {
 		if loaded {
 			name, _, ok := chunk.RuntimeIDToState(rid)
 			if ok {
-				if name == "minecraft:bedrock" {
-					return false
-				}
-				return true
+				return name != "minecraft:bedrock"
 			}
 		}
 	}
@@ -103,7 +100,7 @@ func (w *LocalWorldModel) SetSolid(x, y, z int32, solid bool) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	k := fmt.Sprintf("%d,%d,%d", x, y, z)
-	
+
 	if solid {
 		w.solidBlocks[k] = true
 		delete(w.passableBlocks, k) // Hapus dari passable jika ternyata solid
@@ -224,12 +221,12 @@ func (w *LocalWorldModel) SetHazard(x, y, z int32, hazard bool) {
 func (w *LocalWorldModel) IsHazard(x, y, z int32) bool {
 	w.mu.RLock()
 	defer w.mu.RUnlock()
-	
+
 	// 1. Check self-learned hazards
 	if w.hazardBlocks[fmt.Sprintf("%d,%d,%d", x, y, z)] {
 		return true
 	}
-	
+
 	// 2. Pre-emptively check for known natural hazards (lava, fire)
 	if w.chunkQuerier != nil {
 		rid, loaded := w.chunkQuerier.GetBlockRID(x, y, z)
@@ -242,14 +239,14 @@ func (w *LocalWorldModel) IsHazard(x, y, z int32) bool {
 			}
 		}
 	}
-	
+
 	return false
 }
 
 func (w *LocalWorldModel) IsLadder(x, y, z int32) bool {
 	w.mu.RLock()
 	defer w.mu.RUnlock()
-	
+
 	if w.chunkQuerier != nil {
 		rid, loaded := w.chunkQuerier.GetBlockRID(x, y, z)
 		if loaded {
@@ -259,6 +256,6 @@ func (w *LocalWorldModel) IsLadder(x, y, z int32) bool {
 			}
 		}
 	}
-	
+
 	return false
 }
