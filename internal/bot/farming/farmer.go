@@ -1,3 +1,5 @@
+// Package farming implements bot farming operations: planting, harvesting,
+// and tilling.
 package farming
 
 import (
@@ -114,14 +116,8 @@ var crops = map[string]cropInfo{
 
 // HarvestCrops finds and harvests fully grown crops
 func (f *Farmer) HarvestCrops(ctx context.Context, cropType string, maxCount int) int {
-	f.mu.Lock()
-	f.isFarming = true
-	f.mu.Unlock()
-	defer func() {
-		f.mu.Lock()
-		f.isFarming = false
-		f.mu.Unlock()
-	}()
+	f.setFarmingState(true)
+	defer f.setFarmingState(false)
 
 	harvested := 0
 	pos := f.bot.GetCoords()
@@ -173,14 +169,8 @@ func (f *Farmer) HarvestCrops(ctx context.Context, cropType string, maxCount int
 
 // PlantSeeds plants seeds on nearby farmland
 func (f *Farmer) PlantSeeds(ctx context.Context, cropType string, maxCount int) int {
-	f.mu.Lock()
-	f.isFarming = true
-	f.mu.Unlock()
-	defer func() {
-		f.mu.Lock()
-		f.isFarming = false
-		f.mu.Unlock()
-	}()
+	f.setFarmingState(true)
+	defer f.setFarmingState(false)
 
 	crop, ok := crops[cropType]
 	if !ok {
@@ -188,23 +178,7 @@ func (f *Farmer) PlantSeeds(ctx context.Context, cropType string, maxCount int) 
 		return 0
 	}
 
-	inv := f.bot.GetInventorySlots()
-	names := f.bot.GetItemNames()
-
-	// Find seeds in inventory
-	var seedSlot uint32
-	found := false
-	for slot, item := range inv {
-		if item.Count <= 0 {
-			continue
-		}
-		name := strings.ToLower(names[item.NetworkID])
-		if strings.Contains(name, crop.seedName) {
-			seedSlot = slot
-			found = true
-			break
-		}
-	}
+	seedSlot, found := f.findSeedSlot(crop.seedName)
 	if !found {
 		f.bot.ReportActionStatus("", event.ActionStatus{Action: "plant", Item: crop.seedName, Count: 0, Success: false, Error: "gak punya benih " + cropType})
 		return 0
@@ -214,56 +188,48 @@ func (f *Farmer) PlantSeeds(ctx context.Context, cropType string, maxCount int) 
 		return 0
 	}
 
-	planted := 0
+	planted := f.plantInFarmland(ctx, seedSlot, maxCount)
+	if planted > 0 {
+		f.bot.ReportActionStatus("", event.ActionStatus{Action: "plant", Item: cropType, Count: planted, Success: true})
+	}
+	return planted
+}
+
+func (f *Farmer) setFarmingState(active bool) {
+	f.mu.Lock()
+	f.isFarming = active
+	f.mu.Unlock()
+}
+
+func (f *Farmer) findSeedSlot(seedName string) (uint32, bool) {
+	inv := f.bot.GetInventorySlots()
+	names := f.bot.GetItemNames()
+
+	for slot, item := range inv {
+		if item.Count <= 0 {
+			continue
+		}
+		name := strings.ToLower(names[item.NetworkID])
+		if strings.Contains(name, seedName) {
+			return slot, true
+		}
+	}
+	return 0, false
+}
+
+func (f *Farmer) plantInFarmland(ctx context.Context, seedSlot uint32, maxCount int) int {
 	pos := f.bot.GetCoords()
 	bx := int32(math.Floor(float64(pos.X())))
 	by := int32(math.Floor(float64(pos.Y())))
 	bz := int32(math.Floor(float64(pos.Z())))
 
-	// Scan for farmland (tilled soil)
+	planted := 0
 	radius := int32(16)
 	for dx := -radius; dx <= radius && planted < maxCount; dx++ {
 		for dz := -radius; dz <= radius && planted < maxCount; dz++ {
-			x, y, z := bx+dx, by-1, bz+dz
-
-			name, ok := f.bot.GetBlockName(x, y, z)
-			if !ok {
-				continue
-			}
-
-			// Check if it's farmland and empty above
-			if !strings.Contains(strings.ToLower(name), "farmland") {
-				continue
-			}
-
-			aboveName, aboveOk := f.bot.GetBlockName(x, y+1, z)
-			if aboveOk && aboveName != "" && aboveName != "air" {
-				continue // already planted
-			}
-
-			// Navigate and plant
-			if f.bot.NavigateToBlock(x, y+1, z, 2.5) {
-				f.bot.StopMovement()
-				f.bot.LookAt(mgl32.Vec3{float32(x) + 0.5, float32(y) + 1.0, float32(z) + 0.5})
-				time.Sleep(100 * time.Millisecond)
-
-				// Place seed on farmland
-				tx := &packet.InventoryTransaction{
-					TransactionData: &protocol.UseItemTransactionData{
-						ActionType:      protocol.UseItemActionClickBlock,
-						BlockPosition:   protocol.BlockPos{x, y, z},
-						BlockFace:       1,
-						HotBarSlot:      safecast.To[int32](seedSlot),
-						HeldItem:        protocol.ItemInstance{Stack: inv[seedSlot]},
-						Position:        f.bot.GetCoords(),
-						ClickedPosition: mgl32.Vec3{0.5, 1.0, 0.5},
-					},
-				}
-				_ = f.bot.WritePacket(tx)
+			if f.plantAtFarmland(ctx, bx+dx, by-1, bz+dz, seedSlot) {
 				planted++
-				time.Sleep(250 * time.Millisecond)
 			}
-
 			select {
 			case <-ctx.Done():
 				return planted
@@ -271,39 +237,36 @@ func (f *Farmer) PlantSeeds(ctx context.Context, cropType string, maxCount int) 
 			}
 		}
 	}
-
-	if planted > 0 {
-		f.bot.ReportActionStatus("", event.ActionStatus{Action: "plant", Item: cropType, Count: planted, Success: true})
-	}
 	return planted
+}
+
+func (f *Farmer) plantAtFarmland(ctx context.Context, x, y, z int32, seedSlot uint32) bool {
+	name, ok := f.bot.GetBlockName(x, y, z)
+	if !ok || !strings.Contains(strings.ToLower(name), "farmland") {
+		return false
+	}
+
+	aboveName, aboveOk := f.bot.GetBlockName(x, y+1, z)
+	if aboveOk && aboveName != "" && aboveName != "air" {
+		return false
+	}
+
+	if !f.bot.NavigateToBlock(x, y+1, z, 2.5) {
+		return false
+	}
+
+	f.bot.StopMovement()
+	f.bot.LookAt(mgl32.Vec3{float32(x) + 0.5, float32(y) + 1.0, float32(z) + 0.5})
+	time.Sleep(100 * time.Millisecond)
+
+	f.useItemAtSlot(x, y, z, seedSlot)
+	time.Sleep(250 * time.Millisecond)
+	return true
 }
 
 // HoeGround tills dirt/grass blocks into farmland
 func (f *Farmer) HoeGround(ctx context.Context, radius int32) int {
-	inv := f.bot.GetInventorySlots()
-	names := f.bot.GetItemNames()
-
-	// Find hoe in inventory
-	var hoeSlot uint32
-	found := false
-	hoeTypes := []string{"netherite_hoe", "diamond_hoe", "iron_hoe", "stone_hoe", "golden_hoe", "wooden_hoe"}
-	for _, hoeName := range hoeTypes {
-		for slot, item := range inv {
-			if item.Count <= 0 {
-				continue
-			}
-			name := strings.ToLower(names[item.NetworkID])
-			if strings.Contains(name, hoeName) {
-				hoeSlot = slot
-				found = true
-				break
-			}
-		}
-		if found {
-			break
-		}
-	}
-
+	hoeSlot, found := f.findHoeSlot()
 	if !found {
 		f.bot.ReportActionStatus("", event.ActionStatus{Action: "hoe", Item: "hoe", Count: 0, Success: false, Error: "gak punya cangkul"})
 		return 0
@@ -313,53 +276,44 @@ func (f *Farmer) HoeGround(ctx context.Context, radius int32) int {
 		return 0
 	}
 
-	hoed := 0
+	hoed := f.hoeDirt(ctx, radius, hoeSlot)
+	if hoed > 0 {
+		f.bot.ReportActionStatus("", event.ActionStatus{Action: "hoe", Item: "farmland", Count: hoed, Success: true})
+	}
+	return hoed
+}
+
+func (f *Farmer) findHoeSlot() (uint32, bool) {
+	inv := f.bot.GetInventorySlots()
+	names := f.bot.GetItemNames()
+	hoeTypes := []string{"netherite_hoe", "diamond_hoe", "iron_hoe", "stone_hoe", "golden_hoe", "wooden_hoe"}
+
+	for _, hoeName := range hoeTypes {
+		for slot, item := range inv {
+			if item.Count <= 0 {
+				continue
+			}
+			name := strings.ToLower(names[item.NetworkID])
+			if strings.Contains(name, hoeName) {
+				return slot, true
+			}
+		}
+	}
+	return 0, false
+}
+
+func (f *Farmer) hoeDirt(ctx context.Context, radius int32, hoeSlot uint32) int {
 	pos := f.bot.GetCoords()
 	bx := int32(math.Floor(float64(pos.X())))
 	by := int32(math.Floor(float64(pos.Y())))
 	bz := int32(math.Floor(float64(pos.Z())))
 
+	hoed := 0
 	for dx := -radius; dx <= radius; dx++ {
 		for dz := -radius; dz <= radius; dz++ {
-			x, y, z := bx+dx, by-1, bz+dz
-
-			name, ok := f.bot.GetBlockName(x, y, z)
-			if !ok {
-				continue
-			}
-
-			nameLower := strings.ToLower(name)
-			if !strings.Contains(nameLower, "dirt") && !strings.Contains(nameLower, "grass_block") {
-				continue
-			}
-
-			// Must have air above
-			aboveName, aboveOk := f.bot.GetBlockName(x, y+1, z)
-			if aboveOk && aboveName != "" && aboveName != "air" {
-				continue
-			}
-
-			if f.bot.NavigateToBlock(x, y+1, z, 2.5) {
-				f.bot.StopMovement()
-				f.bot.LookAt(mgl32.Vec3{float32(x) + 0.5, float32(y) + 1.0, float32(z) + 0.5})
-				time.Sleep(100 * time.Millisecond)
-
-				tx := &packet.InventoryTransaction{
-					TransactionData: &protocol.UseItemTransactionData{
-						ActionType:      protocol.UseItemActionClickBlock,
-						BlockPosition:   protocol.BlockPos{x, y, z},
-						BlockFace:       1,
-						HotBarSlot:      safecast.To[int32](hoeSlot),
-						HeldItem:        protocol.ItemInstance{Stack: inv[hoeSlot]},
-						Position:        f.bot.GetCoords(),
-						ClickedPosition: mgl32.Vec3{0.5, 1.0, 0.5},
-					},
-				}
-				_ = f.bot.WritePacket(tx)
+			if f.hoeAtBlock(ctx, bx+dx, by-1, bz+dz, hoeSlot) {
 				hoed++
-				time.Sleep(250 * time.Millisecond)
 			}
-
 			select {
 			case <-ctx.Done():
 				return hoed
@@ -367,11 +321,52 @@ func (f *Farmer) HoeGround(ctx context.Context, radius int32) int {
 			}
 		}
 	}
-
-	if hoed > 0 {
-		f.bot.ReportActionStatus("", event.ActionStatus{Action: "hoe", Item: "farmland", Count: hoed, Success: true})
-	}
 	return hoed
+}
+
+func (f *Farmer) hoeAtBlock(ctx context.Context, x, y, z int32, hoeSlot uint32) bool {
+	name, ok := f.bot.GetBlockName(x, y, z)
+	if !ok {
+		return false
+	}
+
+	nameLower := strings.ToLower(name)
+	if !strings.Contains(nameLower, "dirt") && !strings.Contains(nameLower, "grass_block") {
+		return false
+	}
+
+	aboveName, aboveOk := f.bot.GetBlockName(x, y+1, z)
+	if aboveOk && aboveName != "" && aboveName != "air" {
+		return false
+	}
+
+	if !f.bot.NavigateToBlock(x, y+1, z, 2.5) {
+		return false
+	}
+
+	f.bot.StopMovement()
+	f.bot.LookAt(mgl32.Vec3{float32(x) + 0.5, float32(y) + 1.0, float32(z) + 0.5})
+	time.Sleep(100 * time.Millisecond)
+
+	f.useItemAtSlot(x, y, z, hoeSlot)
+	time.Sleep(250 * time.Millisecond)
+	return true
+}
+
+func (f *Farmer) useItemAtSlot(x, y, z int32, slot uint32) {
+	inv := f.bot.GetInventorySlots()
+	tx := &packet.InventoryTransaction{
+		TransactionData: &protocol.UseItemTransactionData{
+			ActionType:      protocol.UseItemActionClickBlock,
+			BlockPosition:   protocol.BlockPos{x, y, z},
+			BlockFace:       1,
+			HotBarSlot:      safecast.To[int32](slot),
+			HeldItem:        protocol.ItemInstance{Stack: inv[slot]},
+			Position:        f.bot.GetCoords(),
+			ClickedPosition: mgl32.Vec3{0.5, 1.0, 0.5},
+		},
+	}
+	_ = f.bot.WritePacket(tx)
 }
 
 // Stop stops current farming operation
