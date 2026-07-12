@@ -1,3 +1,4 @@
+// Package ai handles LLM client integration and chat parsing.
 package ai
 
 import (
@@ -160,119 +161,115 @@ func (nc *NvidiaClient) BuildSystemPrompt(botName, botCoords, playerCoords, held
 	return prompt
 }
 
-// Ask queries the NVIDIA LLM API with the player's message and returns the response
+// Ask queries the LLM API with the player's message and returns the response.
 func (nc *NvidiaClient) Ask(user, systemPrompt, message string) (string, error) {
-	// 1. Prepare raw message sequence
+	messages := nc.prepareMessages(user, systemPrompt, message)
+
+	reply, err := nc.completeWithRetry(messages, 0.4)
+	if err != nil {
+		return "", err
+	}
+
+	nc.storeHistory(user, message, reply)
+	return reply, nil
+}
+
+// prepareMessages builds the message sequence for a chat request, including
+// recent conversation history and the new user message.
+func (nc *NvidiaClient) prepareMessages(user, systemPrompt, message string) []Message {
 	var rawMessages []Message
 	rawMessages = append(rawMessages, Message{Role: "system", Content: systemPrompt})
 
-	// Add recent history (up to last 10 messages)
 	hist := nc.History.GetHistory(user)
 	if len(hist) > 10 {
 		hist = hist[len(hist)-10:]
 	}
 	rawMessages = append(rawMessages, hist...)
-
-	// Add new user message
 	rawMessages = append(rawMessages, Message{Role: "user", Content: fmt.Sprintf("<%s> %s", user, message)})
 
-	// 2. Format sequence for Nvidia's strict alternating-role validation
-	messages := FixMessages(rawMessages)
+	return FixMessages(rawMessages)
+}
 
-	// 3. Make HTTP request with exponential backoff on HTTP 429
-	var bodyBytes []byte
-	var err error
+// storeHistory stores the chat turn in the conversation history.
+func (nc *NvidiaClient) storeHistory(user, message, reply string) {
+	parsed := Parse(reply)
+	nc.History.AddMessage(user, "user", fmt.Sprintf("<%s> %s", user, message))
+	nc.History.AddMessage(user, "assistant", parsed.CleanReply)
+}
 
-	reqBody := ChatCompletionRequest{
+// completeWithRetry sends a chat completion request and retries on rate-limit
+// (HTTP 429) and transient network errors with exponential backoff.
+func (nc *NvidiaClient) completeWithRetry(messages []Message, temperature float64) (string, error) {
+	req := ChatCompletionRequest{
 		Model:       nc.model,
 		Messages:    messages,
-		Temperature: 0.4, // lower temp → more reliable <action> tag emission
+		Temperature: temperature,
 		MaxTokens:   512,
 	}
+	maxRetries := 4
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		completionResp, statusCode, err := nc.doCompletionRequest(req)
+		if err != nil {
+			if (statusCode == http.StatusTooManyRequests || statusCode == 0) && attempt < maxRetries-1 {
+				time.Sleep(time.Duration(1<<attempt) * time.Second)
+				continue
+			}
+			return "", err
+		}
 
-	bodyBytes, err = json.Marshal(reqBody)
+		if len(completionResp.Choices) == 0 || completionResp.Choices[0].Message.Content == "" {
+			if attempt == maxRetries-1 {
+				return "", fmt.Errorf("empty choices from %s API response", nc.provider)
+			}
+			time.Sleep(500 * time.Millisecond)
+			continue
+		}
+
+		return completionResp.Choices[0].Message.Content, nil
+	}
+	return "", fmt.Errorf("exhausted retries for %s API", nc.provider)
+}
+
+// doCompletionRequest performs a single chat completion HTTP request.
+func (nc *NvidiaClient) doCompletionRequest(req ChatCompletionRequest) (ChatCompletionResponse, int, error) {
+	var empty ChatCompletionResponse
+	bodyBytes, err := json.Marshal(req)
 	if err != nil {
-		return "", fmt.Errorf("marshal request: %w", err)
+		return empty, 0, fmt.Errorf("marshal request: %w", err)
 	}
 
 	url := nc.baseURL
 	if url == "" {
 		url = endpointNvidia
 	}
+
+	httpReq, err := http.NewRequest("POST", url, bytes.NewBuffer(bodyBytes))
+	if err != nil {
+		return empty, 0, fmt.Errorf("create HTTP request: %w", err)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Authorization", "Bearer "+nc.apiKey)
+
+	resp, err := nc.client.Do(httpReq)
+	if err != nil {
+		return empty, 0, fmt.Errorf("HTTP request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	responseBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return empty, resp.StatusCode, fmt.Errorf("read response body: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return empty, resp.StatusCode, fmt.Errorf("HTTP %d from %s API: %s", resp.StatusCode, nc.provider, string(responseBody))
+	}
+
 	var completionResp ChatCompletionResponse
-	var lastEmpty bool
-	maxRetries := 4
-
-	for attempt := 0; attempt < maxRetries; attempt++ {
-		req, reqErr := http.NewRequest("POST", url, bytes.NewBuffer(bodyBytes))
-		if reqErr != nil {
-			return "", fmt.Errorf("create HTTP request: %w", reqErr)
-		}
-
-		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("Authorization", "Bearer "+nc.apiKey)
-
-		resp, respErr := nc.client.Do(req)
-		if respErr != nil {
-			if attempt == maxRetries-1 {
-				return "", fmt.Errorf("HTTP request: %w", respErr)
-			}
-			delay := time.Duration(1<<attempt) * time.Second
-			time.Sleep(delay)
-			continue
-		}
-
-		if resp.StatusCode == http.StatusTooManyRequests { // HTTP 429
-			resp.Body.Close()
-			if attempt == maxRetries-1 {
-				return "", fmt.Errorf("HTTP 429 rate limit exceeded after %d retries", maxRetries)
-			}
-			delay := time.Duration(1<<attempt) * time.Second
-			time.Sleep(delay)
-			continue
-		}
-
-		responseBody, err := io.ReadAll(resp.Body)
-		resp.Body.Close()
-		if err != nil {
-			return "", fmt.Errorf("read response body: %w", err)
-		}
-
-		if resp.StatusCode != http.StatusOK {
-			return "", fmt.Errorf("HTTP %d from %s API: %s", resp.StatusCode, nc.provider, string(responseBody))
-		}
-
-		completionResp = ChatCompletionResponse{}
-		if err := json.Unmarshal(responseBody, &completionResp); err != nil {
-			return "", fmt.Errorf("unmarshal response: %w", err)
-		}
-
-		if len(completionResp.Choices) == 0 || completionResp.Choices[0].Message.Content == "" {
-			lastEmpty = true
-			if attempt == maxRetries-1 {
-				break
-			}
-			// Short backoff before retrying on empty completion.
-			time.Sleep(500 * time.Millisecond)
-			continue
-		}
-
-		lastEmpty = false
-		break
+	if err := json.Unmarshal(responseBody, &completionResp); err != nil {
+		return empty, resp.StatusCode, fmt.Errorf("unmarshal response: %w", err)
 	}
-
-	if lastEmpty {
-		return "", fmt.Errorf("empty choices from %s API response", nc.provider)
-	}
-
-	reply := completionResp.Choices[0].Message.Content
-
-	// 5. Store conversation step in history (clean reply text only)
-	parsed := Parse(reply)
-	nc.History.AddMessage(user, "user", fmt.Sprintf("<%s> %s", user, message))
-	nc.History.AddMessage(user, "assistant", parsed.CleanReply)
-
-	return reply, nil
+	return completionResp, resp.StatusCode, nil
 }
 
 // AskPlanner queries the LLM without storing conversation history. Used by
@@ -283,55 +280,19 @@ func (nc *NvidiaClient) AskPlanner(systemPrompt, message string) (string, error)
 	rawMessages = append(rawMessages, Message{Role: "system", Content: systemPrompt})
 	rawMessages = append(rawMessages, Message{Role: "user", Content: message})
 
-	messages := FixMessages(rawMessages)
-
-	reqBody := ChatCompletionRequest{
+	req := ChatCompletionRequest{
 		Model:       nc.model,
-		Messages:    messages,
+		Messages:    FixMessages(rawMessages),
 		Temperature: 0.3, // slightly lower for structured plan output
 		MaxTokens:   512,
 	}
 
-	bodyBytes, err := json.Marshal(reqBody)
+	completionResp, _, err := nc.doCompletionRequest(req)
 	if err != nil {
-		return "", fmt.Errorf("marshal request: %w", err)
+		return "", err
 	}
-
-	url := nc.baseURL
-	if url == "" {
-		url = endpointNvidia
-	}
-
-	req, err := http.NewRequest("POST", url, bytes.NewBuffer(bodyBytes))
-	if err != nil {
-		return "", fmt.Errorf("create HTTP request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+nc.apiKey)
-
-	resp, err := nc.client.Do(req)
-	if err != nil {
-		return "", fmt.Errorf("HTTP request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	responseBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", fmt.Errorf("read response body: %w", err)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("HTTP %d from %s API: %s", resp.StatusCode, nc.provider, string(responseBody))
-	}
-
-	var completionResp ChatCompletionResponse
-	if err := json.Unmarshal(responseBody, &completionResp); err != nil {
-		return "", fmt.Errorf("unmarshal response: %w", err)
-	}
-
 	if len(completionResp.Choices) == 0 || completionResp.Choices[0].Message.Content == "" {
 		return "", fmt.Errorf("empty choices from %s API response", nc.provider)
 	}
-
 	return completionResp.Choices[0].Message.Content, nil
 }
