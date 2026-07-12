@@ -1,7 +1,9 @@
+// Package architect provides building blueprint generation and optimization.
 package architect
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	"bedrock-ai/internal/bot/building/common"
@@ -13,72 +15,47 @@ func (ea *EnhancedAIArchitect) OptimizeBuildingOrder(blueprint []common.BlockEnt
 		return []common.BlockEntry{}
 	}
 
-	flow := strings.ToLower(concept.BuildingFlow)
-	if flow == "layer" {
-		var sorted []common.BlockEntry
-		sorted = append(sorted, blueprint...)
-		for i := 0; i < len(sorted); i++ {
-			for j := i + 1; j < len(sorted); j++ {
-				if sorted[i].Y > sorted[j].Y || (sorted[i].Y == sorted[j].Y && sorted[i].Z > sorted[j].Z) || (sorted[i].Y == sorted[j].Y && sorted[i].Z == sorted[j].Z && sorted[i].X > sorted[j].X) {
-					sorted[i], sorted[j] = sorted[j], sorted[i]
-				}
+	if strings.EqualFold(concept.BuildingFlow, "layer") {
+		sorted := append([]common.BlockEntry(nil), blueprint...)
+		sortBlocks(sorted, func(a, b common.BlockEntry) bool {
+			if a.Y != b.Y {
+				return a.Y < b.Y
 			}
-		}
+			if a.Z != b.Z {
+				return a.Z < b.Z
+			}
+			return a.X < b.X
+		})
 		return sorted
 	}
-
-	var floor []common.BlockEntry
-	var walls []common.BlockEntry
-	var interior []common.BlockEntry
-	var roof []common.BlockEntry
 
 	width := concept.Dimensions.X
 	depth := concept.Dimensions.Z
 	height := concept.Dimensions.Y
 
-	for _, b := range blueprint {
-		if b.Y == 0 {
-			floor = append(floor, b)
-		} else if b.Y == height {
-			roof = append(roof, b)
-		} else {
-			isPerimeter := b.X == 0 || b.X == width-1 || b.Z == 0 || b.Z == depth-1
-			if isPerimeter {
-				walls = append(walls, b)
-			} else {
-				interior = append(interior, b)
-			}
-		}
-	}
+	floor, walls, interior, roof := categorizeBlocks(blueprint, width, depth, height)
 
-	for i := 0; i < len(floor); i++ {
-		for j := i + 1; j < len(floor); j++ {
-			if floor[i].Z > floor[j].Z || (floor[i].Z == floor[j].Z && floor[i].X > floor[j].X) {
-				floor[i], floor[j] = floor[j], floor[i]
-			}
+	sortBlocks(floor, func(a, b common.BlockEntry) bool {
+		if a.Z != b.Z {
+			return a.Z < b.Z
 		}
-	}
-
+		return a.X < b.X
+	})
 	sortedWalls := ea.sortWallsLayers(walls, width, depth, height)
-
-	for i := 0; i < len(interior); i++ {
-		for j := i + 1; j < len(interior); j++ {
-			if interior[i].Y > interior[j].Y || (interior[i].Y == interior[j].Y && interior[i].Z > interior[j].Z) {
-				interior[i], interior[j] = interior[j], interior[i]
-			}
+	sortBlocks(interior, func(a, b common.BlockEntry) bool {
+		if a.Y != b.Y {
+			return a.Y < b.Y
 		}
-	}
-
-	for i := 0; i < len(roof); i++ {
-		for j := i + 1; j < len(roof); j++ {
-			if roof[i].Z > roof[j].Z || (roof[i].Z == roof[j].Z && roof[i].X > roof[j].X) {
-				roof[i], roof[j] = roof[j], roof[i]
-			}
+		return a.Z < b.Z
+	})
+	sortBlocks(roof, func(a, b common.BlockEntry) bool {
+		if a.Z != b.Z {
+			return a.Z < b.Z
 		}
-	}
+		return a.X < b.X
+	})
 
-	var optimized []common.BlockEntry
-	optimized = append(optimized, floor...)
+	optimized := append([]common.BlockEntry(nil), floor...)
 	optimized = append(optimized, sortedWalls...)
 	optimized = append(optimized, interior...)
 	optimized = append(optimized, roof...)
@@ -98,51 +75,56 @@ func (ea *EnhancedAIArchitect) OptimizeBuildingOrder(blueprint []common.BlockEnt
 	return optimized
 }
 
+// categorizeBlocks splits the blueprint into floor, walls, interior, and roof.
+func categorizeBlocks(blueprint []common.BlockEntry, width, depth, height int) (floor, walls, interior, roof []common.BlockEntry) {
+	for _, b := range blueprint {
+		switch {
+		case b.Y == 0:
+			floor = append(floor, b)
+		case b.Y == height:
+			roof = append(roof, b)
+		default:
+			isPerimeter := b.X == 0 || b.X == width-1 || b.Z == 0 || b.Z == depth-1
+			if isPerimeter {
+				walls = append(walls, b)
+			} else {
+				interior = append(interior, b)
+			}
+		}
+	}
+	return
+}
+
+// sortBlocks sorts a slice of blocks in place using the supplied comparator.
+func sortBlocks(blocks []common.BlockEntry, less func(a, b common.BlockEntry) bool) {
+	sort.Slice(blocks, func(i, j int) bool { return less(blocks[i], blocks[j]) })
+}
+
 func (ea *EnhancedAIArchitect) sortWallsLayers(walls []common.BlockEntry, width, depth, height int) []common.BlockEntry {
 	var sortedWalls []common.BlockEntry
 	for y := 1; y < height; y++ {
 		var front, left, back, right []common.BlockEntry
 		for _, b := range walls {
-			if b.Y == y {
-				if b.Z == 0 {
-					front = append(front, b)
-				} else if b.X == 0 {
-					left = append(left, b)
-				} else if b.Z == depth-1 {
-					back = append(back, b)
-				} else if b.X == width-1 {
-					right = append(right, b)
-				}
+			if b.Y != y {
+				continue
+			}
+			switch {
+			case b.Z == 0:
+				front = append(front, b)
+			case b.X == 0:
+				left = append(left, b)
+			case b.Z == depth-1:
+				back = append(back, b)
+			case b.X == width-1:
+				right = append(right, b)
 			}
 		}
-		for i := 0; i < len(front); i++ {
-			for j := i + 1; j < len(front); j++ {
-				if front[i].X > front[j].X {
-					front[i], front[j] = front[j], front[i]
-				}
-			}
-		}
-		for i := 0; i < len(left); i++ {
-			for j := i + 1; j < len(left); j++ {
-				if left[i].Z > left[j].Z {
-					left[i], left[j] = left[j], left[i]
-				}
-			}
-		}
-		for i := 0; i < len(back); i++ {
-			for j := i + 1; j < len(back); j++ {
-				if back[i].X < back[j].X {
-					back[i], back[j] = back[j], back[i]
-				}
-			}
-		}
-		for i := 0; i < len(right); i++ {
-			for j := i + 1; j < len(right); j++ {
-				if right[i].Z < right[j].Z {
-					right[i], right[j] = right[j], right[i]
-				}
-			}
-		}
+
+		sortBlocks(front, func(a, b common.BlockEntry) bool { return a.X < b.X })
+		sortBlocks(left, func(a, b common.BlockEntry) bool { return a.Z < b.Z })
+		sortBlocks(back, func(a, b common.BlockEntry) bool { return a.X > b.X })
+		sortBlocks(right, func(a, b common.BlockEntry) bool { return a.Z > b.Z })
+
 		sortedWalls = append(sortedWalls, front...)
 		sortedWalls = append(sortedWalls, left...)
 		sortedWalls = append(sortedWalls, back...)
