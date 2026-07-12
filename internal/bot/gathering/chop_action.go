@@ -1,3 +1,5 @@
+// Package gathering implements resource collection behaviors such as wood,
+// mining, and loot pickup.
 package gathering
 
 import (
@@ -12,18 +14,25 @@ import (
 )
 
 func (tc *TreeChopper) chopTree(ctx context.Context, basePos protocol.BlockPos, targetCount int) {
-	bot := tc.rg.bot
-	world := bot.GetLocalWorldModel()
 	if targetCount <= 0 {
 		targetCount = 1
 	}
 
-	var queue []protocol.BlockPos
-	queue = append(queue, basePos)
+	logBlocks := tc.collectLogBlocks(basePos, targetCount)
+	tc.logger.Debug("Collected log blocks via BFS", "count", len(logBlocks))
 
-	visited := make(map[string]bool)
-	visited[fmt.Sprintf("%d,%d,%d", basePos.X(), basePos.Y(), basePos.Z())] = true
+	logBlocks = sortLogBlocks(logBlocks)
+	tc.equipBestAxe()
+	tc.chopLogBlocks(ctx, logBlocks)
 
+	tc.rg.scaffold.DescendFromTower(ctx, float32(basePos.Y()))
+	tc.rg.looter.CollectAllDrops(ctx, 8.0)
+}
+
+func (tc *TreeChopper) collectLogBlocks(basePos protocol.BlockPos, targetCount int) []protocol.BlockPos {
+	bot := tc.rg.bot
+	queue := []protocol.BlockPos{basePos}
+	visited := map[string]bool{fmt.Sprintf("%d,%d,%d", basePos.X(), basePos.Y(), basePos.Z()): true}
 	logBlocks := make([]protocol.BlockPos, 0, targetCount)
 
 	for len(queue) > 0 && len(logBlocks) < targetCount {
@@ -35,123 +44,137 @@ func (tc *TreeChopper) chopTree(ctx context.Context, basePos protocol.BlockPos, 
 			continue
 		}
 		logBlocks = append(logBlocks, curr)
+		queue = tc.appendTreeNeighbors(queue, visited, basePos, curr)
+	}
 
-		for dx := int32(-1); dx <= 1; dx++ {
-			for dy := int32(-1); dy <= 2; dy++ {
-				for dz := int32(-1); dz <= 1; dz++ {
-					if dx == 0 && dy == 0 && dz == 0 {
-						continue
-					}
-					next := protocol.BlockPos{curr.X() + dx, curr.Y() + dy, curr.Z() + dz}
-					key := fmt.Sprintf("%d,%d,%d", next.X(), next.Y(), next.Z())
-					if visited[key] {
-						continue
-					}
+	return logBlocks
+}
 
-					dx := next.X() - basePos.X()
-					if dx < 0 {
-						dx = -dx
-					}
-					dz := next.Z() - basePos.Z()
-					if dz < 0 {
-						dz = -dz
-					}
-					distH := max(dx, dz)
-					distV := next.Y() - basePos.Y()
+func (tc *TreeChopper) appendTreeNeighbors(queue []protocol.BlockPos, visited map[string]bool, basePos, curr protocol.BlockPos) []protocol.BlockPos {
+	bot := tc.rg.bot
 
-					if distH > 4 || distV > 30 || distV < -1 {
-						continue
-					}
-
-					name, ok := bot.GetBlockName(next.X(), next.Y(), next.Z())
-					if ok && isLogBlockName(name) {
-						visited[key] = true
-						queue = append(queue, next)
-					}
+	for dx := int32(-1); dx <= 1; dx++ {
+		for dy := int32(-1); dy <= 2; dy++ {
+			for dz := int32(-1); dz <= 1; dz++ {
+				if dx == 0 && dy == 0 && dz == 0 {
+					continue
+				}
+				next := protocol.BlockPos{curr.X() + dx, curr.Y() + dy, curr.Z() + dz}
+				key := fmt.Sprintf("%d,%d,%d", next.X(), next.Y(), next.Z())
+				if visited[key] {
+					continue
+				}
+				if !withinTreeRange(basePos, next) {
+					continue
+				}
+				name, ok := bot.GetBlockName(next.X(), next.Y(), next.Z())
+				if ok && isLogBlockName(name) {
+					visited[key] = true
+					queue = append(queue, next)
 				}
 			}
 		}
 	}
 
-	tc.logger.Debug("Collected log blocks via BFS", "count", len(logBlocks))
+	return queue
+}
 
-	// Bottom-up chop order feels natural — players don't start mid-tree.
-	for i := 0; i < len(logBlocks); i++ {
-		for j := i + 1; j < len(logBlocks); j++ {
-			if logBlocks[j].Y() < logBlocks[i].Y() {
-				logBlocks[i], logBlocks[j] = logBlocks[j], logBlocks[i]
+func withinTreeRange(basePos, next protocol.BlockPos) bool {
+	dx := next.X() - basePos.X()
+	if dx < 0 {
+		dx = -dx
+	}
+	dz := next.Z() - basePos.Z()
+	if dz < 0 {
+		dz = -dz
+	}
+	distH := max(dx, dz)
+	distV := next.Y() - basePos.Y()
+	return distH <= 4 && distV <= 30 && distV >= -1
+}
+
+func sortLogBlocks(logs []protocol.BlockPos) []protocol.BlockPos {
+	for i := 0; i < len(logs); i++ {
+		for j := i + 1; j < len(logs); j++ {
+			if logs[j].Y() < logs[i].Y() {
+				logs[i], logs[j] = logs[j], logs[i]
 			}
 		}
 	}
+	return logs
+}
 
-	tc.equipBestAxe()
-
+func (tc *TreeChopper) chopLogBlocks(ctx context.Context, logBlocks []protocol.BlockPos) {
 	for _, pos := range logBlocks {
 		select {
 		case <-ctx.Done():
 			return
 		default:
 		}
-
-		botPos := bot.GetCoords()
-		dy := float32(pos.Y()) - botPos.Y()
-
-		if dy > 4.0 {
-			tc.rg.scaffold.TowerUpTo(ctx, float32(pos.Y())-1.0)
-		}
-
-		tc.clearObstructions(ctx, pos)
-
-		targetCenter := mgl32.Vec3{float32(pos.X()) + 0.5, float32(pos.Y()) + 0.5, float32(pos.Z()) + 0.5}
-		bot.LookAt(targetCenter)
-		time.Sleep(60 * time.Millisecond)
-
-		tc.logger.Debug("Chopping log block", "pos", pos)
-
-		_ = bot.WritePacket(&packet.PlayerAction{
-			EntityRuntimeID: bot.GetEntityRuntimeID(),
-			ActionType:      protocol.PlayerActionStartBreak,
-			BlockPosition:   pos,
-			BlockFace:       1,
-		})
-
-		// Per-log break: keep swinging until the hardness-based break time
-		// has actually elapsed so the server accepts the destroy packet.
-		breakTime := blockBreakDuration("oak_log", tc.equippedAxeName())
-		elapsed := time.Duration(0)
-		for elapsed < breakTime {
-			_ = bot.WritePacket(&packet.Animate{
-				ActionType:      packet.AnimateActionSwingArm,
-				EntityRuntimeID: bot.GetEntityRuntimeID(),
-			})
-			bot.LookAt(targetCenter)
-			time.Sleep(100 * time.Millisecond)
-			elapsed += 100 * time.Millisecond
-		}
-
-		_ = bot.WritePacket(&packet.PlayerAction{
-			EntityRuntimeID: bot.GetEntityRuntimeID(),
-			ActionType:      protocol.PlayerActionCrackBreak,
-			BlockPosition:   pos,
-			BlockFace:       1,
-		})
-		_ = bot.WritePacket(&packet.PlayerAction{
-			EntityRuntimeID: bot.GetEntityRuntimeID(),
-			ActionType:      protocol.PlayerActionPredictDestroyBlock,
-			BlockPosition:   pos,
-			BlockFace:       1,
-		})
-
-		world.SetSolid(pos.X(), pos.Y(), pos.Z(), false)
-
-		// Minimal gap so the swing animation doesn't visually overlap the
-		// destroy of the previous log. Anything longer just makes the bot
-		// feel sluggish.
+		tc.chopLogBlock(ctx, pos)
 		time.Sleep(20 * time.Millisecond)
 	}
+}
 
-	tc.rg.scaffold.DescendFromTower(ctx, float32(basePos.Y()))
-	tc.rg.looter.CollectAllDrops(ctx, 8.0)
+func (tc *TreeChopper) chopLogBlock(ctx context.Context, pos protocol.BlockPos) {
+	bot := tc.rg.bot
+
+	botPos := bot.GetCoords()
+	if float32(pos.Y())-botPos.Y() > 4.0 {
+		tc.rg.scaffold.TowerUpTo(ctx, float32(pos.Y())-1.0)
+	}
+
+	tc.clearObstructions(ctx, pos)
+
+	targetCenter := mgl32.Vec3{float32(pos.X()) + 0.5, float32(pos.Y()) + 0.5, float32(pos.Z()) + 0.5}
+	bot.LookAt(targetCenter)
+	time.Sleep(60 * time.Millisecond)
+
+	tc.logger.Debug("Chopping log block", "pos", pos)
+	tc.startBreakBlock(pos)
+	tc.swingUntilBreak(pos, targetCenter, blockBreakDuration("oak_log", tc.equippedAxeName()))
+	tc.finishBreakBlock(pos)
+
+	bot.GetLocalWorldModel().SetSolid(pos.X(), pos.Y(), pos.Z(), false)
+}
+
+func (tc *TreeChopper) startBreakBlock(pos protocol.BlockPos) {
+	_ = tc.rg.bot.WritePacket(&packet.PlayerAction{
+		EntityRuntimeID: tc.rg.bot.GetEntityRuntimeID(),
+		ActionType:      protocol.PlayerActionStartBreak,
+		BlockPosition:   pos,
+		BlockFace:       1,
+	})
+}
+
+func (tc *TreeChopper) swingUntilBreak(pos protocol.BlockPos, targetCenter mgl32.Vec3, breakTime time.Duration) {
+	bot := tc.rg.bot
+	elapsed := time.Duration(0)
+	for elapsed < breakTime {
+		_ = bot.WritePacket(&packet.Animate{
+			ActionType:      packet.AnimateActionSwingArm,
+			EntityRuntimeID: bot.GetEntityRuntimeID(),
+		})
+		bot.LookAt(targetCenter)
+		time.Sleep(100 * time.Millisecond)
+		elapsed += 100 * time.Millisecond
+	}
+}
+
+func (tc *TreeChopper) finishBreakBlock(pos protocol.BlockPos) {
+	bot := tc.rg.bot
+	_ = bot.WritePacket(&packet.PlayerAction{
+		EntityRuntimeID: bot.GetEntityRuntimeID(),
+		ActionType:      protocol.PlayerActionCrackBreak,
+		BlockPosition:   pos,
+		BlockFace:       1,
+	})
+	_ = bot.WritePacket(&packet.PlayerAction{
+		EntityRuntimeID: bot.GetEntityRuntimeID(),
+		ActionType:      protocol.PlayerActionPredictDestroyBlock,
+		BlockPosition:   pos,
+		BlockFace:       1,
+	})
 }
 
 func (tc *TreeChopper) clearObstructions(ctx context.Context, targetPos protocol.BlockPos) {
@@ -163,10 +186,6 @@ func (tc *TreeChopper) clearObstructions(ctx context.Context, targetPos protocol
 		return
 	}
 
-	// Only break true obstructions (leaves, vines, etc.). If the block above
-	// is itself a log/wood, the chopper will reach it in its own pass — trying
-	// to break it here too produces a phantom swing on a block that never
-	// actually breaks and confuses the player.
 	name, ok := bot.GetBlockName(checkPos.X(), checkPos.Y(), checkPos.Z())
 	if ok && isLogBlockName(name) {
 		return
@@ -189,19 +208,7 @@ func (tc *TreeChopper) clearObstructions(ctx context.Context, targetPos protocol
 	})
 
 	time.Sleep(300 * time.Millisecond)
-
-	_ = bot.WritePacket(&packet.PlayerAction{
-		EntityRuntimeID: bot.GetEntityRuntimeID(),
-		ActionType:      protocol.PlayerActionCrackBreak,
-		BlockPosition:   checkPos,
-		BlockFace:       1,
-	})
-	_ = bot.WritePacket(&packet.PlayerAction{
-		EntityRuntimeID: bot.GetEntityRuntimeID(),
-		ActionType:      protocol.PlayerActionPredictDestroyBlock,
-		BlockPosition:   checkPos,
-		BlockFace:       1,
-	})
+	tc.finishBreakBlock(checkPos)
 
 	world.SetSolid(checkPos.X(), checkPos.Y(), checkPos.Z(), false)
 	time.Sleep(100 * time.Millisecond)
