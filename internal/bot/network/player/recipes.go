@@ -1,3 +1,4 @@
+// Package player handles player, entity, and inventory-related packets.
 package player
 
 import (
