@@ -101,28 +101,52 @@ func (ia *InventoryAcquisition) CraftToolsIfNeeded() {
 		return
 	}
 
+	if ia.hasRequiredTools() {
+		return
+	}
+
+	planksCount, sticksCount := ia.countCraftingMaterials()
+	recipes := ia.bot.GetRecipes()
+
+	sticksCount, planksCount = ia.craftSticksIfNeeded(recipes, sticksCount, planksCount)
+	sticksCount, planksCount = ia.craftWoodenAxe(recipes, sticksCount, planksCount)
+	ia.craftWoodenPickaxe(recipes, sticksCount, planksCount)
+}
+
+func (ia *InventoryAcquisition) hasRequiredTools() bool {
+	return ia.hasAxe() && ia.hasPickaxe()
+}
+
+func (ia *InventoryAcquisition) hasAxe() bool {
+	return ia.hasToolLike("axe", "pickaxe")
+}
+
+func (ia *InventoryAcquisition) hasPickaxe() bool {
+	return ia.hasToolContaining("pickaxe")
+}
+
+func (ia *InventoryAcquisition) hasToolContaining(sub string) bool {
+	return ia.hasToolLike(sub, "")
+}
+
+func (ia *InventoryAcquisition) hasToolLike(sub, exclude string) bool {
 	inv := ia.bot.GetInventorySlots()
 	names := ia.bot.GetItemNames()
-
-	hasAxe := false
-	hasPickaxe := false
-
 	for _, stack := range inv {
 		if stack.Count <= 0 {
 			continue
 		}
 		name := strings.ToLower(strings.ReplaceAll(names[stack.NetworkID], "minecraft:", ""))
-		if strings.Contains(name, "axe") && !strings.Contains(name, "pickaxe") {
-			hasAxe = true
-		}
-		if strings.Contains(name, "pickaxe") {
-			hasPickaxe = true
+		if strings.Contains(name, sub) && (exclude == "" || !strings.Contains(name, exclude)) {
+			return true
 		}
 	}
+	return false
+}
 
-	if hasAxe && hasPickaxe {
-		return
-	}
+func (ia *InventoryAcquisition) countCraftingMaterials() (int, int) {
+	inv := ia.bot.GetInventorySlots()
+	names := ia.bot.GetItemNames()
 
 	planksCount := 0
 	sticksCount := 0
@@ -138,38 +162,47 @@ func (ia *InventoryAcquisition) CraftToolsIfNeeded() {
 			sticksCount += int(stack.Count)
 		}
 	}
+	return planksCount, sticksCount
+}
 
-	recipes := ia.bot.GetRecipes()
-
-	if sticksCount < 4 && planksCount >= 2 {
-		recipeID, ok := recipes["stick"]
-		if ok {
-			ia.logger.Info("Crafting sticks for tool crafting")
-			_ = ia.bot.CraftItem(recipeID, 1)
-			time.Sleep(500 * time.Millisecond)
-			sticksCount += 4
-			planksCount -= 2
-		}
+func (ia *InventoryAcquisition) craftSticksIfNeeded(recipes map[string]uint32, sticksCount, planksCount int) (int, int) {
+	if sticksCount >= 4 || planksCount < 2 {
+		return sticksCount, planksCount
 	}
-
-	if !hasAxe && planksCount >= 3 && sticksCount >= 2 {
-		recipeID, ok := recipes["wooden_axe"]
-		if ok {
-			ia.logger.Info("Crafting wooden axe")
-			ia.bot.ReportActionStatus("", event.ActionStatus{Action: "craft", Item: "wooden_axe", Count: 1, Success: true})
-			_ = ia.bot.CraftItem(recipeID, 1)
-			time.Sleep(500 * time.Millisecond)
-			planksCount -= 3
-			sticksCount -= 2
-		}
+	recipeID, ok := recipes["stick"]
+	if !ok {
+		return sticksCount, planksCount
 	}
+	ia.logger.Info("Crafting sticks for tool crafting")
+	_ = ia.bot.CraftItem(recipeID, 1)
+	time.Sleep(500 * time.Millisecond)
+	return sticksCount + 4, planksCount - 2
+}
 
-	if !hasPickaxe && planksCount >= 3 && sticksCount >= 2 {
-		recipeID, ok := recipes["wooden_pickaxe"]
-		if ok {
-			ia.logger.Info("Crafting wooden pickaxe")
-			_ = ia.bot.CraftItem(recipeID, 1)
-			time.Sleep(500 * time.Millisecond)
-		}
+func (ia *InventoryAcquisition) craftWoodenAxe(recipes map[string]uint32, sticksCount, planksCount int) (int, int) {
+	if ia.hasAxe() || planksCount < 3 || sticksCount < 2 {
+		return sticksCount, planksCount
 	}
+	recipeID, ok := recipes["wooden_axe"]
+	if !ok {
+		return sticksCount, planksCount
+	}
+	ia.logger.Info("Crafting wooden axe")
+	ia.bot.ReportActionStatus("", event.ActionStatus{Action: "craft", Item: "wooden_axe", Count: 1, Success: true})
+	_ = ia.bot.CraftItem(recipeID, 1)
+	time.Sleep(500 * time.Millisecond)
+	return sticksCount - 2, planksCount - 3
+}
+
+func (ia *InventoryAcquisition) craftWoodenPickaxe(recipes map[string]uint32, sticksCount, planksCount int) {
+	if ia.hasPickaxe() || planksCount < 3 || sticksCount < 2 {
+		return
+	}
+	recipeID, ok := recipes["wooden_pickaxe"]
+	if !ok {
+		return
+	}
+	ia.logger.Info("Crafting wooden pickaxe")
+	_ = ia.bot.CraftItem(recipeID, 1)
+	time.Sleep(500 * time.Millisecond)
 }
