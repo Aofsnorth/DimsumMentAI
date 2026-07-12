@@ -45,6 +45,12 @@ func (te *TemplateExecutor) applyRotation(block common.TemplateBlock, matrix [][
 	}
 }
 
+var stairRotations = map[string][4]int{
+	"east":  {2, 3, 1, 0},
+	"south": {1, 0, 3, 2},
+	"west":  {3, 2, 0, 1},
+}
+
 func (te *TemplateExecutor) rotateStairs(metadata *int, orientation string) *int {
 	if metadata == nil {
 		return nil
@@ -53,41 +59,12 @@ func (te *TemplateExecutor) rotateStairs(metadata *int, orientation string) *int
 	dir := *metadata & 3
 	upsideDown := *metadata & 4
 
-	newDir := dir
-	switch strings.ToLower(orientation) {
-	case "east":
-		if dir == 3 {
-			newDir = 0
-		} else if dir == 0 {
-			newDir = 2
-		} else if dir == 2 {
-			newDir = 1
-		} else if dir == 1 {
-			newDir = 3
-		}
-	case "south":
-		if dir == 3 {
-			newDir = 2
-		} else if dir == 2 {
-			newDir = 3
-		} else if dir == 0 {
-			newDir = 1
-		} else if dir == 1 {
-			newDir = 0
-		}
-	case "west":
-		if dir == 3 {
-			newDir = 1
-		} else if dir == 1 {
-			newDir = 2
-		} else if dir == 2 {
-			newDir = 0
-		} else if dir == 0 {
-			newDir = 3
-		}
+	rotation, ok := stairRotations[strings.ToLower(orientation)]
+	if !ok {
+		return metadata
 	}
 
-	res := newDir | upsideDown
+	res := rotation[dir] | upsideDown
 	return &res
 }
 
@@ -127,36 +104,41 @@ func (te *TemplateExecutor) ExecuteTemplate(plan *common.BuildPlan) ([]common.Bl
 	}
 
 	transformed := te.TransformTemplate(tmpl, plan.Position, plan.Orientation)
+	resolved := te.resolveMaterials(transformed, plan.Materials.Primary, plan.Materials.Secondary)
+	sortByLayerBottomUp(resolved)
+	return resolved, nil
+}
 
+func (te *TemplateExecutor) resolveMaterials(entries []common.BlockEntry, primaryOverride, secondaryOverride string) []common.BlockEntry {
 	allowOverride := os.Getenv("AI_MATERIAL_OVERRIDE") == "true"
-	primaryOverride := plan.Materials.Primary
-	secondaryOverride := plan.Materials.Secondary
-
-	resolved := make([]common.BlockEntry, 0, len(transformed))
-	for _, entry := range transformed {
-		blockType := entry.Block
-
-		if allowOverride {
-			if primaryOverride != "" && strings.Contains(blockType, "planks") && !strings.Contains(blockType, primaryOverride) {
-				blockType = primaryOverride
-			}
-			if secondaryOverride != "" && (strings.Contains(blockType, "log") || strings.Contains(blockType, "stone") || strings.Contains(blockType, "cobblestone")) && !strings.Contains(blockType, secondaryOverride) {
-				blockType = secondaryOverride
-			}
-		}
-
-		entry.Block = strings.ReplaceAll(blockType, "minecraft:", "")
+	resolved := make([]common.BlockEntry, 0, len(entries))
+	for _, entry := range entries {
+		entry.Block = strings.ReplaceAll(resolveBlockType(entry.Block, allowOverride, primaryOverride, secondaryOverride), "minecraft:", "")
 		resolved = append(resolved, entry)
 	}
+	return resolved
+}
 
-	for i := 0; i < len(resolved); i++ {
-		for j := i + 1; j < len(resolved); j++ {
-			a, b := resolved[i], resolved[j]
+func resolveBlockType(blockType string, allowOverride bool, primaryOverride, secondaryOverride string) string {
+	if !allowOverride {
+		return blockType
+	}
+	if primaryOverride != "" && strings.Contains(blockType, "planks") && !strings.Contains(blockType, primaryOverride) {
+		blockType = primaryOverride
+	}
+	if secondaryOverride != "" && (strings.Contains(blockType, "log") || strings.Contains(blockType, "stone") || strings.Contains(blockType, "cobblestone")) && !strings.Contains(blockType, secondaryOverride) {
+		blockType = secondaryOverride
+	}
+	return blockType
+}
+
+func sortByLayerBottomUp(entries []common.BlockEntry) {
+	for i := 0; i < len(entries); i++ {
+		for j := i + 1; j < len(entries); j++ {
+			a, b := entries[i], entries[j]
 			if a.Y > b.Y || (a.Y == b.Y && a.Z > b.Z) || (a.Y == b.Y && a.Z == b.Z && a.X > b.X) {
-				resolved[i], resolved[j] = resolved[j], resolved[i]
+				entries[i], entries[j] = entries[j], entries[i]
 			}
 		}
 	}
-
-	return resolved, nil
 }
