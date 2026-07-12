@@ -1,9 +1,75 @@
+// Package gathering provides helpers for collecting blocks and resources.
 package gathering
 
 import (
 	"strings"
 	"time"
 )
+
+type blockRule struct {
+	match    func(name string) bool
+	hardness float64
+	tool     string
+}
+
+// blockRules are matched in order. The first matching rule determines the
+// block's hardness and preferred tool.
+var blockRules = []blockRule{
+	{match: func(name string) bool { return strings.Contains(name, "obsidian") }, hardness: 50.0, tool: "pickaxe"},
+	{match: func(name string) bool {
+		return strings.Contains(name, "ore") && !strings.Contains(name, "redstone") && !strings.Contains(name, "coal")
+	}, hardness: 3.0, tool: "pickaxe"},
+	{match: func(name string) bool {
+		return strings.Contains(name, "redstone_ore") || strings.Contains(name, "coal_ore")
+	}, hardness: 3.0, tool: "pickaxe"},
+	{match: func(name string) bool { return strings.Contains(name, "deepslate") }, hardness: 3.5, tool: "pickaxe"},
+	{match: func(name string) bool { return strings.Contains(name, "cobble") || name == "stone" }, hardness: 1.5, tool: "pickaxe"},
+	{match: func(name string) bool { return strings.Contains(name, "stone") }, hardness: 1.5, tool: "pickaxe"},
+	{match: func(name string) bool { return strings.Contains(name, "iron_block") }, hardness: 5.0, tool: "pickaxe"},
+	{match: func(name string) bool {
+		return strings.Contains(name, "log") || strings.Contains(name, "wood") || strings.Contains(name, "planks")
+	}, hardness: 2.0, tool: "axe"},
+	{match: func(name string) bool { return strings.Contains(name, "leaves") }, hardness: 0.2, tool: "shears"},
+	{match: func(name string) bool { return strings.Contains(name, "grass") && !strings.Contains(name, "block") }, hardness: 0.1, tool: "shears"},
+	{match: func(name string) bool { return strings.Contains(name, "sand") || strings.Contains(name, "gravel") }, hardness: 0.5, tool: "shovel"},
+	{match: func(name string) bool {
+		return strings.Contains(name, "dirt") || strings.Contains(name, "grass_block") || strings.Contains(name, "podzol") || strings.Contains(name, "mycelium")
+	}, hardness: 0.5, tool: "shovel"},
+	{match: func(name string) bool { return strings.Contains(name, "snow") }, hardness: 0.2, tool: "shovel"},
+	{match: func(name string) bool { return strings.Contains(name, "clay") }, hardness: 0.6, tool: "shovel"},
+}
+
+// matchBlock returns the hardness and preferred tool for a block name.
+func matchBlock(name string) (float64, string) {
+	for _, rule := range blockRules {
+		if rule.match(name) {
+			return rule.hardness, rule.tool
+		}
+	}
+	return 1.0, ""
+}
+
+// toolSpeed returns the mining speed multiplier for a tool.
+func toolSpeed(tool, preferredTool string) float64 {
+	if preferredTool == "" || !strings.Contains(tool, preferredTool) {
+		return 1.0
+	}
+	switch {
+	case strings.Contains(tool, "netherite"):
+		return 9.0
+	case strings.Contains(tool, "diamond"):
+		return 8.0
+	case strings.Contains(tool, "iron"):
+		return 6.0
+	case strings.Contains(tool, "stone"):
+		return 4.0
+	case strings.Contains(tool, "wooden"), strings.Contains(tool, "wood"):
+		return 2.0
+	case strings.Contains(tool, "golden"), strings.Contains(tool, "gold"):
+		return 12.0
+	}
+	return 1.0
+}
 
 // blockBreakDuration returns how long the bot should swing before sending
 // PredictDestroyBlock. Servers reject destroy packets that arrive earlier than
@@ -17,63 +83,8 @@ func blockBreakDuration(blockName, toolName string) time.Duration {
 	name := strings.ToLower(strings.TrimPrefix(blockName, "minecraft:"))
 	tool := strings.ToLower(toolName)
 
-	// Block hardness in seconds (vanilla base time × 1.5 for hand).
-	var hardness float64
-	var preferredTool string
-	switch {
-	case strings.Contains(name, "obsidian"):
-		hardness, preferredTool = 50.0, "pickaxe"
-	case strings.Contains(name, "ore") && !strings.Contains(name, "redstone") && !strings.Contains(name, "coal"):
-		hardness, preferredTool = 3.0, "pickaxe"
-	case strings.Contains(name, "redstone_ore") || strings.Contains(name, "coal_ore"):
-		hardness, preferredTool = 3.0, "pickaxe"
-	case strings.Contains(name, "deepslate"):
-		hardness, preferredTool = 3.5, "pickaxe"
-	case strings.Contains(name, "cobble") || name == "stone":
-		hardness, preferredTool = 1.5, "pickaxe"
-	case strings.Contains(name, "stone"):
-		hardness, preferredTool = 1.5, "pickaxe"
-	case strings.Contains(name, "iron_block"):
-		hardness, preferredTool = 5.0, "pickaxe"
-	case strings.Contains(name, "log") || strings.Contains(name, "wood") || strings.Contains(name, "planks"):
-		hardness, preferredTool = 2.0, "axe"
-	case strings.Contains(name, "leaves"):
-		hardness, preferredTool = 0.2, "shears"
-	case strings.Contains(name, "grass") && !strings.Contains(name, "block"):
-		// Tall grass / fern — instant with shears, near-instant by hand.
-		hardness, preferredTool = 0.1, "shears"
-	case strings.Contains(name, "sand") || strings.Contains(name, "gravel"):
-		hardness, preferredTool = 0.5, "shovel"
-	case strings.Contains(name, "dirt") || strings.Contains(name, "grass_block") || strings.Contains(name, "podzol") || strings.Contains(name, "mycelium"):
-		hardness, preferredTool = 0.5, "shovel"
-	case strings.Contains(name, "snow"):
-		hardness, preferredTool = 0.2, "shovel"
-	case strings.Contains(name, "clay"):
-		hardness, preferredTool = 0.6, "shovel"
-	default:
-		// Unknown: assume modest hardness, hand-mineable.
-		hardness, preferredTool = 1.0, ""
-	}
-
-	// Tool multiplier: only the correct tool category applies. Wrong tool
-	// gives hand-speed.
-	speed := 1.0
-	if preferredTool != "" && strings.Contains(tool, preferredTool) {
-		switch {
-		case strings.Contains(tool, "netherite"):
-			speed = 9.0
-		case strings.Contains(tool, "diamond"):
-			speed = 8.0
-		case strings.Contains(tool, "iron"):
-			speed = 6.0
-		case strings.Contains(tool, "stone"):
-			speed = 4.0
-		case strings.Contains(tool, "wooden"), strings.Contains(tool, "wood"):
-			speed = 2.0
-		case strings.Contains(tool, "golden"), strings.Contains(tool, "gold"):
-			speed = 12.0
-		}
-	}
+	hardness, preferredTool := matchBlock(name)
+	speed := toolSpeed(tool, preferredTool)
 
 	// Vanilla formula: base = hardness × (canHarvest ? 1.5 : 5.0). Bot is
 	// considered eligible to harvest its target (we already pick the right

@@ -1,0 +1,11 @@
+refactor(schematic, gathering): reduce complexity in lookup functions
+
+- Replace switch-based blockBreakDuration with rule-driven matchBlock
+  and toolSpeed helpers
+- Simplify FindSubstitute with containsAny and a substitute group table
+- Simplify IsBuildable using foodItems/materialItems slices and containsAny
+- Add package doc comments to break_time.go, scaffold.go, and schematic.go
+
+Generated with [Devin](https://devin.ai)
+
+Co-Authored-By: Devin <158243242+devin-ai-integration[bot]@users.noreply.github.com>

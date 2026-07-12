@@ -1,3 +1,4 @@
+// Package schematic provides utilities for working with building schematics.
 package schematic
 
 import (
@@ -125,6 +126,20 @@ var NonPlaceable = map[string]bool{
 	"dark_oak_boat":        true,
 }
 
+var foodItems = []string{
+	"cooked_", "raw_",
+	"apple", "bread", "cookie", "cake", "beef", "porkchop", "chicken",
+	"mutton", "rabbit", "cod", "salmon", "rotten_flesh", "spider_eye",
+	"carrot", "potato", "beetroot", "sweet_berries", "glow_berries",
+	"melon_slice", "dried_kelp",
+}
+
+var materialItems = []string{
+	"_ingot", "diamond", "emerald", "coal", "charcoal", "lapis_lazuli",
+	"quartz", "amethyst_shard", "_shard", "_nugget", "redstone",
+	"glowstone_dust", "_dye", "ink_sac", "bone_meal", "wheat", "seeds",
+}
+
 // IsBuildable returns true if the block/item name represents a placeable block.
 func IsBuildable(name string) bool {
 	if name == "" || name == "air" || name == "unknown" {
@@ -134,26 +149,8 @@ func IsBuildable(name string) bool {
 	if NonPlaceable[name] {
 		return false
 	}
-
-	if strings.Contains(name, "cooked_") || strings.Contains(name, "raw_") ||
-		name == "apple" || name == "bread" || name == "cookie" ||
-		name == "cake" || name == "beef" || name == "porkchop" ||
-		name == "chicken" || name == "mutton" || name == "rabbit" ||
-		name == "cod" || name == "salmon" || name == "rotten_flesh" ||
-		name == "spider_eye" || name == "carrot" || name == "potato" ||
-		name == "beetroot" || name == "sweet_berries" || name == "glow_berries" ||
-		name == "melon_slice" || name == "dried_kelp" {
+	if containsAny(name, foodItems) || containsAny(name, materialItems) {
 		return false
 	}
-
-	if strings.Contains(name, "_ingot") || name == "diamond" || name == "emerald" ||
-		name == "coal" || name == "charcoal" || name == "lapis_lazuli" ||
-		name == "quartz" || name == "amethyst_shard" || strings.Contains(name, "_shard") ||
-		strings.Contains(name, "_nugget") || name == "redstone" || name == "glowstone_dust" ||
-		strings.Contains(name, "_dye") || name == "ink_sac" || name == "bone_meal" ||
-		name == "wheat" || strings.Contains(name, "seeds") {
-		return false
-	}
-
 	return true
 }

@@ -1,3 +1,4 @@
+// Package schematic provides utilities for working with building schematics.
 package schematic
 
 import (
@@ -68,6 +69,32 @@ func IsScaffoldSafe(name string) bool {
 	return false
 }
 
+// containsAny reports whether s contains any of the given substrings.
+func containsAny(s string, substrings []string) bool {
+	for _, sub := range substrings {
+		if strings.Contains(s, sub) {
+			return true
+		}
+	}
+	return false
+}
+
+// substituteGroup maps a target block keyword to candidate item keywords used
+// when looking for an inventory substitute.
+type substituteGroup struct {
+	target []string
+	items  []string
+}
+
+var substituteGroups = []substituteGroup{
+	{target: []string{"planks"}, items: []string{"planks", "log", "wood"}},
+	{target: []string{"log", "wood"}, items: []string{"log", "wood"}},
+	{target: []string{"stone", "cobblestone", "brick", "deepslate"}, items: []string{"stone", "cobblestone", "brick", "deepslate"}},
+	{target: []string{"glass"}, items: []string{"glass"}},
+	{target: []string{"wool"}, items: []string{"wool"}},
+	{target: []string{"concrete"}, items: []string{"concrete"}},
+}
+
 // FindSubstitute checks available inventory blocks to find a suitable substitute for a target block type.
 func FindSubstitute(target string, available []common.BuildItem) string {
 	target = strings.ReplaceAll(target, "minecraft:", "")
@@ -78,55 +105,12 @@ func FindSubstitute(target string, available []common.BuildItem) string {
 		}
 	}
 
-	if strings.Contains(target, "planks") {
-		for _, item := range available {
-			if strings.Contains(item.Name, "planks") {
-				return item.Name
-			}
-		}
-		for _, item := range available {
-			if strings.Contains(item.Name, "log") || strings.Contains(item.Name, "wood") {
-				return item.Name
-			}
-		}
-	}
-
-	if strings.Contains(target, "log") || strings.Contains(target, "wood") {
-		for _, item := range available {
-			if strings.Contains(item.Name, "log") || strings.Contains(item.Name, "wood") {
-				return item.Name
-			}
-		}
-	}
-
-	if strings.Contains(target, "stone") || strings.Contains(target, "cobblestone") || strings.Contains(target, "brick") || strings.Contains(target, "deepslate") {
-		for _, item := range available {
-			if strings.Contains(item.Name, "stone") || strings.Contains(item.Name, "cobblestone") || strings.Contains(item.Name, "brick") || strings.Contains(item.Name, "deepslate") {
-				return item.Name
-			}
-		}
-	}
-
-	if strings.Contains(target, "glass") {
-		for _, item := range available {
-			if strings.Contains(item.Name, "glass") {
-				return item.Name
-			}
-		}
-	}
-
-	if strings.Contains(target, "wool") {
-		for _, item := range available {
-			if strings.Contains(item.Name, "wool") {
-				return item.Name
-			}
-		}
-	}
-
-	if strings.Contains(target, "concrete") {
-		for _, item := range available {
-			if strings.Contains(item.Name, "concrete") {
-				return item.Name
+	for _, group := range substituteGroups {
+		if containsAny(target, group.target) {
+			for _, item := range available {
+				if containsAny(item.Name, group.items) {
+					return item.Name
+				}
 			}
 		}
 	}
