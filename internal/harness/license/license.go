@@ -134,6 +134,14 @@ func (g *Guide) Check() ([]harness.Finding, error) {
 // checkHeader reads the leading lines of a Go file and determines whether
 // a comment block exists before the package declaration. If required
 // keywords are configured, it also checks that they appear in the header.
+func isHeaderLine(line string) bool {
+	return isCommentLine(line) || line == ""
+}
+
+func isCommentLine(line string) bool {
+	return strings.HasPrefix(line, "//") || strings.HasPrefix(line, "/*") || strings.HasPrefix(line, "*")
+}
+
 func (g *Guide) checkHeader(path string) (hasHeader bool, missing []string, err error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -152,17 +160,14 @@ func (g *Guide) checkHeader(path string) (hasHeader bool, missing []string, err 
 			foundPackage = true
 			break
 		}
-		if strings.HasPrefix(line, "//") || strings.HasPrefix(line, "/*") || strings.HasPrefix(line, "*") || line == "" {
-			if strings.HasPrefix(line, "//") || strings.HasPrefix(line, "/*") || strings.HasPrefix(line, "*") {
-				foundComment = true
-			}
-			headerText.WriteString(line)
-			headerText.WriteString("\n")
-			continue
+		if !isHeaderLine(line) {
+			break
 		}
-		// Non-comment, non-package line (e.g. build tag is fine, but
-		// anything else means no header).
-		break
+		if isCommentLine(line) {
+			foundComment = true
+		}
+		headerText.WriteString(line)
+		headerText.WriteString("\n")
 	}
 	if err := scanner.Err(); err != nil {
 		return false, nil, err
