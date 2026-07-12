@@ -1,10 +1,13 @@
+// Package world provides the bot's world model, chunk cache, and packet handlers
+// for terrain data.
 package world
 
 import (
-	"bedrock-ai/internal/safecast"
 	"bytes"
 	"context"
 	"fmt"
+
+	"bedrock-ai/internal/safecast"
 
 	"github.com/df-mc/dragonfly/server/block/cube"
 	"github.com/df-mc/dragonfly/server/world/chunk"
@@ -47,86 +50,116 @@ func (wc *WorldCache) HandleLevelChunk(pk *packet.LevelChunk) {
 // HandleSubChunk processes a SubChunk packet and merges the decoded sub-chunk.
 func (wc *WorldCache) HandleSubChunk(pk *packet.SubChunk) {
 	for _, entry := range pk.SubChunkEntries {
-		if entry.Result != protocol.SubChunkResultSuccess &&
-			entry.Result != protocol.SubChunkResultSuccessAllAir {
+		if !isSubChunkSuccess(entry.Result) {
 			continue
 		}
+		wc.applySubChunkEntry(entry, pk.Position)
+	}
+}
 
-		absX := pk.Position.X() + int32(entry.Offset[0])
-		absZ := pk.Position.Z() + int32(entry.Offset[2])
-		subY := pk.Position.Y() + int32(entry.Offset[1])
+func isSubChunkSuccess(result byte) bool {
+	return result == protocol.SubChunkResultSuccess || result == protocol.SubChunkResultSuccessAllAir
+}
 
-		cPos := chunkPos{X: absX, Z: absZ}
+func (wc *WorldCache) applySubChunkEntry(entry protocol.SubChunkEntry, pos protocol.SubChunkPos) {
+	absX := pos.X() + int32(entry.Offset[0])
+	absZ := pos.Z() + int32(entry.Offset[2])
+	subY := pos.Y() + int32(entry.Offset[1])
+	cPos := chunkPos{X: absX, Z: absZ}
 
-		wc.mu.Lock()
-		c, ok := wc.chunks[cPos]
-		if !ok {
-			c = chunk.New(wc.airRID, wc.r)
-			wc.chunks[cPos] = c
-		}
-		wc.mu.Unlock()
+	c := wc.getOrCreateChunk(cPos)
+	if entry.Result == protocol.SubChunkResultSuccessAllAir {
+		return
+	}
 
-		if entry.Result == protocol.SubChunkResultSuccessAllAir {
-			continue
-		}
+	storages, ok := wc.decodeSubChunkPayload(entry.RawPayload)
+	if !ok {
+		return
+	}
+	applyStorageToChunk(c, wc.airRID, wc.r, subY, storages)
+	if wc.logger != nil {
+		wc.logger.Debug("WorldCache: decoded SubChunk", "chunkX", cPos.X, "chunkZ", cPos.Z, "subY", subY)
+	}
+}
 
-		buf := bytes.NewBuffer(entry.RawPayload)
-		ver, err := buf.ReadByte()
-		if err != nil {
-			continue
-		}
+func (wc *WorldCache) getOrCreateChunk(cPos chunkPos) *chunk.Chunk {
+	wc.mu.Lock()
+	defer wc.mu.Unlock()
+	if c, ok := wc.chunks[cPos]; ok {
+		return c
+	}
+	c := chunk.New(wc.airRID, wc.r)
+	wc.chunks[cPos] = c
+	return c
+}
 
-		switch ver {
-		case 1:
-			storage, err := wc.decodeNetworkPalettedStorage(buf)
-			if err != nil {
-				continue
-			}
-			applyStorageToChunk(c, wc.airRID, wc.r, subY, []*palettedResult{storage})
-		case 8, 9:
-			storageCount, err := buf.ReadByte()
-			if err != nil {
-				continue
-			}
-			if ver == 9 {
-				if _, err := buf.ReadByte(); err != nil {
-					continue
-				}
-			}
-			storages := make([]*palettedResult, storageCount)
-			valid := true
-			for i := byte(0); i < storageCount; i++ {
-				storages[i], err = wc.decodeNetworkPalettedStorage(buf)
-				if err != nil {
-					valid = false
-					break
-				}
-				if wc.logger != nil && wc.logger.Enabled(context.TODO(), -4) && storages[i] != nil && len(storages[i].palette) > 0 { // -4 is Debug
-					var names []string
-					for _, rid := range storages[i].palette {
-						name, _, _ := chunk.RuntimeIDToState(rid)
-						if name == "" {
-							names = append(names, fmt.Sprintf("unknown(%d)", rid))
-						} else {
-							names = append(names, name)
-						}
-					}
-					limit := 5
-					if len(names) < limit {
-						limit = len(names)
-					}
-					wc.logger.Debug("Decoded storage palette", "layer", i, "bits", storages[i].bitsPerBlock, "paletteCount", len(storages[i].palette), "names", names[:limit])
-				}
-			}
-			if !valid {
-				continue
-			}
-			applyStorageToChunk(c, wc.airRID, wc.r, subY, storages)
-			if wc.logger != nil {
-				wc.logger.Debug("WorldCache: decoded SubChunk", "chunkX", cPos.X, "chunkZ", cPos.Z, "subY", subY)
-			}
+func (wc *WorldCache) decodeSubChunkPayload(raw []byte) ([]*palettedResult, bool) {
+	buf := bytes.NewBuffer(raw)
+	ver, err := buf.ReadByte()
+	if err != nil {
+		return nil, false
+	}
+
+	switch ver {
+	case 1:
+		return wc.decodeVersion1Payload(buf)
+	case 8, 9:
+		return wc.decodeVersion89Payload(buf, ver)
+	default:
+		return nil, false
+	}
+}
+
+func (wc *WorldCache) decodeVersion1Payload(buf *bytes.Buffer) ([]*palettedResult, bool) {
+	storage, err := wc.decodeNetworkPalettedStorage(buf)
+	if err != nil {
+		return nil, false
+	}
+	return []*palettedResult{storage}, true
+}
+
+func (wc *WorldCache) decodeVersion89Payload(buf *bytes.Buffer, ver byte) ([]*palettedResult, bool) {
+	storageCount, err := buf.ReadByte()
+	if err != nil {
+		return nil, false
+	}
+	if ver == 9 {
+		if _, err := buf.ReadByte(); err != nil {
+			return nil, false
 		}
 	}
+
+	storages := make([]*palettedResult, storageCount)
+	for i := byte(0); i < storageCount; i++ {
+		storages[i], err = wc.decodeNetworkPalettedStorage(buf)
+		if err != nil {
+			return nil, false
+		}
+		wc.logStoragePalette(storages[i], i)
+	}
+	return storages, true
+}
+
+func (wc *WorldCache) logStoragePalette(storage *palettedResult, layer byte) {
+	if wc.logger == nil || !wc.logger.Enabled(context.TODO(), -4) || storage == nil || len(storage.palette) == 0 {
+		return
+	}
+
+	names := make([]string, 0, len(storage.palette))
+	for _, rid := range storage.palette {
+		name, _, _ := chunk.RuntimeIDToState(rid)
+		if name == "" {
+			names = append(names, fmt.Sprintf("unknown(%d)", rid))
+		} else {
+			names = append(names, name)
+		}
+	}
+
+	limit := 5
+	if len(names) < limit {
+		limit = len(names)
+	}
+	wc.logger.Debug("Decoded storage palette", "layer", layer, "bits", storage.bitsPerBlock, "paletteCount", len(storage.palette), "names", names[:limit])
 }
 
 func applyStorageToChunk(c *chunk.Chunk, airRID uint32, r cube.Range, subY int32, storages []*palettedResult) {
