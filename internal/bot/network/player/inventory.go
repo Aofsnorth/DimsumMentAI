@@ -345,80 +345,71 @@ func applyItemStackResponse(b *bot.Bot, p *packet.ItemStackResponse) {
 	defer b.Mu.Unlock()
 
 	for _, resp := range p.Responses {
-		// Check if this is a response to a pending craft request.
-		pendingCh, craftOutputNetID, hasPending := b.PendingCraftLookup(resp.RequestID)
+		processItemStackResponse(b, resp)
+	}
+}
 
-		if resp.Status != 0 {
-			// Non-zero status = rejected. Notify the pending craft if any.
-			b.Logger.Info("item stack request rejected",
-				slog.Int("request_id", int(resp.RequestID)),
-				slog.Uint64("status", uint64(resp.Status)),
-			)
-			if hasPending {
-				select {
-				case pendingCh <- bot.CraftResult(false):
-				default:
-				}
-				b.PendingCraftDelete(resp.RequestID)
-			}
-			continue
-		}
+// processItemStackResponse applies the updates for a single response and
+// notifies any pending craft listener. Caller must hold b.Mu.
+func processItemStackResponse(b *bot.Bot, resp protocol.ItemStackResponse) {
+	pendingCh, craftOutputNetID, hasPending := b.PendingCraftLookup(resp.RequestID)
 
-		for _, container := range resp.ContainerInfo {
-			containerID := container.Container.ContainerID
-			offset := containerSlotOffset(containerID)
-
-			// ItemStackResponse can also reference the cursor or crafting
-			// containers — skip those since they're not part of the
-			// persistent inventory.
-			if !isPlayerInventoryContainer(containerID) {
-				continue
-			}
-
-			for _, slotInfo := range container.SlotInfo {
-				globalSlot := offset + uint32(slotInfo.Slot)
-				if slotInfo.Count > 0 && slotInfo.StackNetworkID != 0 {
-					// StackResponseSlotInfo.StackNetworkID is the unique stack
-					// instance ID assigned by the server, NOT the item type
-					// NetworkID. Store it in StackNetworkIDs and preserve the
-					// existing item type from InventoryMap. The response does
-					// not include the item type — the client already knows it
-					// from the action it initiated.
-					b.StackNetworkIDs[globalSlot] = slotInfo.StackNetworkID
-					if existing, ok := b.InventoryMap[globalSlot]; ok {
-						existing.Count = uint16(slotInfo.Count)
-						b.InventoryMap[globalSlot] = existing
-					} else {
-						// Slot didn't exist before (e.g. crafted output placed
-						// into a previously empty slot). Use the pending
-						// craft's output NetworkID if available so the item
-						// type is immediately known. Otherwise store a
-						// placeholder and let a subsequent
-						// InventoryContent/InventorySlot sync fill it in.
-						newItem := protocol.ItemStack{
-							Count:        uint16(slotInfo.Count),
-							HasNetworkID: true,
-						}
-						if craftOutputNetID != 0 {
-							newItem.NetworkID = craftOutputNetID
-							newItem.HasNetworkID = true
-						}
-						b.InventoryMap[globalSlot] = newItem
-					}
-				} else {
-					delete(b.InventoryMap, globalSlot)
-					delete(b.StackNetworkIDs, globalSlot)
-				}
-			}
-		}
-
-		// Notify the pending craft that it was accepted.
+	if resp.Status != 0 {
+		b.Logger.Info("item stack request rejected",
+			slog.Int("request_id", int(resp.RequestID)),
+			slog.Uint64("status", uint64(resp.Status)),
+		)
 		if hasPending {
 			select {
-			case pendingCh <- bot.CraftResult(true):
+			case pendingCh <- bot.CraftResult(false):
 			default:
 			}
 			b.PendingCraftDelete(resp.RequestID)
 		}
+		return
 	}
+
+	for _, container := range resp.ContainerInfo {
+		containerID := container.Container.ContainerID
+		if !isPlayerInventoryContainer(containerID) {
+			continue
+		}
+		offset := containerSlotOffset(containerID)
+		for _, slotInfo := range container.SlotInfo {
+			applySlotUpdate(b, slotInfo, offset+uint32(slotInfo.Slot), craftOutputNetID)
+		}
+	}
+
+	if hasPending {
+		select {
+		case pendingCh <- bot.CraftResult(true):
+		default:
+		}
+		b.PendingCraftDelete(resp.RequestID)
+	}
+}
+
+// applySlotUpdate updates a single inventory slot from an ItemStackResponse.
+// Caller must hold b.Mu.
+func applySlotUpdate(b *bot.Bot, slotInfo protocol.StackResponseSlotInfo, globalSlot uint32, craftOutputNetID int32) {
+	if slotInfo.Count > 0 && slotInfo.StackNetworkID != 0 {
+		b.StackNetworkIDs[globalSlot] = slotInfo.StackNetworkID
+		if existing, ok := b.InventoryMap[globalSlot]; ok {
+			existing.Count = uint16(slotInfo.Count)
+			b.InventoryMap[globalSlot] = existing
+			return
+		}
+		newItem := protocol.ItemStack{
+			Count:        uint16(slotInfo.Count),
+			HasNetworkID: true,
+		}
+		if craftOutputNetID != 0 {
+			newItem.NetworkID = craftOutputNetID
+			newItem.HasNetworkID = true
+		}
+		b.InventoryMap[globalSlot] = newItem
+		return
+	}
+	delete(b.InventoryMap, globalSlot)
+	delete(b.StackNetworkIDs, globalSlot)
 }
