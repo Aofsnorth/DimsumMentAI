@@ -85,35 +85,62 @@ func (wc *WorldCache) IsBlockSolid(x, y, z int32) (bool, bool) {
 	return wc.IsRIDSolid(rid), true
 }
 
+var passableExactNames = map[string]bool{
+	"minecraft:air": true, "minecraft:water": true, "minecraft:flowing_water": true,
+	"minecraft:lava": true, "minecraft:flowing_lava": true, "minecraft:ladder": true,
+	"minecraft:tripwire": true, "minecraft:trip_wire": true, "minecraft:tripwire_hook": true,
+	"minecraft:lever": true, "minecraft:wheat": true, "minecraft:carrots": true,
+	"minecraft:potatoes": true, "minecraft:beetroots": true, "minecraft:nether_wart": true,
+	"minecraft:sugar_cane": true, "minecraft:sweet_berry_bush": true, "minecraft:glow_lichen": true,
+	"minecraft:vine": true, "minecraft:fire": true, "minecraft:poppy": true,
+	"minecraft:dandelion": true, "minecraft:blue_orchid": true, "minecraft:allium": true,
+	"minecraft:azure_bluet": true, "minecraft:red_tulip": true, "minecraft:orange_tulip": true,
+	"minecraft:white_tulip": true, "minecraft:pink_tulip": true, "minecraft:oxeye_daisy": true,
+	"minecraft:cornflower": true, "minecraft:lily_of_the_valley": true, "minecraft:wither_rose": true,
+	"minecraft:sunflower": true, "minecraft:lilac": true, "minecraft:rose_bush": true,
+	"minecraft:peony": true, "minecraft:pitcher_plant": true, "minecraft:torchflower": true,
+}
+
+var passableSuffixes = []string{
+	"_sign", "_button", "_sapling", "_pressure_plate",
+}
+
+type passableContains struct {
+	sub     string
+	exclude []string
+}
+
+var passableContainsList = []passableContains{
+	{sub: "grass", exclude: []string{"block", "path"}},
+	{sub: "fern"},
+	{sub: "mushroom"},
+	{sub: "roots"},
+	{sub: "vines"},
+	{sub: "carpet"},
+	{sub: "coral", exclude: []string{"block"}},
+	{sub: "crop"},
+	{sub: "rail"},
+	{sub: "torch"},
+}
+
 func isBlockNamePassable(name string) bool {
-	if strings.HasSuffix(name, "_sign") ||
-		strings.HasSuffix(name, "_button") ||
-		strings.HasSuffix(name, "_sapling") ||
-		strings.HasSuffix(name, "_pressure_plate") ||
-		(strings.Contains(name, "grass") && !strings.Contains(name, "block") && !strings.Contains(name, "path")) ||
-		strings.Contains(name, "fern") ||
-		strings.Contains(name, "mushroom") ||
-		strings.Contains(name, "roots") ||
-		strings.Contains(name, "vines") ||
-		strings.Contains(name, "carpet") ||
-		(strings.Contains(name, "coral") && !strings.Contains(name, "block")) ||
-		strings.Contains(name, "crop") ||
-		strings.Contains(name, "rail") ||
-		strings.Contains(name, "torch") {
+	if passableExactNames[name] {
 		return true
 	}
-
-	switch name {
-	case "minecraft:air", "minecraft:water", "minecraft:flowing_water", "minecraft:lava", "minecraft:flowing_lava",
-		"minecraft:ladder", "minecraft:tripwire", "minecraft:trip_wire", "minecraft:tripwire_hook", "minecraft:lever",
-		"minecraft:wheat", "minecraft:carrots", "minecraft:potatoes", "minecraft:beetroots", "minecraft:nether_wart",
-		"minecraft:sugar_cane", "minecraft:sweet_berry_bush", "minecraft:glow_lichen", "minecraft:vine", "minecraft:fire",
-		"minecraft:poppy", "minecraft:dandelion", "minecraft:blue_orchid", "minecraft:allium", "minecraft:azure_bluet",
-		"minecraft:red_tulip", "minecraft:orange_tulip", "minecraft:white_tulip", "minecraft:pink_tulip",
-		"minecraft:oxeye_daisy", "minecraft:cornflower", "minecraft:lily_of_the_valley", "minecraft:wither_rose",
-		"minecraft:sunflower", "minecraft:lilac", "minecraft:rose_bush", "minecraft:peony", "minecraft:pitcher_plant",
-		"minecraft:torchflower":
-		return true
+	for _, suffix := range passableSuffixes {
+		if strings.HasSuffix(name, suffix) {
+			return true
+		}
+	}
+	for _, pc := range passableContainsList {
+		if strings.Contains(name, pc.sub) {
+			for _, ex := range pc.exclude {
+				if strings.Contains(name, ex) {
+					return false
+				}
+			}
+			return true
+		}
 	}
 	return false
 }
