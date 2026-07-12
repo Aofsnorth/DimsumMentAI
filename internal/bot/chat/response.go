@@ -17,46 +17,74 @@ import (
 func dispatchChatResponse(b *bot.Bot, user, msg, systemPrompt, reply string) {
 	parsed := ai.Parse(reply)
 
-	// Check for <silent/> — LLM decided not to speak.
 	if isSilentResponse(reply) {
 		b.Logger.Debug("chat response: LLM chose to stay silent")
 		return
 	}
 
-	// Silent actions like status/inventory require a follow-up LLM call.
-	if isSilentAction(parsed) && len(parsed.Actions) == 1 {
-		if parsed.CleanReply != "" {
-			b.Logger.Info("chat reply sending (pre-silent)", slog.String("reply", parsed.CleanReply))
-			b.SendSafeChat(parsed.CleanReply)
-		}
-		if parsed.FollowupSec > 0 {
-			go func() {
-				time.Sleep(time.Duration(parsed.FollowupSec) * time.Second)
-				handleSilentResponse(b, user, systemPrompt, parsed.Actions)
-			}()
-		} else {
-			handleSilentResponse(b, user, systemPrompt, parsed.Actions)
-		}
+	if handleSilentActionResponse(b, user, systemPrompt, parsed) {
 		return
 	}
 
-	// Send the main reply.
+	sendMainChatReply(b, parsed)
+
+	if handlePlanResponse(b, user, parsed) {
+		return
+	}
+
+	steps := buildChatSteps(b, parsed, msg)
+	action.ExecutePlan(b, steps, user)
+
+	if parsed.FollowupSec > 0 {
+		scheduleFollowup(b, user, parsed.FollowupSec)
+	}
+}
+
+// handleSilentActionResponse returns true and performs the follow-up LLM call
+// for silent status/inventory actions.
+func handleSilentActionResponse(b *bot.Bot, user, systemPrompt string, parsed ai.ParsedReply) bool {
+	if !isSilentAction(parsed) || len(parsed.Actions) != 1 {
+		return false
+	}
+	if parsed.CleanReply != "" {
+		b.Logger.Info("chat reply sending (pre-silent)", slog.String("reply", parsed.CleanReply))
+		b.SendSafeChat(parsed.CleanReply)
+	}
+	if parsed.FollowupSec > 0 {
+		go func() {
+			time.Sleep(time.Duration(parsed.FollowupSec) * time.Second)
+			handleSilentResponse(b, user, systemPrompt, parsed.Actions)
+		}()
+	} else {
+		handleSilentResponse(b, user, systemPrompt, parsed.Actions)
+	}
+	return true
+}
+
+// sendMainChatReply sends the visible chat reply to the server.
+func sendMainChatReply(b *bot.Bot, parsed ai.ParsedReply) {
 	if parsed.CleanReply != "" {
 		b.Logger.Info("chat reply sending", slog.String("reply", parsed.CleanReply))
 		b.SendSafeChat(parsed.CleanReply)
-	} else {
-		b.Logger.Info("chat: AI returned no visible reply text")
-	}
-
-	// If the LLM emitted a <plan> block, route it through the agentic planner.
-	if len(parsed.PlanSteps) > 0 && b.Planner != nil {
-		b.Logger.Info("plan detected from LLM, routing through planner",
-			"steps", len(parsed.PlanSteps), "user", user)
-		b.Planner.Run(parsed.CleanReply, user, parsed.PlanSteps)
 		return
 	}
+	b.Logger.Info("chat: AI returned no visible reply text")
+}
 
-	// Dispatch action labels. Multiple tags are treated as a small plan.
+// handlePlanResponse routes a <plan> block through the planner if present.
+func handlePlanResponse(b *bot.Bot, user string, parsed ai.ParsedReply) bool {
+	if len(parsed.PlanSteps) == 0 || b.Planner == nil {
+		return false
+	}
+	b.Logger.Info("plan detected from LLM, routing through planner",
+		"steps", len(parsed.PlanSteps), "user", user)
+	b.Planner.Run(parsed.CleanReply, user, parsed.PlanSteps)
+	return true
+}
+
+// buildChatSteps converts parsed actions into steps, falling back to movement
+// or intent inference when no action tags are present.
+func buildChatSteps(b *bot.Bot, parsed ai.ParsedReply, msg string) []action.Step {
 	steps := make([]action.Step, 0, len(parsed.Actions))
 	for _, act := range parsed.Actions {
 		steps = append(steps, action.Step{Label: act.Label, Param: act.Param})
@@ -80,13 +108,7 @@ func dispatchChatResponse(b *bot.Bot, user, msg, systemPrompt, reply string) {
 			)
 		}
 	}
-	action.ExecutePlan(b, steps, user)
-
-	// If the LLM emitted a <followup>N</followup> tag, schedule a delayed
-	// self-message.
-	if parsed.FollowupSec > 0 {
-		scheduleFollowup(b, user, parsed.FollowupSec)
-	}
+	return steps
 }
 
 // isSilentAction reports whether the parsed reply contains a silent action
