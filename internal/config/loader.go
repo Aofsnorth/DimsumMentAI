@@ -1,3 +1,4 @@
+// Package config loads and validates bot configuration.
 package config
 
 import (
@@ -76,6 +77,16 @@ func applyDefaults(cfg *Config) {
 }
 
 func validate(cfg *Config) error {
+	if err := validateRequired(cfg); err != nil {
+		return err
+	}
+	if err := validateAIProvider(cfg); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateRequired(cfg *Config) error {
 	if cfg.Server.Host == "" {
 		return fmt.Errorf("server.host is required")
 	}
@@ -96,23 +107,17 @@ func validate(cfg *Config) error {
 	default:
 		return fmt.Errorf("bot.log_level must be one of: debug, info, warn, error")
 	}
+	return nil
+}
+
+func validateAIProvider(cfg *Config) error {
 	switch cfg.AI.Provider {
 	case "", "none":
-		// AI disabled
+		return nil
 	case "nvidia":
-		if os.Getenv("NVIDIA_API_KEY") == "" {
-			return fmt.Errorf("NVIDIA_API_KEY environment variable is required when provider is 'nvidia'")
-		}
-		if cfg.AI.Model == "" {
-			return fmt.Errorf("ai.model is required when provider is 'nvidia'")
-		}
+		return validateAIKeys(cfg, "NVIDIA_API_KEY")
 	case "minimax":
-		if os.Getenv("MINIMAX_API_KEY") == "" {
-			return fmt.Errorf("MINIMAX_API_KEY environment variable is required when provider is 'minimax'")
-		}
-		if cfg.AI.Model == "" {
-			return fmt.Errorf("ai.model is required when provider is 'minimax'")
-		}
+		return validateAIKeys(cfg, "MINIMAX_API_KEY")
 	case "opengateway", "openai_compatible":
 		if os.Getenv("OPENAI_API_KEY") == "" {
 			return fmt.Errorf("OPENAI_API_KEY environment variable is required when provider is '%s'", cfg.AI.Provider)
@@ -123,8 +128,18 @@ func validate(cfg *Config) error {
 		if cfg.AI.Model == "" {
 			return fmt.Errorf("ai.model is required when provider is '%s'", cfg.AI.Provider)
 		}
+		return nil
 	default:
 		return fmt.Errorf("unknown ai.provider %q (expected: nvidia, minimax, opengateway, openai_compatible, none)", cfg.AI.Provider)
+	}
+}
+
+func validateAIKeys(cfg *Config, apiKeyEnv string) error {
+	if os.Getenv(apiKeyEnv) == "" {
+		return fmt.Errorf("%s environment variable is required when provider is '%s'", apiKeyEnv, cfg.AI.Provider)
+	}
+	if cfg.AI.Model == "" {
+		return fmt.Errorf("ai.model is required when provider is '%s'", cfg.AI.Provider)
 	}
 	return nil
 }
