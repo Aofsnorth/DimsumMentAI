@@ -1,3 +1,6 @@
+// Package movement implements tick-level bot movement, path following, and look
+// direction. It is responsible for steering, physics, collision resolution, and
+// the PlayerAuthInput heartbeat sent to the server.
 package movement
 
 import (
@@ -51,6 +54,7 @@ func (tc *TickContext) updateTargetPositionIfFollowing() {
 				} else {
 					tc.B.TargetPos = playerFeetPos
 				}
+
 				tc.TPos = tc.B.TargetPos
 
 				hasPath := len(tc.B.CurrentPath) > 0 && tc.B.PathIndex < len(tc.B.CurrentPath)
@@ -70,23 +74,14 @@ func (tc *TickContext) resolveNextTarget() {
 	tc.B.Mu.Lock()
 	tc.HasPath = len(tc.B.CurrentPath) > 0 && tc.B.PathIndex < len(tc.B.CurrentPath)
 	if tc.HasPath {
-		node := tc.B.CurrentPath[tc.B.PathIndex]
-		tc.NextTarget = mgl32.Vec3{float32(node.X) + 0.5, float32(node.Y), float32(node.Z) + 0.5}
-
-		if (node.Action == "mine" || node.Action == "place") && !tc.B.ScaffoldingActive {
-			tc.B.ScaffoldingActive = true
-			go ExecuteScaffoldAction(tc.B, node)
-		}
+		tc.setNextTargetFromPath()
 	} else {
 		tc.NextTarget = tc.TPos
 	}
 	tc.B.Mu.Unlock()
 
 	if !tc.HasPath {
-		tc.NextTarget = tc.TPos
-		tc.B.Mu.Lock()
-		tc.B.CurrentPath = nil
-		tc.B.Mu.Unlock()
+		tc.clearEmptyPath()
 	}
 
 	tc.Dx = tc.NextTarget.X() - tc.CurrPos.X()
@@ -95,32 +90,58 @@ func (tc *TickContext) resolveNextTarget() {
 
 	tc.PrevPos = tc.CurrPos
 
+	tc.updateAllowDirectSteering()
+}
+
+func (tc *TickContext) setNextTargetFromPath() {
+	node := tc.B.CurrentPath[tc.B.PathIndex]
+	tc.NextTarget = mgl32.Vec3{float32(node.X) + 0.5, float32(node.Y), float32(node.Z) + 0.5}
+
+	if (node.Action == "mine" || node.Action == "place") && !tc.B.ScaffoldingActive {
+		tc.B.ScaffoldingActive = true
+		go ExecuteScaffoldAction(tc.B, node)
+	}
+}
+
+func (tc *TickContext) clearEmptyPath() {
+	tc.NextTarget = tc.TPos
+	tc.B.Mu.Lock()
+	tc.B.CurrentPath = nil
+	tc.B.Mu.Unlock()
+}
+
+func (tc *TickContext) updateAllowDirectSteering() {
 	tc.AllowDirectSteering = false
 	if tc.HasPath {
 		tc.AllowDirectSteering = true
-	} else {
-		var distanceToTarget float32
-		if tc.MState == "follow" && tc.TPlayer != "" {
-			distanceToTarget = tc.DistToPlayer
-		} else {
-			distanceToTarget = tc.Dist
-		}
+		return
+	}
 
-		var hDiffToTarget float32
-		if tc.MState == "follow" && tc.TPlayer != "" {
-			if _, pPos, ok := tc.B.FindPlayer(tc.TPlayer); ok {
-				hDiffToTarget = float32(math.Abs(float64(pPos.Y() - tc.CurrPos.Y())))
-			}
-		} else {
-			hDiffToTarget = float32(math.Abs(float64(tc.TPos.Y() - tc.CurrPos.Y())))
-		}
+	distanceToTarget := tc.distanceToTarget()
+	hDiffToTarget := tc.heightDiffToTarget()
 
-		if tc.MState == "walk_to" {
-			if distanceToTarget < 16.0 {
-				tc.AllowDirectSteering = true
-			}
-		} else if distanceToTarget < 8.0 && hDiffToTarget < 1.5 {
+	if tc.MState == "walk_to" {
+		if distanceToTarget < 16.0 {
 			tc.AllowDirectSteering = true
 		}
+	} else if distanceToTarget < 8.0 && hDiffToTarget < 1.5 {
+		tc.AllowDirectSteering = true
 	}
+}
+
+func (tc *TickContext) distanceToTarget() float32 {
+	if tc.MState == "follow" && tc.TPlayer != "" {
+		return tc.DistToPlayer
+	}
+	return tc.Dist
+}
+
+func (tc *TickContext) heightDiffToTarget() float32 {
+	if tc.MState != "follow" || tc.TPlayer == "" {
+		return float32(math.Abs(float64(tc.TPos.Y() - tc.CurrPos.Y())))
+	}
+	if _, pPos, ok := tc.B.FindPlayer(tc.TPlayer); ok {
+		return float32(math.Abs(float64(pPos.Y() - tc.CurrPos.Y())))
+	}
+	return float32(math.Abs(float64(tc.TPos.Y() - tc.CurrPos.Y())))
 }

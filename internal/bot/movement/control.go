@@ -1,3 +1,6 @@
+// Package movement implements tick-level bot movement, path following, and look
+// direction. It is responsible for steering, physics, collision resolution, and
+// the PlayerAuthInput heartbeat sent to the server.
 package movement
 
 import (
@@ -10,100 +13,119 @@ import (
 	"github.com/go-gl/mathgl/mgl32"
 )
 
-func shouldApplyTrackedLook(_ string, wantsToMove bool) bool {
-	return !wantsToMove
+func (tc *TickContext) updateLookDirection() {
+	tc.updateActivelyClimbing()
+	wantsToMove := tc.resolveTargetLook()
+	tc.applyEasedLookDirection(wantsToMove)
 }
 
-func (tc *TickContext) updateLookDirection() {
+func (tc *TickContext) updateActivelyClimbing() {
 	tc.ActivelyClimbing = false
-	feetY_l := int32(math.Floor(float64(tc.CurrPos.Y())))
-	if tc.IsOnLadder && tc.HasPath {
-		tc.B.Mu.Lock()
-		if tc.B.PathIndex < len(tc.B.CurrentPath) {
-			nn := tc.B.CurrentPath[tc.B.PathIndex]
-			if nn.Y != feetY_l && (tc.B.WorldModel.IsLadder(nn.X, nn.Y, nn.Z) || tc.B.WorldModel.IsLadder(nn.X, nn.Y-1, nn.Z)) {
-				tc.ActivelyClimbing = true
-			}
-		}
-		tc.B.Mu.Unlock()
+	if !tc.IsOnLadder || !tc.HasPath {
+		return
 	}
+	tc.B.Mu.Lock()
+	if tc.B.PathIndex < len(tc.B.CurrentPath) {
+		nn := tc.B.CurrentPath[tc.B.PathIndex]
+		if nn.Y != int32(math.Floor(float64(tc.CurrPos.Y()))) && (tc.B.WorldModel.IsLadder(nn.X, nn.Y, nn.Z) || tc.B.WorldModel.IsLadder(nn.X, nn.Y-1, nn.Z)) {
+			tc.ActivelyClimbing = true
+		}
+	}
+	tc.B.Mu.Unlock()
+}
 
+func (tc *TickContext) resolveTargetLook() bool {
 	tc.TargetYaw = tc.Yaw
 	tc.TargetPitch = tc.Pitch
 
-	wantsToMove := tc.MState == "walk_to" || (tc.MState == "follow" && !(tc.DistToPlayer < 2.0 && tc.PlayerHeightDiff < 1.5))
-	lookTargetActive := false
-	if shouldApplyTrackedLook(tc.MState, wantsToMove) {
-		lookTargetActive = tc.applyTrackedLookTarget()
-	}
-
+	wantsToMove := tc.wantsToMove()
 	if wantsToMove {
-		if tc.Dist > 0.1 && tc.HasHorizontalMove {
-			yawRad := math.Atan2(float64(tc.Dz), float64(tc.Dx))
-			tc.TargetYaw = float32(yawRad*180/math.Pi) - 90
-			tc.TargetPitch = 0
-		} else {
-			tc.TargetYaw = tc.Yaw
-			tc.TargetPitch = tc.Pitch
-		}
+		tc.applyMoveLookTarget()
+		return wantsToMove
+	}
 
-		if tc.ActivelyClimbing && tc.LadderWallYaw != -999 {
-			tc.TargetYaw = tc.LadderWallYaw
-		}
+	lookTargetActive := tc.applyTrackedLookTarget()
+	tc.applyIdleOrFollowLook(lookTargetActive)
+	return wantsToMove
+}
+
+func (tc *TickContext) wantsToMove() bool {
+	if tc.MState == "walk_to" {
+		return true
+	}
+	if tc.MState != "follow" {
+		return false
+	}
+	return tc.DistToPlayer >= 2.0 || tc.PlayerHeightDiff >= 1.5
+}
+
+func (tc *TickContext) applyMoveLookTarget() {
+	if tc.Dist > 0.1 && tc.HasHorizontalMove {
+		yawRad := math.Atan2(float64(tc.Dz), float64(tc.Dx))
+		tc.TargetYaw = float32(yawRad*180/math.Pi) - 90
+		tc.TargetPitch = 0
 	} else {
-		if lookTargetActive {
-			// A command such as lookat/stare owns the gaze briefly.
-		} else if tc.MState == "follow" {
-			tc.B.Mu.Lock()
-			playerPos := tc.B.TargetPos
-			tc.B.Mu.Unlock()
-
-			dxP := playerPos.X() - tc.CurrPos.X()
-			dzP := playerPos.Z() - tc.CurrPos.Z()
-			dyP := (playerPos.Y() + 1.62) - (tc.CurrPos.Y() + 1.62)
-
-			distP := float32(math.Sqrt(float64(dxP*dxP + dzP*dzP)))
-			if distP > 0.1 {
-				yawRad := math.Atan2(float64(dzP), float64(dxP))
-				tc.TargetYaw = float32(yawRad*180/math.Pi) - 90
-				pitchRad := math.Atan2(float64(dyP), float64(distP))
-				tc.TargetPitch = float32(-pitchRad * 180 / math.Pi)
-			} else {
-				tc.TargetYaw = tc.Yaw
-				tc.TargetPitch = tc.Pitch
-			}
-		} else {
-			tc.applyIdleLook()
-		}
+		tc.TargetYaw = tc.Yaw
+		tc.TargetPitch = tc.Pitch
 	}
 
-	yawDiff := tc.TargetYaw - tc.Yaw
-	for yawDiff < -180 {
-		yawDiff += 360
+	if tc.ActivelyClimbing && tc.LadderWallYaw != -999 {
+		tc.TargetYaw = tc.LadderWallYaw
 	}
-	for yawDiff > 180 {
-		yawDiff -= 360
+}
+
+func (tc *TickContext) applyIdleOrFollowLook(lookTargetActive bool) {
+	if lookTargetActive {
+		return
 	}
+	if tc.MState == "follow" {
+		tc.applyFollowLookTarget()
+		return
+	}
+	tc.applyIdleLook()
+}
+
+func (tc *TickContext) applyFollowLookTarget() {
+	tc.B.Mu.Lock()
+	playerPos := tc.B.TargetPos
+	tc.B.Mu.Unlock()
+
+	dxP := playerPos.X() - tc.CurrPos.X()
+	dzP := playerPos.Z() - tc.CurrPos.Z()
+	dyP := (playerPos.Y() + 1.62) - (tc.CurrPos.Y() + 1.62)
+
+	distP := float32(math.Sqrt(float64(dxP*dxP + dzP*dzP)))
+	if distP > 0.1 {
+		yawRad := math.Atan2(float64(dzP), float64(dxP))
+		tc.TargetYaw = float32(yawRad*180/math.Pi) - 90
+		pitchRad := math.Atan2(float64(dyP), float64(distP))
+		tc.TargetPitch = float32(-pitchRad * 180 / math.Pi)
+	} else {
+		tc.TargetYaw = tc.Yaw
+		tc.TargetPitch = tc.Pitch
+	}
+}
+
+func (tc *TickContext) applyEasedLookDirection(wantsToMove bool) {
+	yawDiff := angleDifference(tc.TargetYaw, tc.Yaw)
 	absYawDiff := math.Abs(float64(yawDiff))
-
-	var yawSpeed float32 = 40.0
-	if tc.IsLadderActive {
-		yawSpeed = 80.0
-	} else if absYawDiff > 30.0 {
-		yawSpeed = 65.0
-	}
+	yawSpeed := tc.selectYawSpeed(absYawDiff)
 	pitchSpeed := float32(22.0)
 	if !wantsToMove {
 		tc.TargetYaw, tc.TargetPitch = dampenLookJitter(tc.Yaw, tc.Pitch, tc.TargetYaw, tc.TargetPitch)
 		pitchSpeed = 12.0
 	}
-
-	// Linear InterpolateAngle (constant angular speed) looks robotic on every
-	// server. Use ease-out interpolation so head turns decelerate as they
-	// approach the target — the way a real player's view settles — plus a faint
-	// per-tick micro-jitter so the gaze is never perfectly frozen between
-	// targets. Applied to all servers, not just Venity.
 	tc.applyEasedLook(wantsToMove, yawSpeed, pitchSpeed)
+}
+
+func (tc *TickContext) selectYawSpeed(absYawDiff float64) float32 {
+	if tc.IsLadderActive {
+		return 80.0
+	}
+	if absYawDiff > 30.0 {
+		return 65.0
+	}
+	return 40.0
 }
 
 // applyEasedLook performs ease-out yaw/pitch interpolation toward the

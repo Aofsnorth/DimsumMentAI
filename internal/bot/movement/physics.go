@@ -1,3 +1,6 @@
+// Package movement implements tick-level bot movement, path following, and look
+// direction. It is responsible for steering, physics, collision resolution, and
+// the PlayerAuthInput heartbeat sent to the server.
 package movement
 
 import (
@@ -6,29 +9,44 @@ import (
 )
 
 func (tc *TickContext) runPhysicsAndCollisions() {
-	tc.IsOnLadder = false
-	feetX_l := int32(math.Floor(float64(tc.CurrPos.X())))
-	feetY_l := int32(math.Floor(float64(tc.CurrPos.Y())))
-	feetZ_l := int32(math.Floor(float64(tc.CurrPos.Z())))
+	tc.updateLadderState()
+	tc.applyPositionCorrection()
+	tc.updateDescendingFlag()
+	tc.updateGroundedState()
+	tc.applyVerticalVelocity()
+	tc.applyStepDownAssist(tc.FeetY)
+	tc.applyCeilingCollision()
+	tc.applyGroundLanding()
+	tc.syncGrounded()
+}
 
-	if tc.B.WorldModel != nil {
-		if tc.B.WorldModel.IsLadder(feetX_l, feetY_l, feetZ_l) || tc.B.WorldModel.IsLadder(feetX_l, feetY_l+1, feetZ_l) {
-			tc.IsOnLadder = true
-		}
-		if !tc.IsOnLadder && tc.HasPath {
-			tc.B.Mu.Lock()
-			if tc.B.PathIndex < len(tc.B.CurrentPath) {
-				nn := tc.B.CurrentPath[tc.B.PathIndex]
-				if tc.B.WorldModel.IsLadder(nn.X, nn.Y, nn.Z) {
-					ndx := float64(nn.X) + 0.5 - float64(tc.CurrPos.X())
-					ndz := float64(nn.Z) + 0.5 - float64(tc.CurrPos.Z())
-					if ndx*ndx+ndz*ndz < 0.25 {
-						tc.IsOnLadder = true
-					}
+func (tc *TickContext) updateLadderState() {
+	tc.IsOnLadder = false
+	if tc.B.WorldModel == nil {
+		return
+	}
+
+	feetX := int32(math.Floor(float64(tc.CurrPos.X())))
+	feetY := int32(math.Floor(float64(tc.CurrPos.Y())))
+	feetZ := int32(math.Floor(float64(tc.CurrPos.Z())))
+
+	if tc.B.WorldModel.IsLadder(feetX, feetY, feetZ) || tc.B.WorldModel.IsLadder(feetX, feetY+1, feetZ) {
+		tc.IsOnLadder = true
+	}
+
+	if !tc.IsOnLadder && tc.HasPath {
+		tc.B.Mu.Lock()
+		if tc.B.PathIndex < len(tc.B.CurrentPath) {
+			nn := tc.B.CurrentPath[tc.B.PathIndex]
+			if tc.B.WorldModel.IsLadder(nn.X, nn.Y, nn.Z) {
+				ndx := float64(nn.X) + 0.5 - float64(tc.CurrPos.X())
+				ndz := float64(nn.Z) + 0.5 - float64(tc.CurrPos.Z())
+				if ndx*ndx+ndz*ndz < 0.25 {
+					tc.IsOnLadder = true
 				}
 			}
-			tc.B.Mu.Unlock()
 		}
+		tc.B.Mu.Unlock()
 	}
 
 	tc.B.Mu.Lock()
@@ -38,30 +56,35 @@ func (tc *TickContext) runPhysicsAndCollisions() {
 	if tc.IsOnLadder {
 		tc.ShouldJump = false
 	}
+}
 
+func (tc *TickContext) applyPositionCorrection() {
 	correctionThreshold := float64(0.5)
 	if tc.IsOnLadder {
 		correctionThreshold = 1.5
 	}
-	if math.Abs(float64(tc.CurrPos.Y()-tc.LastPredictedY)) > correctionThreshold {
-		if !tc.IsOnLadder {
-			tc.VelY = 0.0
-		}
+	if math.Abs(float64(tc.CurrPos.Y()-tc.LastPredictedY)) > correctionThreshold && !tc.IsOnLadder {
+		tc.VelY = 0.0
 	}
+}
 
+func (tc *TickContext) updateDescendingFlag() {
 	tc.IsGrounded = false
 	tc.IsDescending = false
-	if tc.HasPath {
-		tc.B.Mu.Lock()
-		if tc.B.PathIndex < len(tc.B.CurrentPath) {
-			nextNode := tc.B.CurrentPath[tc.B.PathIndex]
-			if nextNode.Y < feetY_l {
-				tc.IsDescending = true
-			}
-		}
-		tc.B.Mu.Unlock()
+	if !tc.HasPath {
+		return
 	}
+	tc.B.Mu.Lock()
+	if tc.B.PathIndex < len(tc.B.CurrentPath) {
+		nextNode := tc.B.CurrentPath[tc.B.PathIndex]
+		if nextNode.Y < tc.FeetY {
+			tc.IsDescending = true
+		}
+	}
+	tc.B.Mu.Unlock()
+}
 
+func (tc *TickContext) updateGroundedState() {
 	checkOffsets := groundCheckOffsets(tc.IsDescending, tc.IsParkourJump)
 
 	for _, dxOffset := range checkOffsets {
@@ -78,30 +101,11 @@ func (tc *TickContext) runPhysicsAndCollisions() {
 			break
 		}
 	}
+}
 
+func (tc *TickContext) applyVerticalVelocity() {
 	if tc.IsOnLadder {
-		tc.IsGrounded = true
-		tc.VelY = 0.0
-		if tc.HasPath {
-			tc.B.Mu.Lock()
-			if tc.B.PathIndex < len(tc.B.CurrentPath) {
-				nextNode := tc.B.CurrentPath[tc.B.PathIndex]
-				targetY := float32(nextNode.Y)
-				actualY := tc.CurrPos.Y()
-				// Use actual float Y with a small tolerance instead of
-				// integer feetY_l to avoid stopping descent too early.
-				if actualY < targetY-0.15 {
-					tc.VelY = 0.2 // climb up
-				} else if actualY > targetY+0.15 {
-					tc.VelY = -0.2 // climb down
-				} else {
-					// Snap to target Y when within tolerance to
-					// avoid oscillation and allow path advancement.
-					tc.NextY = targetY
-				}
-			}
-			tc.B.Mu.Unlock()
-		}
+		tc.applyLadderVerticalVelocity()
 	} else if tc.IsGrounded {
 		tc.VelY = 0.0
 		if tc.ShouldJump {
@@ -117,61 +121,96 @@ func (tc *TickContext) runPhysicsAndCollisions() {
 	}
 
 	tc.NextY = tc.CurrPos.Y() + tc.VelY
-	tc.applyStepDownAssist(feetY_l)
+}
 
-	if tc.VelY > 0 {
-		hasCeiling := false
-		for _, dxOffset := range checkOffsets {
-			for _, dzOffset := range checkOffsets {
-				cx := int32(math.Floor(float64(tc.CurrPos.X() + dxOffset)))
-				cy := int32(math.Floor(float64(tc.NextY + 1.8)))
-				cz := int32(math.Floor(float64(tc.CurrPos.Z() + dzOffset)))
-				if tc.B.WorldModel.IsSolid(cx, cy, cz) {
-					hasCeiling = true
-					break
-				}
-			}
-			if hasCeiling {
+func (tc *TickContext) applyLadderVerticalVelocity() {
+	tc.IsGrounded = true
+	tc.VelY = 0.0
+	if !tc.HasPath {
+		return
+	}
+	tc.B.Mu.Lock()
+	if tc.B.PathIndex < len(tc.B.CurrentPath) {
+		nextNode := tc.B.CurrentPath[tc.B.PathIndex]
+		targetY := float32(nextNode.Y)
+		actualY := tc.CurrPos.Y()
+		if actualY < targetY-0.15 {
+			tc.VelY = 0.2
+		} else if actualY > targetY+0.15 {
+			tc.VelY = -0.2
+		} else {
+			tc.NextY = targetY
+		}
+	}
+	tc.B.Mu.Unlock()
+}
+
+func (tc *TickContext) applyCeilingCollision() {
+	if tc.VelY <= 0 {
+		return
+	}
+
+	checkOffsets := groundCheckOffsets(tc.IsDescending, tc.IsParkourJump)
+	hasCeiling := false
+	for _, dxOffset := range checkOffsets {
+		for _, dzOffset := range checkOffsets {
+			cx := int32(math.Floor(float64(tc.CurrPos.X() + dxOffset)))
+			cy := int32(math.Floor(float64(tc.NextY + 1.8)))
+			cz := int32(math.Floor(float64(tc.CurrPos.Z() + dzOffset)))
+			if tc.B.WorldModel.IsSolid(cx, cy, cz) {
+				hasCeiling = true
 				break
 			}
 		}
 		if hasCeiling {
-			tc.VelY = 0.0
-			tc.NextY = float32(math.Floor(float64(tc.NextY+1.8))) - 1.8
+			break
 		}
 	}
 
-	if tc.VelY <= 0 && !tc.IsOnLadder {
-		hasGroundBelow := false
-		var landingCy int32 = -999
-		for _, dxOffset := range checkOffsets {
-			for _, dzOffset := range checkOffsets {
-				cx := int32(math.Floor(float64(tc.CurrPos.X() + dxOffset)))
-				cy := int32(math.Floor(float64(tc.NextY - 0.01)))
-				cz := int32(math.Floor(float64(tc.CurrPos.Z() + dzOffset)))
-				if tc.B.WorldModel.IsSolid(cx, cy, cz) {
-					hasGroundBelow = true
-					landingCy = cy
-					break
-				}
-			}
-			if hasGroundBelow {
+	if hasCeiling {
+		tc.VelY = 0.0
+		tc.NextY = float32(math.Floor(float64(tc.NextY+1.8))) - 1.8
+	}
+}
+
+func (tc *TickContext) applyGroundLanding() {
+	if tc.VelY > 0 || tc.IsOnLadder {
+		return
+	}
+
+	checkOffsets := groundCheckOffsets(tc.IsDescending, tc.IsParkourJump)
+	hasGroundBelow := false
+	var landingCy int32 = -999
+	for _, dxOffset := range checkOffsets {
+		for _, dzOffset := range checkOffsets {
+			cx := int32(math.Floor(float64(tc.CurrPos.X() + dxOffset)))
+			cy := int32(math.Floor(float64(tc.NextY - 0.01)))
+			cz := int32(math.Floor(float64(tc.CurrPos.Z() + dzOffset)))
+			if tc.B.WorldModel.IsSolid(cx, cy, cz) {
+				hasGroundBelow = true
+				landingCy = cy
 				break
 			}
 		}
 		if hasGroundBelow {
-			tc.NextY = float32(landingCy + 1)
-			tc.VelY = 0.0
-			tc.IsGrounded = true
-			if tc.IsParkourJump {
-				tc.B.Mu.Lock()
-				tc.B.ParkourUntil = time.Time{}
-				tc.B.Mu.Unlock()
-				tc.IsParkourJump = false
-			}
+			break
 		}
 	}
 
+	if hasGroundBelow {
+		tc.NextY = float32(landingCy + 1)
+		tc.VelY = 0.0
+		tc.IsGrounded = true
+		if tc.IsParkourJump {
+			tc.B.Mu.Lock()
+			tc.B.ParkourUntil = time.Time{}
+			tc.B.Mu.Unlock()
+			tc.IsParkourJump = false
+		}
+	}
+}
+
+func (tc *TickContext) syncGrounded() {
 	tc.B.Mu.Lock()
 	tc.B.IsGrounded = tc.IsGrounded
 	tc.B.Mu.Unlock()

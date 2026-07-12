@@ -1,3 +1,6 @@
+// Package movement implements tick-level bot movement, path following, and look
+// direction. It is responsible for steering, physics, collision resolution, and
+// the PlayerAuthInput heartbeat sent to the server.
 package movement
 
 import (

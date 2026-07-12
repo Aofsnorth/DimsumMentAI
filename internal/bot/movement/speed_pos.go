@@ -1,3 +1,6 @@
+// Package movement implements tick-level bot movement, path following, and look
+// direction. It is responsible for steering, physics, collision resolution, and
+// the PlayerAuthInput heartbeat sent to the server.
 package movement
 
 import (
@@ -10,184 +13,7 @@ import (
 )
 
 func (tc *TickContext) calculateMovementSpeedAndPosition() {
-	var predictedPos mgl32.Vec3
-	feetX_l := int32(math.Floor(float64(tc.CurrPos.X())))
-	feetZ_l := int32(math.Floor(float64(tc.CurrPos.Z())))
-
-	yawDiff := tc.TargetYaw - tc.Yaw
-	for yawDiff < -180 {
-		yawDiff += 360
-	}
-	for yawDiff > 180 {
-		yawDiff -= 360
-	}
-	absYawDiff := math.Abs(float64(yawDiff))
-
-	if tc.IsOnLadder && tc.ActivelyClimbing {
-		ladderCenterX := float32(feetX_l) + 0.5
-		ladderCenterZ := float32(feetZ_l) + 0.5
-		centerSpeed := float32(0.15)
-		newX := tc.CurrPos.X() + (ladderCenterX-tc.CurrPos.X())*centerSpeed
-		newZ := tc.CurrPos.Z() + (ladderCenterZ-tc.CurrPos.Z())*centerSpeed
-		predictedPos = mgl32.Vec3{newX, tc.NextY, newZ}
-		tc.HasHorizontalMove = false
-	} else if tc.HasHorizontalMove && tc.Dist > 0.05 {
-		var speed float32 = 0.215
-		tc.B.Mu.Lock()
-		if tc.HasPath && len(tc.B.CurrentPath)-tc.B.PathIndex > 2 {
-			speed = 0.28
-		}
-		tc.B.Mu.Unlock()
-
-		needsStepUp := false
-		isMidJump := !tc.IsGrounded || tc.VelY > 0.05
-		if tc.HasPath {
-			tc.B.Mu.Lock()
-			if tc.B.PathIndex < len(tc.B.CurrentPath) {
-				nextNode := tc.B.CurrentPath[tc.B.PathIndex]
-				baseY := int32(math.Floor(float64(tc.CurrPos.Y() + 0.1)))
-				if nextNode.Y > baseY {
-					needsStepUp = true
-					if isMidJump {
-						speed = 0.2
-					} else {
-						speed = 0.18
-					}
-				}
-			}
-			tc.B.Mu.Unlock()
-		}
-
-		needsStepDown := false
-		if tc.HasPath {
-			tc.B.Mu.Lock()
-			if tc.B.PathIndex < len(tc.B.CurrentPath) {
-				nextNode := tc.B.CurrentPath[tc.B.PathIndex]
-				baseY := int32(math.Floor(float64(tc.CurrPos.Y() + 0.1)))
-				if nextNode.Y < baseY {
-					needsStepDown = true
-					speed = 0.13
-				}
-			}
-			tc.B.Mu.Unlock()
-		}
-		_ = needsStepDown
-
-		if tc.IsLadderActive {
-			speed = 0.12
-		}
-		if tc.IsParkourJump {
-			speed = 0.34
-		}
-
-		if absYawDiff > 15.0 {
-			factor := float32(1.0 - (absYawDiff-15.0)/75.0)
-			if factor < 0.1 {
-				factor = 0.1
-			}
-			speed = speed * factor
-		}
-
-		if tc.Dist < speed {
-			speed = tc.Dist
-		}
-		var stepX, stepZ float32
-		if tc.Dist > 0.01 && speed > 0.001 {
-			stepX = (tc.Dx / tc.Dist) * speed
-			stepZ = (tc.Dz / tc.Dist) * speed
-		}
-
-		targetX := tc.CurrPos.X() + stepX
-		targetZ := tc.CurrPos.Z() + stepZ
-		baseY := int32(math.Floor(float64(tc.CurrPos.Y() + 0.1)))
-		descentTargetY, descentDrop, plannedDescent := tc.plannedDescent(baseY)
-		hasSameLevelSupport := tc.hasGroundSupportAt(targetX, targetZ, baseY)
-		pathAllowsGap := tc.pathAllowsForwardWithoutGround(baseY)
-
-		// H1 (Venity): chunks decode lazily within a small radius, so the cell
-		// below the next step is frequently *unknown* (not loaded) rather than
-		// known-air. hasGroundSupportAt uses IsSolid, which reports false for
-		// unloaded cells — so the guard below would cancel every forward step
-		// and the bot never moves. When the support is merely unknown and the
-		// active path expects to walk there, trust the path instead of freezing.
-		groundUnknown := tc.B.VenityCompat && !hasSameLevelSupport &&
-			tc.groundSupportUnknownAt(targetX, targetZ, baseY)
-		trustPath := groundUnknown && tc.HasPath
-
-		if !needsStepUp && !tc.IsLadderActive && !tc.IsParkourJump && !isMidJump && !plannedDescent && !hasSameLevelSupport && !pathAllowsGap && !trustPath {
-			targetX = tc.CurrPos.X()
-			targetZ = tc.CurrPos.Z()
-			tc.HasHorizontalMove = false
-			tc.logVenityWalkBlocked(baseY, hasSameLevelSupport, pathAllowsGap, plannedDescent, needsStepUp, groundUnknown)
-		}
-		if plannedDescent && !hasSameLevelSupport && !tc.IsLadderActive && !tc.IsParkourJump {
-			tc.NextY, tc.VelY = controlledDescentY(tc.CurrPos.Y(), tc.NextY, float32(descentTargetY), descentDrop)
-			tc.IsGrounded = true
-		}
-
-		hasWall := false
-		wallCheckMinY := tc.NextY + 0.1
-		if isMidJump && needsStepUp {
-			wallCheckMinY = tc.NextY + 0.5
-		}
-
-		minX := int32(math.Floor(float64(targetX - 0.3)))
-		maxX := int32(math.Floor(float64(targetX + 0.3)))
-		minZ := int32(math.Floor(float64(targetZ - 0.3)))
-		maxZ := int32(math.Floor(float64(targetZ + 0.3)))
-		minY := int32(math.Floor(float64(wallCheckMinY)))
-		maxY := int32(math.Floor(float64(tc.NextY + 1.8)))
-
-		for bx := minX; bx <= maxX; bx++ {
-			for by := minY; by <= maxY; by++ {
-				for bz := minZ; bz <= maxZ; bz++ {
-					if tc.B.WorldModel.IsSolid(bx, by, bz) {
-						hasWall = true
-						break
-					}
-				}
-				if hasWall {
-					break
-				}
-			}
-			if hasWall {
-				break
-			}
-		}
-
-		isNearLadder := tc.IsOnLadder
-		if !isNearLadder && tc.B.WorldModel != nil && tc.HasPath {
-			tc.B.Mu.Lock()
-			lookahead := 3
-			if tc.B.PathIndex+lookahead > len(tc.B.CurrentPath) {
-				lookahead = len(tc.B.CurrentPath) - tc.B.PathIndex
-			}
-			for li := 0; li < lookahead; li++ {
-				ln := tc.B.CurrentPath[tc.B.PathIndex+li]
-				if tc.B.WorldModel.IsLadder(ln.X, ln.Y, ln.Z) || tc.B.WorldModel.IsLadder(ln.X, ln.Y+1, ln.Z) {
-					isNearLadder = true
-					break
-				}
-			}
-			tc.B.Mu.Unlock()
-		}
-
-		if isNearLadder {
-			hasWall = false
-		}
-
-		if isMidJump && needsStepUp {
-			hasWall = false
-		}
-
-		if hasWall {
-			predictedPos = mgl32.Vec3{tc.CurrPos.X(), tc.NextY, tc.CurrPos.Z()}
-		} else {
-			predictedPos = mgl32.Vec3{targetX, tc.NextY, targetZ}
-		}
-	} else {
-		predictedPos = mgl32.Vec3{tc.CurrPos.X(), tc.NextY, tc.CurrPos.Z()}
-	}
+	predictedPos := tc.computePredictedPosition()
 
 	tc.B.Mu.Lock()
 	tc.B.Pos = predictedPos
@@ -196,6 +22,163 @@ func (tc *TickContext) calculateMovementSpeedAndPosition() {
 
 	tc.CurrPos = predictedPos
 	tc.LastPredictedY = predictedPos.Y()
+}
+
+func (tc *TickContext) computePredictedPosition() mgl32.Vec3 {
+	if tc.IsOnLadder && tc.ActivelyClimbing {
+		return tc.ladderPredictedPos()
+	}
+	if tc.HasHorizontalMove && tc.Dist > 0.05 {
+		return tc.horizontalMovePredictedPos()
+	}
+	return mgl32.Vec3{tc.CurrPos.X(), tc.NextY, tc.CurrPos.Z()}
+}
+
+func (tc *TickContext) ladderPredictedPos() mgl32.Vec3 {
+	feetX := int32(math.Floor(float64(tc.CurrPos.X())))
+	feetZ := int32(math.Floor(float64(tc.CurrPos.Z())))
+	ladderCenterX := float32(feetX) + 0.5
+	ladderCenterZ := float32(feetZ) + 0.5
+	centerSpeed := float32(0.15)
+	newX := tc.CurrPos.X() + (ladderCenterX-tc.CurrPos.X())*centerSpeed
+	newZ := tc.CurrPos.Z() + (ladderCenterZ-tc.CurrPos.Z())*centerSpeed
+	tc.HasHorizontalMove = false
+	return mgl32.Vec3{newX, tc.NextY, newZ}
+}
+
+func (tc *TickContext) horizontalMovePredictedPos() mgl32.Vec3 {
+	yawDiff := angleDifference(tc.TargetYaw, tc.Yaw)
+	absYawDiff := math.Abs(float64(yawDiff))
+	speed, needsStepUp, isMidJump := tc.computeMoveSpeed(absYawDiff)
+	targetX, targetZ := tc.computeTargetPosition(speed, needsStepUp, isMidJump)
+	if tc.checkWallCollision(targetX, targetZ, needsStepUp, isMidJump) {
+		return mgl32.Vec3{tc.CurrPos.X(), tc.NextY, tc.CurrPos.Z()}
+	}
+	return mgl32.Vec3{targetX, tc.NextY, targetZ}
+}
+
+func (tc *TickContext) computeMoveSpeed(absYawDiff float64) (float32, bool, bool) {
+	speed, needsStepUp, isMidJump := tc.computeBaseSpeed()
+	if tc.IsLadderActive {
+		speed = 0.12
+	}
+	if tc.IsParkourJump {
+		speed = 0.34
+	}
+	if absYawDiff > 15.0 {
+		factor := float32(1.0 - (absYawDiff-15.0)/75.0)
+		if factor < 0.1 {
+			factor = 0.1
+		}
+		speed = speed * factor
+	}
+	if tc.Dist < speed {
+		speed = tc.Dist
+	}
+	return speed, needsStepUp, isMidJump
+}
+
+func (tc *TickContext) computeBaseSpeed() (float32, bool, bool) {
+	speed := float32(0.215)
+	tc.B.Mu.Lock()
+	if tc.HasPath && len(tc.B.CurrentPath)-tc.B.PathIndex > 2 {
+		speed = 0.28
+	}
+	tc.B.Mu.Unlock()
+
+	isMidJump := !tc.IsGrounded || tc.VelY > 0.05
+	needsStepUp := false
+
+	if tc.HasPath {
+		tc.B.Mu.Lock()
+		if tc.B.PathIndex < len(tc.B.CurrentPath) {
+			nextNode := tc.B.CurrentPath[tc.B.PathIndex]
+			baseY := int32(math.Floor(float64(tc.CurrPos.Y() + 0.1)))
+			if nextNode.Y > baseY {
+				needsStepUp = true
+				if isMidJump {
+					speed = 0.2
+				} else {
+					speed = 0.18
+				}
+			}
+			if nextNode.Y < baseY {
+				speed = 0.13
+			}
+		}
+		tc.B.Mu.Unlock()
+	}
+
+	return speed, needsStepUp, isMidJump
+}
+
+func (tc *TickContext) computeTargetPosition(speed float32, needsStepUp, isMidJump bool) (targetX, targetZ float32) {
+	var stepX, stepZ float32
+	if tc.Dist > 0.01 && speed > 0.001 {
+		stepX = (tc.Dx / tc.Dist) * speed
+		stepZ = (tc.Dz / tc.Dist) * speed
+	}
+
+	targetX = tc.CurrPos.X() + stepX
+	targetZ = tc.CurrPos.Z() + stepZ
+	baseY := int32(math.Floor(float64(tc.CurrPos.Y() + 0.1)))
+	descentTargetY, descentDrop, plannedDescent := tc.plannedDescent(baseY)
+	hasSameLevelSupport := tc.hasGroundSupportAt(targetX, targetZ, baseY)
+	pathAllowsGap := tc.pathAllowsForwardWithoutGround(baseY)
+	groundUnknown := tc.B.VenityCompat && !hasSameLevelSupport && tc.groundSupportUnknownAt(targetX, targetZ, baseY)
+	trustPath := groundUnknown && tc.HasPath
+
+	if tc.isMoveBlocked(needsStepUp, isMidJump, plannedDescent, hasSameLevelSupport, pathAllowsGap, trustPath) {
+		targetX = tc.CurrPos.X()
+		targetZ = tc.CurrPos.Z()
+		tc.HasHorizontalMove = false
+		tc.logVenityWalkBlocked(baseY, hasSameLevelSupport, pathAllowsGap, plannedDescent, needsStepUp, groundUnknown)
+	} else if tc.shouldDescent(plannedDescent, hasSameLevelSupport) {
+		tc.NextY, tc.VelY = controlledDescentY(tc.CurrPos.Y(), tc.NextY, float32(descentTargetY), descentDrop)
+		tc.IsGrounded = true
+	}
+
+	return
+}
+
+func (tc *TickContext) isMoveBlocked(needsStepUp, isMidJump, plannedDescent, hasSameLevelSupport, pathAllowsGap, trustPath bool) bool {
+	return !needsStepUp && !tc.IsLadderActive && !tc.IsParkourJump && !isMidJump && !plannedDescent && !hasSameLevelSupport && !pathAllowsGap && !trustPath
+}
+
+func (tc *TickContext) shouldDescent(plannedDescent, hasSameLevelSupport bool) bool {
+	return plannedDescent && !hasSameLevelSupport && !tc.IsLadderActive && !tc.IsParkourJump
+}
+
+func (tc *TickContext) checkWallCollision(targetX, targetZ float32, needsStepUp, isMidJump bool) bool {
+	wallCheckMinY := tc.NextY + 0.1
+	if isMidJump && needsStepUp {
+		wallCheckMinY = tc.NextY + 0.5
+	}
+
+	minX := int32(math.Floor(float64(targetX - 0.3)))
+	maxX := int32(math.Floor(float64(targetX + 0.3)))
+	minZ := int32(math.Floor(float64(targetZ - 0.3)))
+	maxZ := int32(math.Floor(float64(targetZ + 0.3)))
+	minY := int32(math.Floor(float64(wallCheckMinY)))
+	maxY := int32(math.Floor(float64(tc.NextY + 1.8)))
+
+	for bx := minX; bx <= maxX; bx++ {
+		for by := minY; by <= maxY; by++ {
+			for bz := minZ; bz <= maxZ; bz++ {
+				if tc.B.WorldModel.IsSolid(bx, by, bz) {
+					return true
+				}
+			}
+		}
+	}
+
+	if tc.isNearLadder() {
+		return false
+	}
+	if isMidJump && needsStepUp {
+		return false
+	}
+	return false
 }
 
 func (tc *TickContext) plannedDescent(baseY int32) (int32, int32, bool) {
