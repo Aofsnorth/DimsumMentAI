@@ -198,14 +198,35 @@ func (m *Manager) BuildEmergencyShelter(ctx context.Context) bool {
 	m.isSheltering = true
 	defer func() { m.isSheltering = false }()
 
+	buildSlot, buildMaterial, buildCount, ok := m.findShelterMaterial()
+	if !ok {
+		m.bot.ReportActionStatus("", event.ActionStatus{Action: "shelter", Item: buildMaterial, Count: buildCount, Success: false, Error: "no building materials found"})
+		return false
+	}
+	if buildCount < 12 {
+		m.bot.ReportActionStatus("", event.ActionStatus{Action: "shelter", Item: buildMaterial, Count: buildCount, Success: false, Error: "insufficient building materials"})
+		return false
+	}
+
+	m.bot.ReportActionStatus("", event.ActionStatus{Action: "shelter", Item: buildMaterial, Count: buildCount, Success: true})
+
+	if err := m.bot.EquipItem(buildSlot); err != nil {
+		return false
+	}
+
+	pos := m.bot.GetCoords()
+	bx := int32(math.Floor(float64(pos.X())))
+	by := int32(math.Floor(float64(pos.Y())))
+	bz := int32(math.Floor(float64(pos.Z())))
+
+	placed := m.placeShelterBlocks(ctx, bx, by, bz, buildSlot, buildCount)
+	m.bot.ReportActionStatus("", event.ActionStatus{Action: "shelter", Item: buildMaterial, Count: placed, Success: true})
+	return true
+}
+
+func (m *Manager) findShelterMaterial() (uint32, string, int, bool) {
 	inv := m.bot.GetInventorySlots()
 	names := m.bot.GetItemNames()
-
-	// Find building material (dirt, cobblestone, etc.)
-	var buildSlot uint32
-	var buildMaterial string
-	buildCount := 0
-	found := false
 
 	buildMaterials := []string{"cobblestone", "dirt", "oak_planks", "stone", "sand"}
 	for _, mat := range buildMaterials {
@@ -215,92 +236,73 @@ func (m *Manager) BuildEmergencyShelter(ctx context.Context) bool {
 			}
 			name := names[item.NetworkID]
 			if containsAny(name, mat) {
-				buildSlot = slot
-				buildMaterial = mat
-				buildCount = int(item.Count)
-				found = true
-				break
+				return slot, mat, int(item.Count), true
 			}
 		}
-		if found {
-			break
-		}
 	}
+	return 0, "", 0, false
+}
 
-	if !found || buildCount < 12 {
-		errMsg := "no building materials found"
-		if found {
-			errMsg = "insufficient building materials"
-		}
-		m.bot.ReportActionStatus("", event.ActionStatus{Action: "shelter", Item: buildMaterial, Count: buildCount, Success: false, Error: errMsg})
-		return false
-	}
-
-	m.bot.ReportActionStatus("", event.ActionStatus{Action: "shelter", Item: buildMaterial, Count: buildCount, Success: true})
-
-	pos := m.bot.GetCoords()
-	bx := int32(math.Floor(float64(pos.X())))
-	by := int32(math.Floor(float64(pos.Y())))
-	bz := int32(math.Floor(float64(pos.Z())))
-
-	if err := m.bot.EquipItem(buildSlot); err != nil {
-		return false
-	}
-
-	// Build walls: 3x3 ring at head height and above
+func (m *Manager) shelterPlacements(bx, by, bz int32) []protocol.BlockPos {
 	placements := []protocol.BlockPos{}
 	for dx := int32(-1); dx <= 1; dx++ {
 		for dz := int32(-1); dz <= 1; dz++ {
 			if dx == 0 && dz == 0 {
-				continue // skip center (where bot stands)
+				continue
 			}
-			// Wall at feet+1 level
 			placements = append(placements, protocol.BlockPos{bx + dx, by + 1, bz + dz})
-			// Wall at feet+2 level
 			placements = append(placements, protocol.BlockPos{bx + dx, by + 2, bz + dz})
 		}
 	}
-	// Roof
 	for dx := int32(-1); dx <= 1; dx++ {
 		for dz := int32(-1); dz <= 1; dz++ {
 			placements = append(placements, protocol.BlockPos{bx + dx, by + 3, bz + dz})
 		}
 	}
+	return placements
+}
+
+func (m *Manager) placeShelterBlocks(ctx context.Context, bx, by, bz int32, buildSlot uint32, buildCount int) int {
+	inv := m.bot.GetInventorySlots()
+	placements := m.shelterPlacements(bx, by, bz)
 
 	placed := 0
 	for _, p := range placements {
 		if placed >= buildCount-1 {
 			break
 		}
-
-		supportPos := protocol.BlockPos{p.X(), p.Y() - 1, p.Z()}
-		m.bot.LookAt(mgl32.Vec3{float32(p.X()) + 0.5, float32(p.Y()), float32(p.Z()) + 0.5})
-		time.Sleep(80 * time.Millisecond)
-
-		tx := &packet.InventoryTransaction{
-			TransactionData: &protocol.UseItemTransactionData{
-				ActionType:      protocol.UseItemActionClickBlock,
-				BlockPosition:   supportPos,
-				BlockFace:       1,
-				HotBarSlot:      safecast.To[int32](buildSlot),
-				HeldItem:        protocol.ItemInstance{Stack: inv[buildSlot]},
-				Position:        m.bot.GetCoords(),
-				ClickedPosition: mgl32.Vec3{0.5, 1.0, 0.5},
-			},
-		}
-		_ = m.bot.WritePacket(tx)
-		placed++
-		time.Sleep(120 * time.Millisecond)
-
-		select {
-		case <-ctx.Done():
-			return false
-		default:
+		if m.placeBlock(ctx, p, inv, buildSlot) {
+			placed++
 		}
 	}
+	return placed
+}
 
-	m.bot.ReportActionStatus("", event.ActionStatus{Action: "shelter", Item: buildMaterial, Count: placed, Success: true})
-	return true
+func (m *Manager) placeBlock(ctx context.Context, p protocol.BlockPos, inv map[uint32]protocol.ItemStack, buildSlot uint32) bool {
+	supportPos := protocol.BlockPos{p.X(), p.Y() - 1, p.Z()}
+	m.bot.LookAt(mgl32.Vec3{float32(p.X()) + 0.5, float32(p.Y()), float32(p.Z()) + 0.5})
+	time.Sleep(80 * time.Millisecond)
+
+	tx := &packet.InventoryTransaction{
+		TransactionData: &protocol.UseItemTransactionData{
+			ActionType:      protocol.UseItemActionClickBlock,
+			BlockPosition:   supportPos,
+			BlockFace:       1,
+			HotBarSlot:      safecast.To[int32](buildSlot),
+			HeldItem:        protocol.ItemInstance{Stack: inv[buildSlot]},
+			Position:        m.bot.GetCoords(),
+			ClickedPosition: mgl32.Vec3{0.5, 1.0, 0.5},
+		},
+	}
+	_ = m.bot.WritePacket(tx)
+	time.Sleep(120 * time.Millisecond)
+
+	select {
+	case <-ctx.Done():
+		return false
+	default:
+		return true
+	}
 }
 
 // ===================== DEATH RECOVERY =====================
