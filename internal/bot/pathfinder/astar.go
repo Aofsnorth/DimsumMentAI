@@ -69,20 +69,11 @@ func FindPath(startNode, targetNode Node, world WorldModel, allowFallback bool) 
 	startKey := packKey(start.X, start.Y, start.Z)
 	openMap[startKey] = start
 
-	// Dynamic maxIterations based on distance to target
-	distanceToTarget := Distance(startNode, targetNode)
-	var maxIterations int32
-	if distanceToTarget < 20 {
-		maxIterations = 5000
-	} else if distanceToTarget < 50 {
-		maxIterations = 15000
-	} else {
-		maxIterations = 30000
-	}
+	maxIterations := maxIterationsForDistance(Distance(startNode, targetNode))
 	iterations := int32(0)
 
-	var bestNode = start
-	var closestDistance = Distance(*start, targetNode)
+	bestNode := start
+	closestDistance := Distance(*start, targetNode)
 
 	for openSet.Len() > 0 && iterations < maxIterations {
 		iterations++
@@ -105,50 +96,66 @@ func FindPath(startNode, targetNode Node, world WorldModel, allowFallback bool) 
 			bestNode = current
 		}
 
-		neighbors := world.GetNeighbors(*current)
-		for _, neighbor := range neighbors {
-			nKey := packKey(neighbor.X, neighbor.Y, neighbor.Z)
-			if closedMap[nKey] {
-				continue
-			}
-
-			tentativeG := neighbor.G
-			if tentativeG == 0 {
-				tentativeG = current.G + Distance(*current, neighbor)
-			}
-
-			existing, inOpen := openMap[nKey]
-			if !inOpen {
-				newNode := &Node{
-					X:        neighbor.X,
-					Y:        neighbor.Y,
-					Z:        neighbor.Z,
-					G:        tentativeG,
-					H:        heuristic(neighbor, targetNode),
-					Parent:   current,
-					Action:   neighbor.Action,
-					LinkType: neighbor.LinkType,
-				}
-				newNode.F = newNode.G + newNode.H
-				heap.Push(openSet, newNode)
-				openMap[nKey] = newNode
-			} else if tentativeG < existing.G {
-				existing.G = tentativeG
-				existing.F = existing.G + existing.H
-				existing.Parent = current
-				existing.Action = neighbor.Action
-				existing.LinkType = neighbor.LinkType
-				heap.Fix(openSet, existing.Index)
-			}
+		for _, neighbor := range world.GetNeighbors(*current) {
+			tryProcessNeighbor(openSet, openMap, closedMap, current, neighbor, targetNode)
 		}
 	}
 
-	// Fallback to the closest node reached if perfect destination is blocked
 	if allowFallback && bestNode != start {
 		return smoothPath(reconstructPath(bestNode), world)
 	}
 
 	return nil
+}
+
+func maxIterationsForDistance(distance float32) int32 {
+	switch {
+	case distance < 20:
+		return 5000
+	case distance < 50:
+		return 15000
+	default:
+		return 30000
+	}
+}
+
+func tryProcessNeighbor(openSet *PriorityQueue, openMap map[int64]*Node, closedMap map[int64]bool, current *Node, neighbor Node, targetNode Node) {
+	nKey := packKey(neighbor.X, neighbor.Y, neighbor.Z)
+	if closedMap[nKey] {
+		return
+	}
+
+	tentativeG := neighbor.G
+	if tentativeG == 0 {
+		tentativeG = current.G + Distance(*current, neighbor)
+	}
+
+	existing, inOpen := openMap[nKey]
+	if !inOpen {
+		newNode := &Node{
+			X:        neighbor.X,
+			Y:        neighbor.Y,
+			Z:        neighbor.Z,
+			G:        tentativeG,
+			H:        heuristic(neighbor, targetNode),
+			Parent:   current,
+			Action:   neighbor.Action,
+			LinkType: neighbor.LinkType,
+		}
+		newNode.F = newNode.G + newNode.H
+		heap.Push(openSet, newNode)
+		openMap[nKey] = newNode
+		return
+	}
+
+	if tentativeG < existing.G {
+		existing.G = tentativeG
+		existing.F = existing.G + existing.H
+		existing.Parent = current
+		existing.Action = neighbor.Action
+		existing.LinkType = neighbor.LinkType
+		heap.Fix(openSet, existing.Index)
+	}
 }
 
 func reconstructPath(endNode *Node) []Node {
@@ -222,30 +229,31 @@ func smoothPath(path []Node, world WorldModel) []Node {
 // two path nodes without hitting solid blocks. It samples intermediate
 // positions and verifies floor + head clearance at each step.
 func canWalkDirectly(from, to Node, world WorldModel) bool {
-	// Only smooth walk-type segments; don't smooth jumps, falls, or scaffolding
+	if !canSmoothLink(from, to) {
+		return false
+	}
+	dx := to.X - from.X
+	dz := to.Z - from.Z
+	horizDist := max(abs32(dx), abs32(dz))
+	if horizDist > 8 {
+		return false
+	}
+	return canWalkLine(from, to, dx, dz, horizDist, world)
+}
+
+func canSmoothLink(from, to Node) bool {
 	if from.Action != "" || to.Action != "" {
 		return false
 	}
 	if from.LinkType != LinkWalk || to.LinkType != LinkWalk {
 		return false
 	}
-	// Only smooth same-Y or gentle descent (1 block down)
 	dy := to.Y - from.Y
-	if dy > 1 || dy < -3 {
-		return false
-	}
+	return dy <= 1 && dy >= -3
+}
 
-	dx := to.X - from.X
-	dz := to.Z - from.Z
-	horizDist := abs32(dx)
-	if abs32(dz) > horizDist {
-		horizDist = abs32(dz)
-	}
-	if horizDist > 8 {
-		return false // limit smoothing distance for safety
-	}
-
-	// Sample points along the line at 0.5-block intervals
+func canWalkLine(from, to Node, dx, dz, horizDist int32, world WorldModel) bool {
+	dy := to.Y - from.Y
 	steps := horizDist * 2
 	if steps < 2 {
 		steps = 2
@@ -259,22 +267,22 @@ func canWalkDirectly(from, to Node, world WorldModel) bool {
 			sy = from.Y + int32(float32(dy)*t)
 		}
 
-		bx := int32(sx)
-		bz := int32(sz)
-		by := sy
-
-		// Check feet + head clearance and floor support
-		if world.IsSolid(bx, by, bz) || world.IsSolid(bx, by+1, bz) {
-			return false
-		}
-		if world.IsHazard(bx, by, bz) || world.IsHazard(bx, by+1, bz) {
-			return false
-		}
-		// Floor must be solid (or we're descending)
-		if dy >= 0 && !world.IsSolid(bx, by-1, bz) {
+		if !canWalkAtSample(int32(sx), int32(sz), sy, dy, world) {
 			return false
 		}
 	}
+	return true
+}
 
+func canWalkAtSample(bx, bz, by, dy int32, world WorldModel) bool {
+	if world.IsSolid(bx, by, bz) || world.IsSolid(bx, by+1, bz) {
+		return false
+	}
+	if world.IsHazard(bx, by, bz) || world.IsHazard(bx, by+1, bz) {
+		return false
+	}
+	if dy >= 0 && !world.IsSolid(bx, by-1, bz) {
+		return false
+	}
 	return true
 }
