@@ -1,3 +1,4 @@
+// Package planner implements the agentic todo/planner system.
 package planner
 
 import (
@@ -249,43 +250,36 @@ func (tl *TodoList) RenderForChat() string {
 	return strings.TrimRight(b.String(), "\n")
 }
 
+// actionDescriptions maps action labels to human-readable description builders.
+var actionDescriptions = map[string]func(label, param string) string{
+	"gather":   func(_, param string) string { return "Gather " + param },
+	"mine":     func(_, param string) string { return "Mine " + param },
+	"automine": func(_, param string) string { return "Mine " + param },
+	"craft":    func(_, param string) string { return "Craft " + param },
+	"smelt":    func(_, param string) string { return "Smelt " + param },
+	"come":     func(_, _ string) string { return "Walk to player" },
+	"follow":   func(_, _ string) string { return "Follow player" },
+	"give":     func(_, param string) string { return "Give " + param },
+	"drop":     func(_, param string) string { return "Drop " + param },
+	"equip":    func(_, param string) string { return "Equip " + param },
+	"eat":      func(_, param string) string { return "Eat " + param },
+	"build":    func(_, param string) string { return "Build " + param },
+	"explore":  func(_, param string) string { return "Explore for " + param + "s" },
+}
+
 // autoDesc generates a short human-readable description from an action string.
 func autoDesc(action string) string {
 	parts := strings.SplitN(action, ":", 2)
-	label := parts[0]
+	label := strings.ToLower(parts[0])
 	param := ""
 	if len(parts) > 1 {
 		param = parts[1]
 	}
-	switch strings.ToLower(label) {
-	case "gather":
-		return "Gather " + param
-	case "mine", "automine":
-		return "Mine " + param
-	case "craft":
-		return "Craft " + param
-	case "smelt":
-		return "Smelt " + param
-	case "come":
-		return "Walk to player"
-	case "follow":
-		return "Follow player"
-	case "give":
-		return "Give " + param
-	case "drop":
-		return "Drop " + param
-	case "equip":
-		return "Equip " + param
-	case "eat":
-		return "Eat " + param
-	case "build":
-		return "Build " + param
-	case "explore":
-		return "Explore for " + param + "s"
-	default:
-		if param != "" {
-			return label + " " + param
-		}
-		return label
+	if h, ok := actionDescriptions[label]; ok {
+		return h(parts[0], param)
 	}
+	if param != "" {
+		return parts[0] + " " + param
+	}
+	return parts[0]
 }
