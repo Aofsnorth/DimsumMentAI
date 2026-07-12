@@ -24,6 +24,30 @@ type ingredientPick struct {
 // network ID than oak_log in the inventory). We therefore match primarily by
 // item name, falling back to strict network ID equality only when the name
 // cannot be resolved.
+func consumeMatchingSlots(inv map[uint32]protocol.ItemStack, itemNames map[int32]string, remaining map[uint32]int, need int, match func(itemName string, itemNetID int32) bool) ([]ingredientPick, int) {
+	picks := make([]ingredientPick, 0)
+	for slot, item := range inv {
+		if remaining[slot] <= 0 {
+			continue
+		}
+		itemName := itemNames[item.NetworkID]
+		if !match(itemName, item.NetworkID) {
+			continue
+		}
+		take := remaining[slot]
+		if take > need {
+			take = need
+		}
+		picks = append(picks, ingredientPick{slot: slot, count: take})
+		remaining[slot] -= take
+		need -= take
+		if need <= 0 {
+			break
+		}
+	}
+	return picks, need
+}
+
 func planIngredientConsumption(inv map[uint32]protocol.ItemStack, itemNames map[int32]string, ingredients []protocol.ItemDescriptorCount, times int) ([]ingredientPick, error) {
 	// Track per-slot remaining count as we consume so multiple ingredients
 	// can share a slot without overcounting.
@@ -46,48 +70,17 @@ func planIngredientConsumption(inv map[uint32]protocol.ItemStack, itemNames map[
 			continue
 		}
 
+		var matched []ingredientPick
 		if targetName != "" {
-			// Name-based matching: more robust against runtime ID drift.
-			for slot, item := range inv {
-				if remaining[slot] <= 0 {
-					continue
-				}
-				itemName := itemNames[item.NetworkID]
-				if itemName == "" || !itemNameMatches(itemName, targetName) {
-					continue
-				}
-				take := remaining[slot]
-				if take > need {
-					take = need
-				}
-				picks = append(picks, ingredientPick{slot: slot, count: take})
-				remaining[slot] -= take
-				need -= take
-				if need <= 0 {
-					break
-				}
-			}
+			matched, need = consumeMatchingSlots(inv, itemNames, remaining, need, func(itemName string, itemNetID int32) bool {
+				return itemName != "" && itemNameMatches(itemName, targetName)
+			})
 		} else {
-			// Fallback to strict network ID equality.
-			for slot, item := range inv {
-				if remaining[slot] <= 0 {
-					continue
-				}
-				if item.NetworkID != networkID {
-					continue
-				}
-				take := remaining[slot]
-				if take > need {
-					take = need
-				}
-				picks = append(picks, ingredientPick{slot: slot, count: take})
-				remaining[slot] -= take
-				need -= take
-				if need <= 0 {
-					break
-				}
-			}
+			matched, need = consumeMatchingSlots(inv, itemNames, remaining, need, func(itemName string, itemNetID int32) bool {
+				return itemNetID == networkID
+			})
 		}
+		picks = append(picks, matched...)
 
 		if need > 0 {
 			return nil, fmt.Errorf("not enough %s for %d crafts", FormatItemName(targetName), times)

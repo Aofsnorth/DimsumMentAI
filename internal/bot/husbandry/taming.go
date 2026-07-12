@@ -3,11 +3,9 @@ package husbandry
 
 import (
 	"context"
-	"math"
 	"strings"
 	"time"
 
-	"bedrock-ai/internal/bot/entity"
 	"bedrock-ai/internal/event"
 	"bedrock-ai/internal/safecast"
 
@@ -18,33 +16,17 @@ import (
 
 // TameWolf attempts to tame a nearby wolf with bones
 func (m *Manager) TameWolf(ctx context.Context) bool {
-	return m.tameWithItem(ctx, "wolf", "bone", "taming wolf")
+	return m.tameWithItem(ctx, "wolf", "bone")
 }
 
 // TameCat attempts to tame a nearby cat with fish
 func (m *Manager) TameCat(ctx context.Context) bool {
-	return m.tameWithItem(ctx, "cat", "cod", "taming cat")
+	return m.tameWithItem(ctx, "cat", "cod")
 }
 
-func (m *Manager) tameWithItem(ctx context.Context, animalType, itemName, actionDesc string) bool {
-	inv := m.bot.GetInventorySlots()
-	names := m.bot.GetItemNames()
-
-	var itemSlot uint32
-	found := false
-	for slot, item := range inv {
-		if item.Count <= 0 {
-			continue
-		}
-		name := strings.ToLower(names[item.NetworkID])
-		if strings.Contains(name, itemName) {
-			itemSlot = slot
-			found = true
-			break
-		}
-	}
-
-	if !found {
+func (m *Manager) tameWithItem(ctx context.Context, animalType, itemName string) bool {
+	itemSlot, itemStack, ok := m.findItemSlot(func(name string) bool { return strings.Contains(name, itemName) })
+	if !ok {
 		m.bot.ReportActionStatus("", event.ActionStatus{
 			Action:  "tame",
 			Item:    itemName,
@@ -55,25 +37,9 @@ func (m *Manager) tameWithItem(ctx context.Context, animalType, itemName, action
 		return false
 	}
 
-	pos := m.bot.GetCoords()
-	entities := m.bot.GetEntities()
-
-	var target *entity.Info
-	closestDist := float32(math.MaxFloat32)
-	for _, ent := range entities {
-		if ent.Health <= 0 {
-			continue
-		}
-		if strings.EqualFold(ent.Type, animalType) {
-			dist := pos.Sub(ent.Position).Len()
-			if dist < closestDist {
-				closestDist = dist
-				target = ent
-			}
-		}
-	}
-
-	if target == nil {
+	typeLower := strings.ToLower(animalType)
+	target, ok := m.findNearestEntity(func(t string) bool { return strings.EqualFold(t, typeLower) })
+	if !ok {
 		m.bot.ReportActionStatus("", event.ActionStatus{
 			Action:  "tame",
 			Item:    animalType,
@@ -107,7 +73,7 @@ func (m *Manager) tameWithItem(ctx context.Context, animalType, itemName, action
 				TargetEntityRuntimeID: target.ID,
 				ActionType:            0,
 				HotBarSlot:            safecast.To[int32](itemSlot),
-				HeldItem:              protocol.ItemInstance{Stack: inv[itemSlot]},
+				HeldItem:              protocol.ItemInstance{Stack: itemStack},
 				Position:              m.bot.GetCoords(),
 				ClickedPosition:       mgl32.Vec3{0, 0, 0},
 			},
