@@ -1,3 +1,7 @@
+// Package action provides the dispatch layer that translates AI-parsed
+// action labels into concrete bot behavior. The Execute function looks up
+// a handler in the actionHandlers map and runs it with the action parameter
+// and the invoking user.
 package action
 
 import (
@@ -13,68 +17,217 @@ import (
 	"github.com/go-gl/mathgl/mgl32"
 )
 
-// Execute maps an AI-parsed action tag to bot behaviors
-func Execute(b *bot.Bot, label string, param string, user string) {
-	label = strings.ToLower(strings.TrimSpace(label))
-	param = strings.TrimSpace(param)
+// actionHandler executes a single action label for bot b.
+type actionHandler func(*bot.Bot, string, string)
 
-	switch label {
-	case "build":
-		go b.BuilderAgent.Build(context.Background(), user, param)
+// emoteConfig describes how to trigger an emote action.
+type emoteConfig struct {
+	name     string
+	duration time.Duration
+	fixed    bool
+	ticks    int
+	lookAt   mgl32.Vec3
+}
 
-	case "stopbuild", "stopbuilding":
-		b.BuilderAgent.StopBuilding()
+// emoteDefaults maps emote labels to their emote config.
+var emoteDefaults = map[string]emoteConfig{
+	"jumpforever":   {name: "jump", duration: 4 * time.Second},
+	"jumpinplace":   {name: "jump", duration: 4 * time.Second},
+	"spinslow":      {name: "spin", duration: 5 * time.Second},
+	"spinforever":   {name: "spin", duration: 5 * time.Second},
+	"spinfast":      {name: "spin", duration: 5 * time.Second},
+	"teleportfake":  {name: "spin", duration: 5 * time.Second},
+	"spinlookup":    {name: "spin", duration: 5 * time.Second, lookAt: mgl32.Vec3{0, 8, 0}},
+	"spinlookdown":  {name: "spin", duration: 5 * time.Second, lookAt: mgl32.Vec3{0, -4, 0}},
+	"dance":         {name: "spin", duration: 6 * time.Second},
+	"floss":         {name: "spin", duration: 6 * time.Second},
+	"naenae":        {name: "spin", duration: 6 * time.Second},
+	"robot":         {name: "spin", duration: 6 * time.Second},
+	"breakdance":    {name: "spin", duration: 6 * time.Second},
+	"throwparty":    {name: "spin", duration: 6 * time.Second},
+	"explode":       {name: "spin", duration: 6 * time.Second},
+	"jumpspincombo": {name: "spin", duration: 6 * time.Second},
+	"twerk":         {name: "sneak", duration: 5 * time.Second},
+	"dab":           {name: "wave", fixed: true, ticks: 30},
+	"wave":          {name: "wave", fixed: true, ticks: 30},
+	"headbang":      {name: "nod", duration: 3 * time.Second},
+	"nod":           {name: "nod", duration: 3 * time.Second},
+	"shake":         {name: "shake", duration: 3 * time.Second},
+}
 
-	case "undo":
+// emoteHandler returns a handler that triggers the emote described by label.
+func emoteHandler(label string) actionHandler {
+	cfg := emoteDefaults[label]
+	return func(b *bot.Bot, param, _ string) {
+		if cfg.lookAt != (mgl32.Vec3{}) {
+			b.LookAt(b.GetCoords().Add(cfg.lookAt))
+		}
+		ticks := cfg.ticks
+		if !cfg.fixed {
+			ticks = durationTicks(param, cfg.duration)
+		}
+		b.TriggerEmoteFor(cfg.name, ticks)
+	}
+}
+
+// movementHandler returns a handler that runs the movement pattern for label.
+func movementHandler(label string) actionHandler {
+	return func(b *bot.Bot, param, user string) {
+		go runMovementPattern(b, label, param, user)
+	}
+}
+
+// gatherHandler returns a handler that gathers a block or wood type.
+func gatherHandler(defaultItem string) actionHandler {
+	return func(b *bot.Bot, param, _ string) {
+		parts := strings.Split(param, ",")
+		itemName := defaultItem
+		if parts[0] != "" {
+			itemName = normalizeItemName(parts[0])
+		}
+		count := 10
+		if len(parts) > 1 {
+			_, _ = fmt.Sscanf(parts[1], "%d", &count)
+		}
+		if isWoodLike(itemName) {
+			go b.Gatherer.GatherWoodType(context.Background(), itemName, count)
+		} else {
+			go b.Gatherer.GatherBlock(context.Background(), itemName, count)
+		}
+	}
+}
+
+// lootHandler returns a handler that collects all drops within radius and logs msg.
+func lootHandler(radius float32, msg string) actionHandler {
+	return func(b *bot.Bot, _, _ string) {
+		go func() {
+			collected := b.Gatherer.CollectAllDrops(context.Background(), radius)
+			b.Logger.Debug(msg, "collected", collected)
+		}()
+	}
+}
+
+// storeItem stores the normalised item name in a chest.
+func storeItem(b *bot.Bot, param string) {
+	go func() {
+		itemName := normalizeItemName(param)
+		success := b.InventoryMgr.Chest().StoreItem(context.Background(), itemName, 0)
+		b.Logger.Debug("store action complete", "success", success, "item", itemName)
+	}()
+}
+
+// harvestCrops harvests the crop type described by param.
+func harvestCrops(b *bot.Bot, param string) {
+	go func() {
+		cropType := normalizeCropType(param)
+		count := parseCount(param, 20)
+		harvested := b.Farmer.HarvestCrops(context.Background(), cropType, count)
+		b.Logger.Debug("harvest complete", "count", harvested)
+	}()
+}
+
+// goFish makes the bot fish count times.
+func goFish(b *bot.Bot, param string) {
+	count := parseCount(param, 5)
+	go func() {
+		caught := b.Fisher.GoFish(context.Background(), count)
+		b.Logger.Debug("fishing complete", "caught", caught)
+	}()
+}
+
+// handleShoot finds the nearest hostile mob and fires a ranged weapon.
+func handleShoot(b *bot.Bot, user string) {
+	if !b.CombatMgr.HasRangedWeapon() {
+		b.ReportActionStatus(user, event.ActionStatus{Action: "shoot", Success: false, Error: "gak punya bow atau arrow"})
+		return
+	}
+
+	entities := b.GetEntities()
+	pos := b.GetCoords()
+	var closestID uint64
+	closestDist := float32(30)
+	for id, ent := range entities {
+		if ent.Health <= 0 {
+			continue
+		}
+		dist := pos.Sub(ent.Position).Len()
+		if dist < closestDist && dist > 4.0 {
+			closestDist = dist
+			closestID = id
+		}
+	}
+	if closestID != 0 {
+		b.CombatMgr.BowAttack(closestID)
+	} else {
+		b.ReportActionStatus(user, event.ActionStatus{Action: "shoot", Success: false, Error: "gak ada target dalam jarak tembak"})
+	}
+}
+
+// actionHandlers maps action labels to their handler functions.
+var actionHandlers = map[string]actionHandler{
+	// Build / undo
+	"build":        func(b *bot.Bot, param, user string) { go b.BuilderAgent.Build(context.Background(), user, param) },
+	"stopbuild":    func(b *bot.Bot, _, _ string) { b.BuilderAgent.StopBuilding() },
+	"stopbuilding": func(b *bot.Bot, _, _ string) { b.BuilderAgent.StopBuilding() },
+	"undo": func(b *bot.Bot, param, _ string) {
 		count := 0
 		if param != "" {
 			_, _ = fmt.Sscanf(param, "%d", &count)
 		}
 		go b.BuilderAgent.UndoBuild(context.Background(), count)
+	},
 
-	case "come":
+	// Movement / follow
+	"come": func(b *bot.Bot, param, user string) {
 		target := param
 		if target == "" {
 			target = user
 		}
 		b.ComeToPlayer(target)
-
-	case "follow":
+	},
+	"follow": func(b *bot.Bot, param, user string) {
 		target := param
 		if target == "" {
 			target = user
 		}
 		b.FollowPlayer(target)
-
-	case "goto":
+	},
+	"goto": func(b *bot.Bot, param, _ string) {
 		if param == "" {
 			return
 		}
 		parts := strings.Split(param, ",")
-		if len(parts) == 3 {
-			var coords [3]float32
-			valid := true
-			for i, p := range parts {
-				var val float32
-				if _, err := fmt.Sscanf(strings.TrimSpace(p), "%f", &val); err != nil {
-					valid = false
-					break
-				}
-				coords[i] = val
-			}
-			if valid {
-				b.WalkTo(mgl32.Vec3{coords[0], coords[1], coords[2]})
-			}
+		if len(parts) != 3 {
+			return
 		}
-
-	case "stop", "stay":
+		var coords [3]float32
+		valid := true
+		for i, p := range parts {
+			var val float32
+			if _, err := fmt.Sscanf(strings.TrimSpace(p), "%f", &val); err != nil {
+				valid = false
+				break
+			}
+			coords[i] = val
+		}
+		if valid {
+			b.WalkTo(mgl32.Vec3{coords[0], coords[1], coords[2]})
+		}
+	},
+	"stop": func(b *bot.Bot, _, _ string) {
 		b.Stop()
-		// Cancel any running agentic plan so "stop" truly halts everything.
 		if b.Planner != nil {
 			b.Planner.Cancel()
 		}
-
-	case "lookat":
+	},
+	"stay": func(b *bot.Bot, _, _ string) {
+		b.Stop()
+		if b.Planner != nil {
+			b.Planner.Cancel()
+		}
+	},
+	"flee": func(b *bot.Bot, _, user string) { go runAwayFromPlayer(b, user, 5*time.Second) },
+	"lookat": func(b *bot.Bot, param, user string) {
 		target := param
 		if target == "" {
 			target = user
@@ -82,198 +235,148 @@ func Execute(b *bot.Bot, label string, param string, user string) {
 		if !b.LookAtPlayer(target, 5*time.Second) {
 			b.Logger.Warn("ExecuteAction: no player found to look at", "target", target)
 		}
+	},
 
-	case "emote":
-		parts := strings.Split(param, ",")
-		emoteName := parts[0]
-		b.TriggerEmote(emoteName)
+	// Emote
+	"emote": func(b *bot.Bot, param, _ string) { parts := strings.Split(param, ","); b.TriggerEmote(parts[0]) },
 
-	case "flee":
-		go runAwayFromPlayer(b, user, 5*time.Second)
-
-	case "attack", "hunt", "pvp", "guard":
-		handleAttack(b, param, user)
-
-	case "equip":
+	// Combat / items
+	"attack": handleAttack,
+	"hunt":   handleAttack,
+	"pvp":    handleAttack,
+	"guard":  handleAttack,
+	"equip": func(b *bot.Bot, param, _ string) {
 		if param != "" {
 			_ = b.InventoryMgr.EquipItem(param)
 		}
-
-	case "give":
-		handleGive(b, param, user)
-
-	case "drop":
-		handleDrop(b, param, user)
-
-	case "eat":
+	},
+	"give": handleGive,
+	"drop": handleDrop,
+	"eat": func(b *bot.Bot, param, _ string) {
 		go func() {
 			_ = b.InventoryMgr.Eat(strings.ToLower(strings.TrimSpace(param)))
 		}()
+	},
+	"loot":  lootHandler(10.0, "loot action complete"),
+	"clear": lootHandler(12.0, "sweep drops complete"),
+	"scan":  lootHandler(12.0, "sweep drops complete"),
 
-	case "loot":
-		go func() {
-			collected := b.Gatherer.CollectAllDrops(context.Background(), 10.0)
-			b.Logger.Debug("loot action complete", "collected", collected)
-		}()
+	// Gather / mine
+	"gather":   gatherHandler("wood"),
+	"mine":     gatherHandler("cobblestone"),
+	"automine": gatherHandler("cobblestone"),
 
-	case "gather":
-		count := 10
-		itemName := "wood"
-		parts := strings.Split(param, ",")
-		if len(parts) >= 1 && parts[0] != "" {
-			itemName = normalizeItemName(parts[0])
-		}
-		if len(parts) >= 2 {
-			_, _ = fmt.Sscanf(parts[1], "%d", &count)
-		}
-
-		if isWoodLike(itemName) {
-			go b.Gatherer.GatherWoodType(context.Background(), itemName, count)
-		} else {
-			go b.Gatherer.GatherBlock(context.Background(), itemName, count)
-		}
-
-	case "mine", "automine":
-		count := 10
-		itemName := "cobblestone"
-		parts := strings.Split(param, ",")
-		if len(parts) >= 1 && parts[0] != "" {
-			itemName = normalizeItemName(parts[0])
-		}
-		if len(parts) >= 2 {
-			_, _ = fmt.Sscanf(parts[1], "%d", &count)
-		}
-		// Logs/wood should always use the tree-by-tree chopper, never the
-		// per-block scanner — otherwise the bot jumps between adjacent trees
-		// without finishing any.
-		if isWoodLike(itemName) {
-			go b.Gatherer.GatherWoodType(context.Background(), itemName, count)
-		} else {
-			go b.Gatherer.GatherBlock(context.Background(), itemName, count)
-		}
-
-	case "clear", "scan":
-		go func() {
-			collected := b.Gatherer.CollectAllDrops(context.Background(), 12.0)
-			b.Logger.Debug("sweep drops complete", "collected", collected)
-		}()
-
-	case "craft":
-		handleCraft(b, param, user)
-
-	case "smelt":
+	// Craft / smelt / store
+	"craft": handleCraft,
+	"smelt": func(b *bot.Bot, param, _ string) {
 		go func() {
 			itemName := normalizeItemName(param)
 			success := b.InventoryMgr.Furnace().SmeltItem(context.Background(), itemName)
 			b.Logger.Debug("smelt action complete", "success", success, "item", itemName)
 		}()
+	},
+	"store":    func(b *bot.Bot, param, _ string) { storeItem(b, param) },
+	"storeall": func(b *bot.Bot, param, _ string) { storeItem(b, param) },
+	"take":     handleTake,
+	"retrieve": handleTake,
 
-	case "store", "storeall":
-		go func() {
-			itemName := normalizeItemName(param)
-			success := b.InventoryMgr.Chest().StoreItem(context.Background(), itemName, 0)
-			b.Logger.Debug("store action complete", "success", success, "item", itemName)
-		}()
-
-	case "take", "retrieve":
-		handleTake(b, param, user)
-
-	case "status":
+	// Status / inventory
+	"status": func(b *bot.Bot, _, user string) {
 		hp, hunger, coords := b.GetStatusDetails()
 		b.ReportActionStatus(user, event.ActionStatus{Action: "status", Item: fmt.Sprintf("HP:%d Hunger:%d Coords:%s", hp, hunger, coords), Success: true})
-
-	case "inventory":
+	},
+	"inventory": func(b *bot.Bot, _, user string) {
 		b.ReportActionStatus(user, event.ActionStatus{Action: "inventory", Item: b.GetInventorySummary(), Success: true})
+	},
 
-	case "swimbackforth", "walkbackforth", "walkcircle", "walksquare", "moonwalk", "crabwalk",
-		"zigzag", "spiral", "randomwalk", "jumpforward", "bunnyhop", "panic", "runaway",
-		"chase", "followrandom":
-		go runMovementPattern(b, label, param, user)
+	// Movement patterns
+	"swimbackforth": movementHandler("swimbackforth"),
+	"walkbackforth": movementHandler("walkbackforth"),
+	"walkcircle":    movementHandler("walkcircle"),
+	"walksquare":    movementHandler("walksquare"),
+	"moonwalk":      movementHandler("moonwalk"),
+	"crabwalk":      movementHandler("crabwalk"),
+	"zigzag":        movementHandler("zigzag"),
+	"spiral":        movementHandler("spiral"),
+	"randomwalk":    movementHandler("randomwalk"),
+	"jumpforward":   movementHandler("jumpforward"),
+	"bunnyhop":      movementHandler("bunnyhop"),
+	"panic":         movementHandler("panic"),
+	"runaway":       movementHandler("runaway"),
+	"chase":         movementHandler("chase"),
+	"followrandom":  movementHandler("followrandom"),
 
-	case "jumpforever", "jumpinplace":
-		b.TriggerEmoteFor("jump", durationTicks(param, 4*time.Second))
+	// Emote patterns
+	"jumpforever":   emoteHandler("jumpforever"),
+	"jumpinplace":   emoteHandler("jumpinplace"),
+	"spinslow":      emoteHandler("spinslow"),
+	"spinforever":   emoteHandler("spinforever"),
+	"spinfast":      emoteHandler("spinfast"),
+	"teleportfake":  emoteHandler("teleportfake"),
+	"spinlookup":    emoteHandler("spinlookup"),
+	"spinlookdown":  emoteHandler("spinlookdown"),
+	"dance":         emoteHandler("dance"),
+	"floss":         emoteHandler("floss"),
+	"naenae":        emoteHandler("naenae"),
+	"robot":         emoteHandler("robot"),
+	"breakdance":    emoteHandler("breakdance"),
+	"throwparty":    emoteHandler("throwparty"),
+	"explode":       emoteHandler("explode"),
+	"jumpspincombo": emoteHandler("jumpspincombo"),
+	"twerk":         emoteHandler("twerk"),
+	"dab":           emoteHandler("dab"),
+	"wave":          emoteHandler("wave"),
+	"headbang":      emoteHandler("headbang"),
+	"nod":           emoteHandler("nod"),
+	"shake":         emoteHandler("shake"),
 
-	case "spinslow", "spinforever", "spinfast", "teleportfake":
-		b.TriggerEmoteFor("spin", durationTicks(param, 5*time.Second))
+	// Look / idle actions
+	"lookcrazy": func(b *bot.Bot, param, user string) { handleLookOrIdleAction(b, "lookcrazy", param, user) },
+	"stare":     func(b *bot.Bot, param, user string) { handleLookOrIdleAction(b, "stare", param, user) },
+	"freeze":    func(b *bot.Bot, param, user string) { handleLookOrIdleAction(b, "freeze", param, user) },
+	"vibrate":   func(b *bot.Bot, param, user string) { handleLookOrIdleAction(b, "vibrate", param, user) },
 
-	case "spinlookup":
-		b.LookAt(b.GetCoords().Add(mgl32.Vec3{0, 8, 0}))
-		b.TriggerEmoteFor("spin", durationTicks(param, 5*time.Second))
+	// Dig / tower actions
+	"buryself":   func(b *bot.Bot, param, _ string) { go digDownAction(b, "buryself", param) },
+	"digout":     func(b *bot.Bot, param, _ string) { go digDownAction(b, "digout", param) },
+	"dighole":    func(b *bot.Bot, param, _ string) { go digDownAction(b, "dighole", param) },
+	"gotohell":   func(b *bot.Bot, param, _ string) { go digDownAction(b, "gotohell", param) },
+	"descend":    func(b *bot.Bot, param, _ string) { go digDownAction(b, "descend", param) },
+	"buildtower": func(b *bot.Bot, param, _ string) { go towerAction(b, param) },
+	"gotoheaven": func(b *bot.Bot, param, _ string) { go towerAction(b, param) },
+	"ascend":     func(b *bot.Bot, param, _ string) { go towerAction(b, param) },
 
-	case "spinlookdown":
-		b.LookAt(b.GetCoords().Add(mgl32.Vec3{0, -4, 0}))
-		b.TriggerEmoteFor("spin", durationTicks(param, 5*time.Second))
-
-	case "dance", "floss", "naenae", "robot", "breakdance", "throwparty", "explode", "jumpspincombo":
-		b.TriggerEmoteFor("spin", durationTicks(param, 6*time.Second))
-
-	case "twerk":
-		b.TriggerEmoteFor("sneak", durationTicks(param, 5*time.Second))
-
-	case "dab", "wave":
-		b.TriggerEmoteFor("wave", 30)
-
-	case "headbang", "nod":
-		b.TriggerEmoteFor("nod", durationTicks(param, 3*time.Second))
-
-	case "shake":
-		b.TriggerEmoteFor("shake", durationTicks(param, 3*time.Second))
-
-	case "lookcrazy", "stare", "freeze", "vibrate":
-		handleLookOrIdleAction(b, label, param, user)
-
-	case "buryself", "digout", "dighole", "gotohell", "descend":
-		go digDownAction(b, label, param)
-
-	case "buildtower", "gotoheaven", "ascend":
-		go towerAction(b, param)
-
-	// === NEW SURVIVAL FEATURES ===
-	case "farm", "harvest":
-		cropType := normalizeCropType(param)
-		count := parseCount(param, 20)
+	// Survival features
+	"farm":    func(b *bot.Bot, param, _ string) { harvestCrops(b, param) },
+	"harvest": func(b *bot.Bot, param, _ string) { harvestCrops(b, param) },
+	"plant": func(b *bot.Bot, param, _ string) {
 		go func() {
-			harvested := b.Farmer.HarvestCrops(context.Background(), cropType, count)
-			b.Logger.Debug("harvest complete", "count", harvested)
-		}()
-
-	case "plant":
-		cropType := normalizeCropType(param)
-		count := parseCount(param, 20)
-		go func() {
+			cropType := normalizeCropType(param)
+			count := parseCount(param, 20)
 			planted := b.Farmer.PlantSeeds(context.Background(), cropType, count)
 			b.Logger.Debug("plant complete", "count", planted)
 		}()
-
-	case "hoe":
+	},
+	"hoe": func(b *bot.Bot, param, _ string) {
 		radius := safecast.To[int32](parseCount(param, 5))
 		go func() {
 			hoed := b.Farmer.HoeGround(context.Background(), radius)
 			b.Logger.Debug("hoe complete", "count", hoed)
 		}()
-
-	case "fish", "fishing":
-		count := parseCount(param, 5)
-		go func() {
-			caught := b.Fisher.GoFish(context.Background(), count)
-			b.Logger.Debug("fishing complete", "caught", caught)
-		}()
-
-	case "breed":
+	},
+	"fish":    func(b *bot.Bot, param, _ string) { goFish(b, param) },
+	"fishing": func(b *bot.Bot, param, _ string) { goFish(b, param) },
+	"breed": func(b *bot.Bot, param, _ string) {
 		animalType := normalizeItemName(param)
 		go b.HusbandryMgr.BreedAnimals(context.Background(), animalType)
-
-	case "feed":
+	},
+	"feed": func(b *bot.Bot, param, _ string) {
 		animalType := normalizeItemName(param)
 		go b.HusbandryMgr.FeedAnimal(context.Background(), animalType)
-
-	case "milk":
-		go b.HusbandryMgr.MilkCow(context.Background())
-
-	case "shear":
-		go b.HusbandryMgr.ShearSheep(context.Background())
-
-	case "tame":
+	},
+	"milk":  func(b *bot.Bot, _, _ string) { go b.HusbandryMgr.MilkCow(context.Background()) },
+	"shear": func(b *bot.Bot, _, _ string) { go b.HusbandryMgr.ShearSheep(context.Background()) },
+	"tame": func(b *bot.Bot, param, _ string) {
 		animalType := normalizeItemName(param)
 		go func() {
 			if animalType == "cat" || animalType == "ocelot" {
@@ -282,64 +385,52 @@ func Execute(b *bot.Bot, label string, param string, user string) {
 				b.HusbandryMgr.TameWolf(context.Background())
 			}
 		}()
+	},
+	"sleep":      func(b *bot.Bot, _, _ string) { go b.SurvivalMgr.SleepInBed(context.Background()) },
+	"bed":        func(b *bot.Bot, _, _ string) { go b.SurvivalMgr.SleepInBed(context.Background()) },
+	"torch":      func(b *bot.Bot, _, _ string) { go b.SurvivalMgr.AutoPlaceTorches(context.Background()) },
+	"placetorch": func(b *bot.Bot, _, _ string) { go b.SurvivalMgr.AutoPlaceTorches(context.Background()) },
 
-	case "sleep", "bed":
-		go func() {
-			b.SurvivalMgr.SleepInBed(context.Background())
-		}()
-
-	case "torch", "placetorch":
-		go b.SurvivalMgr.AutoPlaceTorches(context.Background())
-
-	case "shield", "block":
+	// Combat survival
+	"shield": func(b *bot.Bot, _, user string) {
 		if b.CombatMgr.HasShield() {
 			b.CombatMgr.RaiseShield()
 			b.ReportActionStatus(user, event.ActionStatus{Action: "shield", Success: true})
 		} else {
 			b.ReportActionStatus(user, event.ActionStatus{Action: "shield", Success: false, Error: "gak punya shield"})
 		}
-
-	case "shoot", "bow", "crossbow":
-		go func() {
-			if b.CombatMgr.HasRangedWeapon() {
-				// Find nearest hostile mob to shoot
-				entities := b.GetEntities()
-				pos := b.GetCoords()
-				var closestID uint64
-				closestDist := float32(30)
-				for id, ent := range entities {
-					if ent.Health <= 0 {
-						continue
-					}
-					dist := pos.Sub(ent.Position).Len()
-					if dist < closestDist && dist > 4.0 {
-						closestDist = dist
-						closestID = id
-					}
-				}
-				if closestID != 0 {
-					b.CombatMgr.BowAttack(closestID)
-				} else {
-					b.ReportActionStatus(user, event.ActionStatus{Action: "shoot", Success: false, Error: "gak ada target dalam jarak tembak"})
-				}
-			} else {
-				b.ReportActionStatus(user, event.ActionStatus{Action: "shoot", Success: false, Error: "gak punya bow atau arrow"})
-			}
-		}()
-
-	case "potion", "heal":
+	},
+	"block": func(b *bot.Bot, _, user string) {
+		if b.CombatMgr.HasShield() {
+			b.CombatMgr.RaiseShield()
+			b.ReportActionStatus(user, event.ActionStatus{Action: "shield", Success: true})
+		} else {
+			b.ReportActionStatus(user, event.ActionStatus{Action: "shield", Success: false, Error: "gak punya shield"})
+		}
+	},
+	"shoot":    func(b *bot.Bot, _, user string) { go handleShoot(b, user) },
+	"bow":      func(b *bot.Bot, _, user string) { go handleShoot(b, user) },
+	"crossbow": func(b *bot.Bot, _, user string) { go handleShoot(b, user) },
+	"potion": func(b *bot.Bot, _, user string) {
 		if b.SurvivalMgr.UseHealingPotion() {
 			b.ReportActionStatus(user, event.ActionStatus{Action: "heal", Item: "potion", Success: true})
 		} else {
 			b.ReportActionStatus(user, event.ActionStatus{Action: "heal", Item: "potion", Success: false, Error: "gak punya healing potion"})
 		}
-
-	case "autoeat":
+	},
+	"heal": func(b *bot.Bot, _, user string) {
+		if b.SurvivalMgr.UseHealingPotion() {
+			b.ReportActionStatus(user, event.ActionStatus{Action: "heal", Item: "potion", Success: true})
+		} else {
+			b.ReportActionStatus(user, event.ActionStatus{Action: "heal", Item: "potion", Success: false, Error: "gak punya healing potion"})
+		}
+	},
+	"autoeat": func(b *bot.Bot, param, user string) {
 		enabled := param != "off" && param != "false" && param != "0"
 		b.SurvivalMgr.EnableAutoEat(enabled)
 		b.ReportActionStatus(user, event.ActionStatus{Action: "toggle", Item: "auto-eat", Success: true})
-
-	case "autoarmor":
+	},
+	"autoarmor": func(b *bot.Bot, param, user string) {
 		enabled := param != "off" && param != "false" && param != "0"
 		b.SurvivalMgr.EnableAutoArmor(enabled)
 		if enabled {
@@ -348,40 +439,50 @@ func Execute(b *bot.Bot, label string, param string, user string) {
 		} else {
 			b.ReportActionStatus(user, event.ActionStatus{Action: "toggle", Item: "auto-armor", Success: true})
 		}
-
-	case "autotool":
+	},
+	"autotool": func(b *bot.Bot, _, user string) {
 		b.ReportActionStatus(user, event.ActionStatus{Action: "toggle", Item: "auto-tool", Success: true})
+	},
 
-	case "explore":
+	// Exploration
+	"explore": func(b *bot.Bot, param, _ string) {
 		duration := parseCount(param, 60)
 		go b.Explorer.ExploreRandom(context.Background(), time.Duration(duration)*time.Second)
-
-	case "exploredir":
+	},
+	"exploredir": func(b *bot.Bot, param, _ string) {
 		parts := strings.Split(param, ",")
 		direction := "north"
 		dist := 200
-		if len(parts) >= 1 && parts[0] != "" {
+		if len(parts) > 0 && parts[0] != "" {
 			direction = strings.TrimSpace(parts[0])
 		}
-		if len(parts) >= 2 {
+		if len(parts) > 1 {
 			_, _ = fmt.Sscanf(parts[1], "%d", &dist)
 		}
 		go b.Explorer.ExploreDirection(context.Background(), direction, dist)
-
-	case "returnhome":
-		go b.Explorer.ReturnToOrigin(context.Background())
-
-	case "shelter":
-		go b.SurvivalMgr.BuildEmergencyShelter(context.Background())
-
-	case "time", "whatstime":
+	},
+	"returnhome": func(b *bot.Bot, _, _ string) { go b.Explorer.ReturnToOrigin(context.Background()) },
+	"shelter":    func(b *bot.Bot, _, _ string) { go b.SurvivalMgr.BuildEmergencyShelter(context.Background()) },
+	"time": func(b *bot.Bot, _, user string) {
 		tod := b.SurvivalMgr.GetTimeOfDay()
 		b.ReportActionStatus(user, event.ActionStatus{Action: "time", Item: tod, Success: true})
+	},
+	"whatstime": func(b *bot.Bot, _, user string) {
+		tod := b.SurvivalMgr.GetTimeOfDay()
+		b.ReportActionStatus(user, event.ActionStatus{Action: "time", Item: tod, Success: true})
+	},
+	"deathpoint": func(b *bot.Bot, _, _ string) { go b.SurvivalMgr.RecoverFromDeath(context.Background()) },
+	"recover":    func(b *bot.Bot, _, _ string) { go b.SurvivalMgr.RecoverFromDeath(context.Background()) },
+}
 
-	case "deathpoint", "recover":
-		go b.SurvivalMgr.RecoverFromDeath(context.Background())
+// Execute maps an AI-parsed action tag to bot behaviors.
+func Execute(b *bot.Bot, label string, param string, user string) {
+	label = strings.ToLower(strings.TrimSpace(label))
+	param = strings.TrimSpace(param)
 
-	default:
-		b.Logger.Debug("unknown or unhandled action label", "label", label, "param", param)
+	if handler, ok := actionHandlers[label]; ok {
+		handler(b, param, user)
+		return
 	}
+	b.Logger.Debug("unknown or unhandled action label", "label", label, "param", param)
 }

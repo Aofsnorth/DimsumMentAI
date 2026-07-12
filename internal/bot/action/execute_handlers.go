@@ -1,3 +1,5 @@
+// Package action provides helper handlers and normalisation utilities for
+// the action dispatch in execute.go.
 package action
 
 import (
@@ -347,41 +349,43 @@ func isWoodLike(itemName string) bool {
 	return false
 }
 
+var itemAliases = map[string]string{
+	"craftingtable":  "crafting_table",
+	"craft_table":    "crafting_table",
+	"workbench":      "crafting_table",
+	"wood":           "oak_log",
+	"kayu":           "oak_log",
+	"log":            "oak_log",
+	"logs":           "oak_log",
+	"plank":          "oak_planks",
+	"planks":         "oak_planks",
+	"papan":          "oak_planks",
+	"tanah":          "dirt",
+	"batu":           "stone",
+	"pasir":          "sand",
+	"gandum":         "wheat",
+	"wheat_crop":     "wheat",
+	"wortel":         "carrot",
+	"kentang":        "potato",
+	"sapi":           "cow",
+	"cow_animal":     "cow",
+	"domba":          "sheep",
+	"sheep_animal":   "sheep",
+	"babi":           "pig",
+	"pig_animal":     "pig",
+	"ayam":           "chicken",
+	"chicken_animal": "chicken",
+	"serigala":       "wolf",
+	"dog":            "wolf",
+	"kucing":         "cat",
+}
+
 func normalizeItemName(name string) string {
 	name = strings.ToLower(strings.TrimSpace(name))
 	name = strings.ReplaceAll(name, " ", "_")
 	name = strings.TrimPrefix(name, "minecraft:")
-	switch name {
-	case "craftingtable", "craft_table", "workbench":
-		return "crafting_table"
-	case "wood", "kayu", "log", "logs":
-		return "oak_log"
-	case "plank", "planks", "papan":
-		return "oak_planks"
-	case "tanah":
-		return "dirt"
-	case "batu":
-		return "stone"
-	case "pasir":
-		return "sand"
-	case "gandum", "wheat_crop":
-		return "wheat"
-	case "wortel":
-		return "carrot"
-	case "kentang":
-		return "potato"
-	case "sapi", "cow_animal":
-		return "cow"
-	case "domba", "sheep_animal":
-		return "sheep"
-	case "babi", "pig_animal":
-		return "pig"
-	case "ayam", "chicken_animal":
-		return "chicken"
-	case "serigala", "dog":
-		return "wolf"
-	case "kucing":
-		return "cat"
+	if alias, ok := itemAliases[name]; ok {
+		return alias
 	}
 	return name
 }
