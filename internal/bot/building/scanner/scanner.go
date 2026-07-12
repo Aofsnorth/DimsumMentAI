@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"bedrock-ai/internal/bot/building/common"
+	"bedrock-ai/internal/bot/entity"
 	"bedrock-ai/internal/safecast"
 )
 
@@ -44,72 +45,22 @@ func (s *AreaScanner) FindFlatArea(cx, cy, cz, requiredSize int) (int, int, int)
 	var bestSpot *common.StructureInfo
 	bestScore := -1
 
-	type cand struct{ x, z int }
-	var candidates []cand
-
-	for r := 4; r <= 24; r += 4 {
-		for angle := 0.0; angle < math.Pi*2; angle += math.Pi / 4 {
-			dx := int(math.Round(math.Cos(angle) * float64(r)))
-			dz := int(math.Round(math.Sin(angle) * float64(r)))
-			candidates = append(candidates, cand{x: cx + dx, z: cz + dz})
-		}
-	}
-
-	frontDx := 5
-	frontDz := 5
-	candidates = append([]cand{{x: cx + frontDx, z: cz + frontDz}}, candidates...)
+	candidates := flatAreaCandidates(cx, cz)
+	frontDx, frontDz := 5, 5
 
 	for _, c := range candidates {
-		groundY := cy
-		foundGround := false
-
-		for dy := 3; dy >= -5; dy-- {
-			ty := cy + dy
-			if world.IsSolid(safecast.To[int32](c.x), safecast.To[int32](ty), safecast.To[int32](c.z)) {
-				groundY = ty + 1
-				foundGround = true
-				break
-			}
-		}
-
-		if !foundGround {
+		groundY, found := s.findGroundY(c.x, cy, c.z, world)
+		if !found {
 			continue
 		}
 
-		flatCount := 0
-		checkSize := requiredSize + 2
-		totalChecks := (checkSize*2 + 1) * (checkSize*2 + 1)
-
-		for x := -checkSize; x <= checkSize; x++ {
-			for z := -checkSize; z <= checkSize; z++ {
-				tx := safecast.To[int32](c.x + x)
-				tz := safecast.To[int32](c.z + z)
-
-				isGroundSolid := world.IsSolid(tx, safecast.To[int32](groundY-1), tz)
-				isAbove1Empty := !world.IsSolid(tx, safecast.To[int32](groundY), tz)
-				isAbove2Empty := !world.IsSolid(tx, safecast.To[int32](groundY+1), tz)
-
-				if isGroundSolid && isAbove1Empty && isAbove2Empty {
-					flatCount++
-				}
-			}
-		}
-
-		score := flatCount
-		dist := math.Sqrt(float64((c.x-cx)*(c.x-cx) + (c.z-cz)*(c.z-cz)))
-		if dist > 12 {
-			score -= 5
-		}
-
-		yDiff := int(math.Abs(float64(groundY - cy)))
-		score -= yDiff * 2
-
+		score, total := s.scoreFlatArea(c.x, groundY, c.z, cx, cy, cz, requiredSize, world)
 		if score > bestScore {
 			bestScore = score
 			bestSpot = &common.StructureInfo{X: c.x, Y: groundY, Z: c.z}
 		}
 
-		if score >= totalChecks-2 {
+		if score >= total-2 {
 			break
 		}
 	}
@@ -122,6 +73,59 @@ func (s *AreaScanner) FindFlatArea(cx, cy, cz, requiredSize int) (int, int, int)
 	s.logger.Warn("Could not find optimal flat area, using front default", "x", cx+frontDx, "y", cy, "z", cz+frontDz)
 	return cx + frontDx, cy, cz + frontDz
 }
+
+func flatAreaCandidates(cx, cz int) []flatAreaCand {
+	candidates := []flatAreaCand{{x: cx + 5, z: cz + 5}}
+	for r := 4; r <= 24; r += 4 {
+		for angle := 0.0; angle < math.Pi*2; angle += math.Pi / 4 {
+			dx := int(math.Round(math.Cos(angle) * float64(r)))
+			dz := int(math.Round(math.Sin(angle) * float64(r)))
+			candidates = append(candidates, flatAreaCand{x: cx + dx, z: cz + dz})
+		}
+	}
+	return candidates
+}
+
+func (s *AreaScanner) findGroundY(x, cy, z int, world entity.WorldModel) (int, bool) {
+	for dy := 3; dy >= -5; dy-- {
+		ty := cy + dy
+		if world.IsSolid(safecast.To[int32](x), safecast.To[int32](ty), safecast.To[int32](z)) {
+			return ty + 1, true
+		}
+	}
+	return cy, false
+}
+
+func (s *AreaScanner) scoreFlatArea(x, groundY, z, cx, cy, cz, requiredSize int, world entity.WorldModel) (int, int) {
+	flatCount := 0
+	checkSize := requiredSize + 2
+	total := (checkSize*2 + 1) * (checkSize*2 + 1)
+
+	for dx := -checkSize; dx <= checkSize; dx++ {
+		for dz := -checkSize; dz <= checkSize; dz++ {
+			if s.isFlatSpot(safecast.To[int32](x+dx), groundY, safecast.To[int32](z+dz), world) {
+				flatCount++
+			}
+		}
+	}
+
+	score := flatCount
+	dist := math.Sqrt(float64((x-cx)*(x-cx) + (z-cz)*(z-cz)))
+	if dist > 12 {
+		score -= 5
+	}
+	yDiff := int(math.Abs(float64(groundY - cy)))
+	score -= yDiff * 2
+	return score, total
+}
+
+func (s *AreaScanner) isFlatSpot(x int32, groundY int, z int32, world entity.WorldModel) bool {
+	return world.IsSolid(x, safecast.To[int32](groundY-1), z) &&
+		!world.IsSolid(x, safecast.To[int32](groundY), z) &&
+		!world.IsSolid(x, safecast.To[int32](groundY+1), z)
+}
+
+type flatAreaCand struct{ x, z int }
 
 // ScanNearbyStructures returns list of key structure blocks placed by bot or nearby.
 func (s *AreaScanner) ScanNearbyStructures() []common.StructureInfo {
