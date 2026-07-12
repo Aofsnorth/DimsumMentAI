@@ -8,6 +8,7 @@ import (
 
 	"bedrock-ai/internal/bot/building/common"
 	"bedrock-ai/internal/event"
+	"bedrock-ai/internal/safecast"
 
 	"github.com/go-gl/mathgl/mgl32"
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
@@ -125,11 +126,11 @@ func (ba *BuilderAgent) executeUndoLoop(ctx context.Context, count int) {
 		dist := float32(math.Sqrt(float64(dx*dx + dy*dy + dz*dz)))
 
 		if dist > 4.5 {
-			ba.bot.NavigateToBlock(int32(entry.X), int32(entry.Y), int32(entry.Z), 3.0)
+			ba.bot.NavigateToBlock(safecast.To[int32](entry.X), safecast.To[int32](entry.Y), safecast.To[int32](entry.Z), 3.0)
 			time.Sleep(300 * time.Millisecond)
 		}
 
-		pos := protocol.BlockPos{int32(entry.X), int32(entry.Y), int32(entry.Z)}
+		pos := protocol.BlockPos{safecast.To[int32](entry.X), safecast.To[int32](entry.Y), safecast.To[int32](entry.Z)}
 		ba.bot.LookAt(mgl32.Vec3{float32(entry.X) + 0.5, float32(entry.Y) + 0.5, float32(entry.Z) + 0.5})
 		time.Sleep(100 * time.Millisecond)
 
@@ -157,7 +158,7 @@ func (ba *BuilderAgent) executeUndoLoop(ctx context.Context, count int) {
 			BlockFace:       1,
 		})
 
-		ba.bot.GetLocalWorldModel().SetSolid(int32(entry.X), int32(entry.Y), int32(entry.Z), false)
+		ba.bot.GetLocalWorldModel().SetSolid(safecast.To[int32](entry.X), safecast.To[int32](entry.Y), safecast.To[int32](entry.Z), false)
 		time.Sleep(150 * time.Millisecond)
 	}
 	ba.bot.ReportActionStatus("", event.ActionStatus{Action: "undo", Success: true})

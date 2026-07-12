@@ -11,6 +11,7 @@ import (
 	"bedrock-ai/internal/bot/inventory/crafting"
 	"bedrock-ai/internal/bot/inventory/furnace"
 	"bedrock-ai/internal/event"
+	"bedrock-ai/internal/safecast"
 
 	"github.com/go-gl/mathgl/mgl32"
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
@@ -151,7 +152,7 @@ func (im *InventoryManager) Eat(foodName string) error {
 			ActionType:      protocol.UseItemActionClickBlock, // standard use item on self
 			BlockPosition:   protocol.BlockPos{0, -1, 0},
 			BlockFace:       255, // special face indicating self
-			HotBarSlot:      int32(im.bot.GetHeldItemSlot()),
+			HotBarSlot:      safecast.To[int32](im.bot.GetHeldItemSlot()),
 			HeldItem:        protocol.ItemInstance{Stack: item},
 			Position:        im.bot.GetCoords(),
 			ClickedPosition: mgl32.Vec3{0, 0, 0},

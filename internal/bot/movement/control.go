@@ -2,8 +2,10 @@ package movement
 
 import (
 	"math"
-	"math/rand"
 	"time"
+
+	"bedrock-ai/internal/bot/rand"
+	"bedrock-ai/internal/safecast"
 
 	"github.com/go-gl/mathgl/mgl32"
 )
@@ -415,12 +417,12 @@ func (tc *TickContext) randomIdleBlock(maxDist int32) (mgl32.Vec3, bool) {
 	feetZ := int32(math.Floor(float64(tc.CurrPos.Z())))
 
 	for attempt := 0; attempt < 36; attempt++ {
-		dx := int32(rand.Intn(int(maxDist*2+1))) - maxDist
-		dz := int32(rand.Intn(int(maxDist*2+1))) - maxDist
+		dx := safecast.To[int32](rand.Intn(int(maxDist*2+1))) - maxDist
+		dz := safecast.To[int32](rand.Intn(int(maxDist*2+1))) - maxDist
 		if dx*dx+dz*dz < 4 {
 			continue
 		}
-		dy := int32(rand.Intn(5)) - 1
+		dy := safecast.To[int32](rand.Intn(5)) - 1
 		x, y, z := feetX+dx, feetY+dy, feetZ+dz
 		if tc.B.WorldModel.IsSolid(x, y, z) &&
 			!tc.B.WorldModel.IsHazard(x, y, z) &&

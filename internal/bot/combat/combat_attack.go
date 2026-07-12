@@ -2,6 +2,7 @@ package combat
 
 import (
 	"bedrock-ai/internal/event"
+	"bedrock-ai/internal/safecast"
 	"context"
 	"math"
 	"strings"
@@ -100,7 +101,7 @@ func (cm *CombatManager) attack(targetID uint64, targetPos mgl32.Vec3) {
 		TransactionData: &protocol.UseItemOnEntityTransactionData{
 			TargetEntityRuntimeID: targetID,
 			ActionType:            1,
-			HotBarSlot:            int32(slot),
+			HotBarSlot:            safecast.To[int32](slot),
 			HeldItem:              rawItem,
 			Position:              cm.bot.GetCoords(),
 			ClickedPosition:       mgl32.Vec3{0, 0, 0},

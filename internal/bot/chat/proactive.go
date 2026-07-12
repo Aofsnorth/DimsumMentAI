@@ -4,13 +4,13 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"math/rand"
 	"strings"
 	"time"
 
 	"bedrock-ai/internal/ai"
 	"bedrock-ai/internal/bot"
 	"bedrock-ai/internal/bot/action"
+	"bedrock-ai/internal/bot/rand"
 )
 
 // StartProactiveLoop launches a background goroutine that periodically gives

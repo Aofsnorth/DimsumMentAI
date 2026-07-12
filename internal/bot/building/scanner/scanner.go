@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"bedrock-ai/internal/bot/building/common"
+	"bedrock-ai/internal/safecast"
 )
 
 // AreaScanner provides functionality to find suitable building locations and level terrain.
@@ -64,7 +65,7 @@ func (s *AreaScanner) FindFlatArea(cx, cy, cz, requiredSize int) (int, int, int)
 
 		for dy := 3; dy >= -5; dy-- {
 			ty := cy + dy
-			if world.IsSolid(int32(c.x), int32(ty), int32(c.z)) {
+			if world.IsSolid(safecast.To[int32](c.x), safecast.To[int32](ty), safecast.To[int32](c.z)) {
 				groundY = ty + 1
 				foundGround = true
 				break
@@ -81,12 +82,12 @@ func (s *AreaScanner) FindFlatArea(cx, cy, cz, requiredSize int) (int, int, int)
 
 		for x := -checkSize; x <= checkSize; x++ {
 			for z := -checkSize; z <= checkSize; z++ {
-				tx := int32(c.x + x)
-				tz := int32(c.z + z)
+				tx := safecast.To[int32](c.x + x)
+				tz := safecast.To[int32](c.z + z)
 
-				isGroundSolid := world.IsSolid(tx, int32(groundY-1), tz)
-				isAbove1Empty := !world.IsSolid(tx, int32(groundY), tz)
-				isAbove2Empty := !world.IsSolid(tx, int32(groundY+1), tz)
+				isGroundSolid := world.IsSolid(tx, safecast.To[int32](groundY-1), tz)
+				isAbove1Empty := !world.IsSolid(tx, safecast.To[int32](groundY), tz)
+				isAbove2Empty := !world.IsSolid(tx, safecast.To[int32](groundY+1), tz)
 
 				if isGroundSolid && isAbove1Empty && isAbove2Empty {
 					flatCount++

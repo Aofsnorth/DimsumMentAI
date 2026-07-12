@@ -8,6 +8,7 @@ import (
 
 	"bedrock-ai/internal/bot"
 	"bedrock-ai/internal/event"
+	"bedrock-ai/internal/safecast"
 
 	"github.com/go-gl/mathgl/mgl32"
 )
@@ -245,7 +246,7 @@ func Execute(b *bot.Bot, label string, param string, user string) {
 		}()
 
 	case "hoe":
-		radius := int32(parseCount(param, 5))
+		radius := safecast.To[int32](parseCount(param, 5))
 		go func() {
 			hoed := b.Farmer.HoeGround(context.Background(), radius)
 			b.Logger.Debug("hoe complete", "count", hoed)

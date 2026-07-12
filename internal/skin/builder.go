@@ -1,6 +1,7 @@
 package skin
 
 import (
+	"bedrock-ai/internal/safecast"
 	_ "embed"
 
 	"encoding/json"
@@ -60,8 +61,8 @@ func BuildAssets(img *ImageData, geometryName string, armSize string, geometryDa
 		SkinID:                    skinID,
 		PlayFabID:                 "",
 		SkinData:                  img.RGBA,
-		SkinImageWidth:            uint32(img.Width),
-		SkinImageHeight:           uint32(img.Height),
+		SkinImageWidth:            safecast.To[uint32](img.Width),
+		SkinImageHeight:           safecast.To[uint32](img.Height),
 		SkinResourcePatch:         patchJSON,
 		SkinGeometry:              geometryData,
 		GeometryDataEngineVersion: []byte("1.12.0"),

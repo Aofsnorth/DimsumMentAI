@@ -10,6 +10,7 @@ import (
 
 	"bedrock-ai/internal/bot/entity"
 	"bedrock-ai/internal/event"
+	"bedrock-ai/internal/safecast"
 
 	"github.com/go-gl/mathgl/mgl32"
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
@@ -252,7 +253,7 @@ func (f *Farmer) PlantSeeds(ctx context.Context, cropType string, maxCount int) 
 						ActionType:      protocol.UseItemActionClickBlock,
 						BlockPosition:   protocol.BlockPos{x, y, z},
 						BlockFace:       1,
-						HotBarSlot:      int32(seedSlot),
+						HotBarSlot:      safecast.To[int32](seedSlot),
 						HeldItem:        protocol.ItemInstance{Stack: inv[seedSlot]},
 						Position:        f.bot.GetCoords(),
 						ClickedPosition: mgl32.Vec3{0.5, 1.0, 0.5},
@@ -348,7 +349,7 @@ func (f *Farmer) HoeGround(ctx context.Context, radius int32) int {
 						ActionType:      protocol.UseItemActionClickBlock,
 						BlockPosition:   protocol.BlockPos{x, y, z},
 						BlockFace:       1,
-						HotBarSlot:      int32(hoeSlot),
+						HotBarSlot:      safecast.To[int32](hoeSlot),
 						HeldItem:        protocol.ItemInstance{Stack: inv[hoeSlot]},
 						Position:        f.bot.GetCoords(),
 						ClickedPosition: mgl32.Vec3{0.5, 1.0, 0.5},
@@ -421,7 +422,7 @@ func (f *Farmer) breakBlock(pos protocol.BlockPos) {
 			ActionType:      protocol.UseItemActionBreakBlock,
 			BlockPosition:   pos,
 			BlockFace:       1,
-			HotBarSlot:      int32(f.bot.GetHeldItemSlot()),
+			HotBarSlot:      safecast.To[int32](f.bot.GetHeldItemSlot()),
 			HeldItem:        protocol.ItemInstance{},
 			Position:        f.bot.GetCoords(),
 			ClickedPosition: mgl32.Vec3{0.5, 0.5, 0.5},

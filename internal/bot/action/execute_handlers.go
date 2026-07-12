@@ -9,6 +9,7 @@ import (
 
 	"bedrock-ai/internal/bot"
 	"bedrock-ai/internal/event"
+	"bedrock-ai/internal/safecast"
 
 	"github.com/go-gl/mathgl/mgl32"
 )
@@ -176,7 +177,7 @@ func handleTake(b *bot.Bot, param, user string) {
 		if len(parts) >= 2 {
 			var parsed int
 			if _, err := fmt.Sscanf(parts[1], "%d", &parsed); err == nil {
-				count = int32(parsed)
+				count = safecast.To[int32](parsed)
 			}
 		}
 		success := b.InventoryMgr.Chest().GiveItem(context.Background(), itemName, user, count)
@@ -195,7 +196,7 @@ func handleGive(b *bot.Bot, param, user string) {
 		if len(parts) >= 2 {
 			var parsed int
 			if _, err := fmt.Sscanf(parts[1], "%d", &parsed); err == nil {
-				count = int32(parsed)
+				count = safecast.To[int32](parsed)
 			}
 		}
 		success := b.InventoryMgr.Chest().GiveItem(context.Background(), itemName, user, count)

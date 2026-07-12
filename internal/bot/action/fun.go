@@ -4,11 +4,11 @@ import (
 	"context"
 	"fmt"
 	"math"
-	"math/rand"
 	"strings"
 	"time"
 
 	"bedrock-ai/internal/bot"
+	"bedrock-ai/internal/bot/rand"
 
 	"github.com/go-gl/mathgl/mgl32"
 )

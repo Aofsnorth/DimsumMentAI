@@ -1,6 +1,7 @@
 package combat
 
 import (
+	"bedrock-ai/internal/safecast"
 	"strings"
 	"time"
 
@@ -49,7 +50,7 @@ func (cm *CombatManager) RaiseShield() bool {
 			ActionType:      protocol.UseItemActionClickBlock,
 			BlockPosition:   protocol.BlockPos{0, -1, 0},
 			BlockFace:       255, // self-use (blocking)
-			HotBarSlot:      int32(shieldSlot),
+			HotBarSlot:      safecast.To[int32](shieldSlot),
 			HeldItem:        protocol.ItemInstance{Stack: inv[shieldSlot]},
 			Position:        cm.bot.GetCoords(),
 			ClickedPosition: mgl32.Vec3{0, 0, 0},
@@ -162,7 +163,7 @@ func (cm *CombatManager) BowAttack(targetID uint64) bool {
 			ActionType:      protocol.UseItemActionClickBlock,
 			BlockPosition:   protocol.BlockPos{0, -1, 0},
 			BlockFace:       255,
-			HotBarSlot:      int32(bowSlot),
+			HotBarSlot:      safecast.To[int32](bowSlot),
 			HeldItem:        protocol.ItemInstance{Stack: inv[bowSlot]},
 			Position:        cm.bot.GetCoords(),
 			ClickedPosition: mgl32.Vec3{0, 0, 0},
@@ -224,7 +225,7 @@ func (cm *CombatManager) CrossbowAttack(targetID uint64) bool {
 			ActionType:      protocol.UseItemActionClickBlock,
 			BlockPosition:   protocol.BlockPos{0, -1, 0},
 			BlockFace:       255,
-			HotBarSlot:      int32(crossbowSlot),
+			HotBarSlot:      safecast.To[int32](crossbowSlot),
 			HeldItem:        protocol.ItemInstance{Stack: inv[crossbowSlot]},
 			Position:        cm.bot.GetCoords(),
 			ClickedPosition: mgl32.Vec3{0, 0, 0},

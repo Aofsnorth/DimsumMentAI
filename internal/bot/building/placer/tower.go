@@ -7,6 +7,7 @@ import (
 
 	"bedrock-ai/internal/bot/building/schematic"
 	"bedrock-ai/internal/event"
+	"bedrock-ai/internal/safecast"
 
 	"github.com/go-gl/mathgl/mgl32"
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
@@ -41,8 +42,8 @@ func (bp *BlockPlacer) TowerUp(ctx context.Context, targetY int) bool {
 		bz := int32(math.Floor(float64(botPos.Z())))
 		world := bp.bot.GetLocalWorldModel()
 
-		if world.IsSolid(bx, int32(by+2), bz) {
-			bp.digBlock(ctx, protocol.BlockPos{bx, int32(by + 2), bz})
+		if world.IsSolid(bx, safecast.To[int32](by+2), bz) {
+			bp.digBlock(ctx, protocol.BlockPos{bx, safecast.To[int32](by + 2), bz})
 		}
 
 		bp.bot.LookAt(mgl32.Vec3{botPos.X(), botPos.Y() - 1.0, botPos.Z()})
@@ -55,20 +56,20 @@ func (bp *BlockPlacer) TowerUp(ctx context.Context, targetY int) bool {
 
 		botPos = mgl32.Vec3{botPos.X(), botPos.Y() + 1.1, botPos.Z()}
 
-		scaffPos := protocol.BlockPos{bx, int32(by), bz}
+		scaffPos := protocol.BlockPos{bx, safecast.To[int32](by), bz}
 		tx := &packet.InventoryTransaction{
 			TransactionData: &protocol.UseItemTransactionData{
 				ActionType:      protocol.UseItemActionClickBlock,
-				BlockPosition:   protocol.BlockPos{bx, int32(by - 1), bz},
+				BlockPosition:   protocol.BlockPos{bx, safecast.To[int32](by - 1), bz},
 				BlockFace:       1,
-				HotBarSlot:      int32(bp.bot.GetHeldItemSlot()),
+				HotBarSlot:      safecast.To[int32](bp.bot.GetHeldItemSlot()),
 				HeldItem:        protocol.ItemInstance{Stack: inv[scaffSlot]},
 				Position:        botPos,
 				ClickedPosition: mgl32.Vec3{0.5, 1.0, 0.5},
 			},
 		}
 		_ = bp.bot.WritePacket(tx)
-		world.SetSolid(bx, int32(by), bz, true)
+		world.SetSolid(bx, safecast.To[int32](by), bz, true)
 		bp.ScaffoldHistory = append(bp.ScaffoldHistory, scaffPos)
 
 		time.Sleep(250 * time.Millisecond)
@@ -94,10 +95,10 @@ func (bp *BlockPlacer) DescendTo(ctx context.Context, targetY int) bool {
 		default:
 		}
 
-		feetPos := protocol.BlockPos{bx, int32(by - 1), bz}
-		if world.IsSolid(bx, int32(by-1), bz) {
+		feetPos := protocol.BlockPos{bx, safecast.To[int32](by - 1), bz}
+		if world.IsSolid(bx, safecast.To[int32](by-1), bz) {
 			bp.digBlock(ctx, feetPos)
-			world.SetSolid(bx, int32(by-1), bz, false)
+			world.SetSolid(bx, safecast.To[int32](by-1), bz, false)
 		}
 
 		time.Sleep(300 * time.Millisecond)

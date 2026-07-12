@@ -1,6 +1,7 @@
 package pathfinder
 
 import (
+	"bedrock-ai/internal/safecast"
 	"container/heap"
 )
 
@@ -34,10 +35,10 @@ func (pq *PriorityQueue) Pop() interface{} {
 // eliminates GC pressure from string allocations during pathfinding.
 // Coordinate range: x/z ±2,097,151 (21 bits), y -2048..+2047 (12 bits).
 func packKey(x, y, z int32) int64 {
-	ux := uint64(x) & 0x1FFFFF
-	uy := uint64(y) & 0xFFF
-	uz := uint64(z) & 0x1FFFFF
-	return int64(ux<<33 | uy<<21 | uz)
+	ux := safecast.To[uint64](x) & 0x1FFFFF
+	uy := safecast.To[uint64](y) & 0xFFF
+	uz := safecast.To[uint64](z) & 0x1FFFFF
+	return safecast.To[int64](ux<<33 | uy<<21 | uz)
 }
 
 // FindPath executes the A* algorithm in 3D grid space using the provided world walkability rules

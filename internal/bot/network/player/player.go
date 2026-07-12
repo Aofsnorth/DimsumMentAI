@@ -5,6 +5,7 @@ import (
 
 	"bedrock-ai/internal/bot"
 	"bedrock-ai/internal/bot/entity"
+	"bedrock-ai/internal/safecast"
 
 	"github.com/go-gl/mathgl/mgl32"
 	"github.com/sandertv/gophertunnel/minecraft/protocol/packet"
@@ -130,7 +131,7 @@ func HandlePlayerPacket(b *bot.Bot, pk packet.Packet) bool {
 			delete(b.Actors, runtimeID)
 			delete(b.UniqueIDToRuntimeID, p.EntityUniqueID)
 		}
-		id := uint64(p.EntityUniqueID)
+		id := safecast.To[uint64](p.EntityUniqueID)
 		if username, ok := b.PlayerUsernames[id]; ok {
 			delete(b.PlayerEntityIDs, username)
 			delete(b.PlayerUsernames, id)

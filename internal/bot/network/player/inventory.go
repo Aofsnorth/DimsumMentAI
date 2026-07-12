@@ -5,6 +5,7 @@ import (
 	"log/slog"
 
 	"bedrock-ai/internal/bot"
+	"bedrock-ai/internal/safecast"
 
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
 	"github.com/sandertv/gophertunnel/minecraft/protocol/packet"
@@ -153,7 +154,7 @@ func applyInventoryContent(b *bot.Bot, p *packet.InventoryContent) {
 	}
 
 	for i, item := range p.Content {
-		globalSlot := offset + uint32(i)
+		globalSlot := offset + safecast.To[uint32](i)
 		if item.Stack.Count > 0 && item.Stack.NetworkID != 0 {
 			b.InventoryMap[globalSlot] = item.Stack
 			if item.StackNetworkID != 0 {

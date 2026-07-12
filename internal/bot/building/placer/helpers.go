@@ -1,6 +1,7 @@
 package placer
 
 import (
+	"bedrock-ai/internal/safecast"
 	"context"
 	"strings"
 	"time"
@@ -12,12 +13,12 @@ import (
 
 func (bp *BlockPlacer) clearObstructions(ctx context.Context, x, y, z int) {
 	world := bp.bot.GetLocalWorldModel()
-	pos := protocol.BlockPos{int32(x), int32(y), int32(z)}
+	pos := protocol.BlockPos{safecast.To[int32](x), safecast.To[int32](y), safecast.To[int32](z)}
 
-	if world.IsSolid(int32(x), int32(y), int32(z)) {
+	if world.IsSolid(safecast.To[int32](x), safecast.To[int32](y), safecast.To[int32](z)) {
 		bp.logger.Info("Clearing block obstruction at placement site", "x", x, "y", y, "z", z)
 		bp.digBlock(ctx, pos)
-		world.SetSolid(int32(x), int32(y), int32(z), false)
+		world.SetSolid(safecast.To[int32](x), safecast.To[int32](y), safecast.To[int32](z), false)
 	}
 }
 
@@ -85,7 +86,7 @@ func (bp *BlockPlacer) placeSpecialBlock(ctx context.Context, x, y, z int, name 
 	_ = bp.bot.EquipItem(toolSlot)
 	time.Sleep(150 * time.Millisecond)
 
-	targetPos := protocol.BlockPos{int32(x), int32(y - 1), int32(z)}
+	targetPos := protocol.BlockPos{safecast.To[int32](x), safecast.To[int32](y - 1), safecast.To[int32](z)}
 	bp.lookAtBlock(targetPos)
 	time.Sleep(100 * time.Millisecond)
 
@@ -94,7 +95,7 @@ func (bp *BlockPlacer) placeSpecialBlock(ctx context.Context, x, y, z int, name 
 			ActionType:      protocol.UseItemActionClickBlock,
 			BlockPosition:   targetPos,
 			BlockFace:       1,
-			HotBarSlot:      int32(bp.bot.GetHeldItemSlot()),
+			HotBarSlot:      safecast.To[int32](bp.bot.GetHeldItemSlot()),
 			HeldItem:        protocol.ItemInstance{Stack: inv[toolSlot]},
 			Position:        bp.bot.GetCoords(),
 			ClickedPosition: mgl32.Vec3{0.5, 1.0, 0.5},
@@ -103,7 +104,7 @@ func (bp *BlockPlacer) placeSpecialBlock(ctx context.Context, x, y, z int, name 
 	_ = bp.bot.WritePacket(tx)
 	time.Sleep(200 * time.Millisecond)
 
-	bp.bot.GetLocalWorldModel().SetSolid(int32(x), int32(y), int32(z), true)
+	bp.bot.GetLocalWorldModel().SetSolid(safecast.To[int32](x), safecast.To[int32](y), safecast.To[int32](z), true)
 	return true
 }
 
@@ -122,9 +123,9 @@ func (bp *BlockPlacer) findSupportFace(x, y, z int) (protocol.BlockPos, int32) {
 	}
 
 	for _, f := range faces {
-		adjX := int32(x) + f.offset.X()
-		adjY := int32(y) + f.offset.Y()
-		adjZ := int32(z) + f.offset.Z()
+		adjX := safecast.To[int32](x) + f.offset.X()
+		adjY := safecast.To[int32](y) + f.offset.Y()
+		adjZ := safecast.To[int32](z) + f.offset.Z()
 
 		if world.IsSolid(adjX, adjY, adjZ) {
 			return protocol.BlockPos{adjX, adjY, adjZ}, f.face

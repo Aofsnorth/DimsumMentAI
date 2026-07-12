@@ -10,6 +10,7 @@ import (
 
 	"bedrock-ai/internal/bot/entity"
 	"bedrock-ai/internal/event"
+	"bedrock-ai/internal/safecast"
 
 	"github.com/go-gl/mathgl/mgl32"
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
@@ -199,7 +200,7 @@ func (f *Fisher) castLine(rodSlot uint32) {
 			ActionType:      protocol.UseItemActionClickBlock,
 			BlockPosition:   protocol.BlockPos{0, -1, 0},
 			BlockFace:       255,
-			HotBarSlot:      int32(rodSlot),
+			HotBarSlot:      safecast.To[int32](rodSlot),
 			HeldItem:        protocol.ItemInstance{Stack: item},
 			Position:        f.bot.GetCoords(),
 			ClickedPosition: mgl32.Vec3{0, 0, 0},
@@ -225,7 +226,7 @@ func (f *Fisher) reelIn(rodSlot uint32) {
 			ActionType:      protocol.UseItemActionClickBlock,
 			BlockPosition:   protocol.BlockPos{0, -1, 0},
 			BlockFace:       255,
-			HotBarSlot:      int32(rodSlot),
+			HotBarSlot:      safecast.To[int32](rodSlot),
 			HeldItem:        protocol.ItemInstance{Stack: item},
 			Position:        f.bot.GetCoords(),
 			ClickedPosition: mgl32.Vec3{0, 0, 0},

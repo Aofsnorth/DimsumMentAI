@@ -1,6 +1,7 @@
 package world
 
 import (
+	"bedrock-ai/internal/safecast"
 	"bytes"
 
 	"github.com/df-mc/dragonfly/server/world/chunk"
@@ -76,7 +77,7 @@ func (p *palettedResult) runtimeIDAt(x, y, z byte) uint32 {
 		return 0
 	}
 	uint32Offset := offset / filledBits
-	bitOffset := uint(offset % filledBits)
+	bitOffset := safecast.To[uint](offset % filledBits)
 	mask := uint32((1 << p.bitsPerBlock) - 1)
 
 	if uint32Offset >= len(p.blocks) {
@@ -141,7 +142,7 @@ func (wc *WorldCache) decodeNetworkPalettedStorage(buf *bytes.Buffer) (*paletted
 		if err != nil {
 			return nil, err
 		}
-		palette[i] = wc.TranslateRuntimeID(uint32(v))
+		palette[i] = wc.TranslateRuntimeID(safecast.To[uint32](v))
 	}
 
 	return &palettedResult{

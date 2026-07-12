@@ -1,6 +1,7 @@
 package world
 
 import (
+	"bedrock-ai/internal/safecast"
 	"bytes"
 	"context"
 	"fmt"
@@ -143,7 +144,7 @@ func applyStorageToChunk(c *chunk.Chunk, airRID uint32, r cube.Range, subY int32
 		for ly := byte(0); ly < 16; ly++ {
 			for lz := byte(0); lz < 16; lz++ {
 				rid := primary.runtimeIDAt(lx, ly, lz)
-				worldY := int16(baseWorldY + int32(ly))
+				worldY := safecast.To[int16](baseWorldY + int32(ly))
 				if int(worldY) < r.Min() || int(worldY) > r.Max() {
 					continue
 				}

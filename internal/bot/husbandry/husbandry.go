@@ -10,6 +10,7 @@ import (
 
 	"bedrock-ai/internal/bot/entity"
 	"bedrock-ai/internal/event"
+	"bedrock-ai/internal/safecast"
 
 	"github.com/go-gl/mathgl/mgl32"
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
@@ -215,7 +216,7 @@ func (m *Manager) BreedAnimals(ctx context.Context, animalType string) bool {
 			TransactionData: &protocol.UseItemOnEntityTransactionData{
 				TargetEntityRuntimeID: target.ID,
 				ActionType:            0, // interact
-				HotBarSlot:            int32(foodSlot),
+				HotBarSlot:            safecast.To[int32](foodSlot),
 				HeldItem:              protocol.ItemInstance{Stack: inv[foodSlot]},
 				Position:              m.bot.GetCoords(),
 				ClickedPosition:       mgl32.Vec3{0, 0, 0},
@@ -323,7 +324,7 @@ func (m *Manager) FeedAnimal(ctx context.Context, animalType string) bool {
 		TransactionData: &protocol.UseItemOnEntityTransactionData{
 			TargetEntityRuntimeID: closest.ID,
 			ActionType:            0,
-			HotBarSlot:            int32(foodSlot),
+			HotBarSlot:            safecast.To[int32](foodSlot),
 			HeldItem:              protocol.ItemInstance{Stack: inv[foodSlot]},
 			Position:              m.bot.GetCoords(),
 			ClickedPosition:       mgl32.Vec3{0, 0, 0},
@@ -421,7 +422,7 @@ func (m *Manager) MilkCow(ctx context.Context) bool {
 		TransactionData: &protocol.UseItemOnEntityTransactionData{
 			TargetEntityRuntimeID: cow.ID,
 			ActionType:            0,
-			HotBarSlot:            int32(bucketSlot),
+			HotBarSlot:            safecast.To[int32](bucketSlot),
 			HeldItem:              protocol.ItemInstance{Stack: inv[bucketSlot]},
 			Position:              m.bot.GetCoords(),
 			ClickedPosition:       mgl32.Vec3{0, 0, 0},
@@ -511,7 +512,7 @@ func (m *Manager) ShearSheep(ctx context.Context) bool {
 		TransactionData: &protocol.UseItemOnEntityTransactionData{
 			TargetEntityRuntimeID: sheep.ID,
 			ActionType:            0,
-			HotBarSlot:            int32(shearsSlot),
+			HotBarSlot:            safecast.To[int32](shearsSlot),
 			HeldItem:              protocol.ItemInstance{Stack: inv[shearsSlot]},
 			Position:              m.bot.GetCoords(),
 			ClickedPosition:       mgl32.Vec3{0, 0, 0},
@@ -618,7 +619,7 @@ func (m *Manager) tameWithItem(ctx context.Context, animalType, itemName, action
 			TransactionData: &protocol.UseItemOnEntityTransactionData{
 				TargetEntityRuntimeID: target.ID,
 				ActionType:            0,
-				HotBarSlot:            int32(itemSlot),
+				HotBarSlot:            safecast.To[int32](itemSlot),
 				HeldItem:              protocol.ItemInstance{Stack: inv[itemSlot]},
 				Position:              m.bot.GetCoords(),
 				ClickedPosition:       mgl32.Vec3{0, 0, 0},

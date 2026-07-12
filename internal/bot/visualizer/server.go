@@ -12,6 +12,7 @@ import (
 	"bedrock-ai/internal/bot"
 	"bedrock-ai/internal/bot/movement"
 	"bedrock-ai/internal/bot/pathfinder"
+	"bedrock-ai/internal/safecast"
 
 	"github.com/go-gl/mathgl/mgl32"
 	"github.com/gorilla/websocket"
@@ -204,9 +205,9 @@ func (s *Server) buildState(includeBlocks bool) statePayload {
 
 func (s *Server) collectBlocks(cx, cy, cz int32, radius int) []BlockData {
 	var blocks []BlockData
-	for x := cx - int32(radius); x <= cx+int32(radius); x++ {
-		for y := cy - int32(radius/2); y <= cy+int32(radius/2); y++ {
-			for z := cz - int32(radius); z <= cz+int32(radius); z++ {
+	for x := cx - safecast.To[int32](radius); x <= cx+safecast.To[int32](radius); x++ {
+		for y := cy - safecast.To[int32](radius/2); y <= cy+safecast.To[int32](radius/2); y++ {
+			for z := cz - safecast.To[int32](radius); z <= cz+safecast.To[int32](radius); z++ {
 				solid := false
 				if s.b.WorldCache != nil {
 					if isSolid, loaded := s.b.WorldCache.IsBlockSolid(x, y, z); loaded {

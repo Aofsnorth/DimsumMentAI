@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"bedrock-ai/internal/ai"
+	"bedrock-ai/internal/safecast"
 
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
 	"github.com/sandertv/gophertunnel/minecraft/protocol/packet"
@@ -43,9 +44,9 @@ func (b *Bot) DropItem(name string, count int) error {
 
 	// Create dropped item transaction
 	dropItem := foundItem
-	dropItem.Count = uint16(count)
+	dropItem.Count = safecast.To[uint16](count)
 
-	remaining := foundItem.Count - uint16(count)
+	remaining := foundItem.Count - safecast.To[uint16](count)
 	var newSlotItem protocol.ItemInstance
 	if remaining > 0 {
 		newSlotItem = protocol.ItemInstance{

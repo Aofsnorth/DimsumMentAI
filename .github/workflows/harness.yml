@@ -26,8 +26,11 @@ concurrency:
   group: harness-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 env:
-  GO_VERSION: "1.26"
+  GO_VERSION: "1.26.5"
   GOFLAGS: "-count=1"
   COVERAGE_MIN: "0"
 
@@ -38,6 +41,7 @@ jobs:
   guides:
     name: Guides (fmt, vet, lint)
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
 
@@ -70,7 +74,7 @@ jobs:
       - name: Install golangci-lint
         uses: golangci/golangci-lint-action@v6
         with:
-          version: latest
+          version: v1.64.8
           args: --timeout 5m
 
   # ---------------------------------------------------------------------------
@@ -79,6 +83,7 @@ jobs:
   sensors:
     name: Sensors (test, arch, race, cover)
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
@@ -89,7 +94,15 @@ jobs:
           cache: true
 
       - name: Download dependencies
-        run: go mod download
+        run: |
+          go mod download
+          go mod verify
+
+      # --- Computational sensor: vulnerability scan ---
+      - name: Run govulncheck
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          govulncheck ./...
 
       # --- Computational sensor: build ---
       - name: Build all packages

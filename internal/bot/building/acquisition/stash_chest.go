@@ -8,6 +8,7 @@ import (
 
 	"bedrock-ai/internal/bot/building/common"
 	"bedrock-ai/internal/event"
+	"bedrock-ai/internal/safecast"
 
 	"github.com/go-gl/mathgl/mgl32"
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
@@ -32,9 +33,9 @@ func (ia *InventoryAcquisition) placeAndStash(ctx context.Context, inv map[uint3
 	placed := false
 
 	for _, o := range offsets {
-		tx := int32(buildSpot.X + o.X)
-		ty := int32(buildSpot.Y + o.Y)
-		tz := int32(buildSpot.Z + o.Z)
+		tx := safecast.To[int32](buildSpot.X + o.X)
+		ty := safecast.To[int32](buildSpot.Y + o.Y)
+		tz := safecast.To[int32](buildSpot.Z + o.Z)
 
 		if !world.IsSolid(tx, ty, tz) && world.IsSolid(tx, ty-1, tz) {
 			targetPos = protocol.BlockPos{tx, ty, tz}
@@ -62,7 +63,7 @@ func (ia *InventoryAcquisition) placeAndStash(ctx context.Context, inv map[uint3
 			ActionType:      protocol.UseItemActionClickBlock,
 			BlockPosition:   protocol.BlockPos{targetPos.X(), targetPos.Y() - 1, targetPos.Z()},
 			BlockFace:       1,
-			HotBarSlot:      int32(ia.bot.GetHeldItemSlot()),
+			HotBarSlot:      safecast.To[int32](ia.bot.GetHeldItemSlot()),
 			HeldItem:        protocol.ItemInstance{Stack: chestStack},
 			Position:        ia.bot.GetCoords(),
 			ClickedPosition: mgl32.Vec3{0.5, 1.0, 0.5},

@@ -11,6 +11,7 @@ import (
 	"github.com/sandertv/gophertunnel/minecraft/protocol/packet"
 
 	"bedrock-ai/internal/event"
+	"bedrock-ai/internal/safecast"
 )
 
 // ===================== BED SLEEPING =====================
@@ -79,7 +80,7 @@ func (m *Manager) SleepInBed(ctx context.Context) bool {
 			ActionType:      protocol.UseItemActionClickBlock,
 			BlockPosition:   bedPos,
 			BlockFace:       1,
-			HotBarSlot:      int32(m.bot.GetHeldItemSlot()),
+			HotBarSlot:      safecast.To[int32](m.bot.GetHeldItemSlot()),
 			HeldItem:        protocol.ItemInstance{},
 			Position:        m.bot.GetCoords(),
 			ClickedPosition: mgl32.Vec3{0.5, 0.5, 0.5},
@@ -137,7 +138,7 @@ func (m *Manager) PlaceTorch(ctx context.Context, pos protocol.BlockPos) bool {
 			ActionType:      protocol.UseItemActionClickBlock,
 			BlockPosition:   supportPos,
 			BlockFace:       1, // top face
-			HotBarSlot:      int32(torchSlot),
+			HotBarSlot:      safecast.To[int32](torchSlot),
 			HeldItem:        protocol.ItemInstance{Stack: inv[torchSlot]},
 			Position:        m.bot.GetCoords(),
 			ClickedPosition: mgl32.Vec3{0.5, 1.0, 0.5},
@@ -281,7 +282,7 @@ func (m *Manager) BuildEmergencyShelter(ctx context.Context) bool {
 				ActionType:      protocol.UseItemActionClickBlock,
 				BlockPosition:   supportPos,
 				BlockFace:       1,
-				HotBarSlot:      int32(buildSlot),
+				HotBarSlot:      safecast.To[int32](buildSlot),
 				HeldItem:        protocol.ItemInstance{Stack: inv[buildSlot]},
 				Position:        m.bot.GetCoords(),
 				ClickedPosition: mgl32.Vec3{0.5, 1.0, 0.5},

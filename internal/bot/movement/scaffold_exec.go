@@ -9,6 +9,7 @@ import (
 	"bedrock-ai/internal/bot"
 	"bedrock-ai/internal/bot/pathfinder"
 	"bedrock-ai/internal/event"
+	"bedrock-ai/internal/safecast"
 
 	"github.com/go-gl/mathgl/mgl32"
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
@@ -165,7 +166,7 @@ func placeScaffoldBlock(b *bot.Bot, refPos protocol.BlockPos, isTower bool) {
 			ActionType:      protocol.UseItemActionClickBlock,
 			BlockPosition:   refPos,
 			BlockFace:       1,
-			HotBarSlot:      int32(heldSlot),
+			HotBarSlot:      safecast.To[int32](heldSlot),
 			HeldItem:        protocol.ItemInstance{Stack: item},
 			Position:        curPos,
 			ClickedPosition: mgl32.Vec3{0.5, 1.0, 0.5},

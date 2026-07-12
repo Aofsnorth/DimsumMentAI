@@ -6,6 +6,7 @@ import (
 
 	"bedrock-ai/internal/bot"
 	"bedrock-ai/internal/debuglog"
+	"bedrock-ai/internal/safecast"
 
 	"github.com/go-gl/mathgl/mgl32"
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
@@ -65,7 +66,7 @@ func HandleWorldPacket(b *bot.Bot, pk packet.Packet) bool {
 
 			var offsets []protocol.SubChunkOffset
 			for y := int32(-4); y <= highestY; y++ {
-				offsets = append(offsets, protocol.SubChunkOffset{0, int8(y), 0})
+				offsets = append(offsets, protocol.SubChunkOffset{0, safecast.To[int8](y), 0})
 			}
 
 			_ = b.Conn.WritePacket(&packet.SubChunkRequest{

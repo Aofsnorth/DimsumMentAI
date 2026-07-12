@@ -16,6 +16,7 @@ import (
 
 	"bedrock-ai/internal/bot/entity"
 	"bedrock-ai/internal/event"
+	"bedrock-ai/internal/safecast"
 
 	"github.com/go-gl/mathgl/mgl32"
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
@@ -136,7 +137,7 @@ func (m *Manager) OpenCraftingTable(ctx context.Context, pos protocol.BlockPos) 
 			ActionType:      protocol.UseItemActionClickBlock,
 			BlockPosition:   pos,
 			BlockFace:       1,
-			HotBarSlot:      int32(m.bot.GetHeldItemSlot()),
+			HotBarSlot:      safecast.To[int32](m.bot.GetHeldItemSlot()),
 			HeldItem:        protocol.ItemInstance{},
 			Position:        m.bot.GetCoords(),
 			ClickedPosition: mgl32.Vec3{0.5, 0.5, 0.5},
@@ -265,7 +266,7 @@ func (m *Manager) placeCraftingTable(ctx context.Context, slot uint32, place, su
 			ActionType:      protocol.UseItemActionClickBlock,
 			BlockPosition:   support,
 			BlockFace:       face,
-			HotBarSlot:      int32(m.bot.GetHeldItemSlot()),
+			HotBarSlot:      safecast.To[int32](m.bot.GetHeldItemSlot()),
 			HeldItem:        protocol.ItemInstance{Stack: inv[slot]},
 			Position:        m.bot.GetCoords(),
 			ClickedPosition: mgl32.Vec3{0.5, 1.0, 0.5},

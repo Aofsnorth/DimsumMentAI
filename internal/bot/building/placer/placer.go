@@ -8,6 +8,7 @@ import (
 
 	"bedrock-ai/internal/bot/building/common"
 	"bedrock-ai/internal/bot/building/schematic"
+	"bedrock-ai/internal/safecast"
 
 	"github.com/go-gl/mathgl/mgl32"
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
@@ -77,7 +78,7 @@ func (bp *BlockPlacer) PlaceBlockAt(ctx context.Context, x, y, z int, blockName 
 		scaffSlot, scaffFound := schematic.FindScaffoldForTower(inv, names)
 		if scaffFound {
 			bp.placeScaffoldScaffolding(scaffSlot, inv, x, y, z)
-			placeTarget = protocol.BlockPos{int32(x), int32(y - 1), int32(z)}
+			placeTarget = protocol.BlockPos{safecast.To[int32](x), safecast.To[int32](y - 1), safecast.To[int32](z)}
 			placeFace = 1
 
 			_ = bp.bot.EquipItem(slot)
@@ -110,7 +111,7 @@ func (bp *BlockPlacer) PlaceBlockAt(ctx context.Context, x, y, z int, blockName 
 			ActionType:      protocol.UseItemActionClickBlock,
 			BlockPosition:   placeTarget,
 			BlockFace:       placeFace,
-			HotBarSlot:      int32(bp.bot.GetHeldItemSlot()),
+			HotBarSlot:      safecast.To[int32](bp.bot.GetHeldItemSlot()),
 			HeldItem:        protocol.ItemInstance{Stack: itemStack},
 			Position:        bp.bot.GetCoords(),
 			ClickedPosition: mgl32.Vec3{0.5, 0.5, 0.5},
@@ -129,7 +130,7 @@ func (bp *BlockPlacer) PlaceBlockAt(ctx context.Context, x, y, z int, blockName 
 		})
 	}
 
-	bp.bot.GetLocalWorldModel().SetSolid(int32(x), int32(y), int32(z), true)
+	bp.bot.GetLocalWorldModel().SetSolid(safecast.To[int32](x), safecast.To[int32](y), safecast.To[int32](z), true)
 	time.Sleep(150 * time.Millisecond)
 	return true
 }

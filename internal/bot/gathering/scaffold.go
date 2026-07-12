@@ -1,6 +1,7 @@
 package gathering
 
 import (
+	"bedrock-ai/internal/safecast"
 	"context"
 	"log/slog"
 	"math"
@@ -83,7 +84,7 @@ func (s *Scaffolder) TowerUpTo(ctx context.Context, targetY float32) {
 				ActionType:      protocol.UseItemActionClickBlock,
 				BlockPosition:   refPos,
 				BlockFace:       1,
-				HotBarSlot:      int32(bot.GetHeldItemSlot()),
+				HotBarSlot:      safecast.To[int32](bot.GetHeldItemSlot()),
 				HeldItem:        protocol.ItemInstance{Stack: item},
 				Position:        curPos.Add(mgl32.Vec3{0, 1.0, 0}),
 				ClickedPosition: mgl32.Vec3{0.5, 1.0, 0.5},

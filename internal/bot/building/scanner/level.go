@@ -7,6 +7,7 @@ import (
 
 	"bedrock-ai/internal/bot/building/schematic"
 	"bedrock-ai/internal/event"
+	"bedrock-ai/internal/safecast"
 
 	"github.com/go-gl/mathgl/mgl32"
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
@@ -26,15 +27,15 @@ func (s *AreaScanner) LevelArea(ctx context.Context, cx, cy, cz, requiredSize in
 
 	for x := -clearSize; x <= clearSize; x++ {
 		for z := -clearSize; z <= clearSize; z++ {
-			tx := int32(cx + x)
-			tz := int32(cz + z)
+			tx := safecast.To[int32](cx + x)
+			tz := safecast.To[int32](cz + z)
 
-			if !world.IsSolid(tx, int32(cy-1), tz) {
-				blocksToFill = append(blocksToFill, protocol.BlockPos{tx, int32(cy - 1), tz})
+			if !world.IsSolid(tx, safecast.To[int32](cy-1), tz) {
+				blocksToFill = append(blocksToFill, protocol.BlockPos{tx, safecast.To[int32](cy - 1), tz})
 			}
 
 			for dy := 0; dy <= 4; dy++ {
-				ty := int32(cy + dy)
+				ty := safecast.To[int32](cy + dy)
 				if world.IsSolid(tx, ty, tz) {
 					blocksToClear = append(blocksToClear, protocol.BlockPos{tx, ty, tz})
 				}
@@ -180,7 +181,7 @@ func (s *AreaScanner) fillBlocksLoop(ctx context.Context, blocksToFill []protoco
 							ActionType:      protocol.UseItemActionClickBlock,
 							BlockPosition:   protocol.BlockPos{adjX, adjY, adjZ},
 							BlockFace:       f.face,
-							HotBarSlot:      int32(s.bot.GetHeldItemSlot()),
+							HotBarSlot:      safecast.To[int32](s.bot.GetHeldItemSlot()),
 							HeldItem:        protocol.ItemInstance{Stack: itemStack},
 							Position:        s.bot.GetCoords(),
 							ClickedPosition: mgl32.Vec3{0.5, 0.5, 0.5},

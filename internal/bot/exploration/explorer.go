@@ -4,11 +4,11 @@ import (
 	"context"
 	"log/slog"
 	"math"
-	"math/rand"
 	"sync"
 	"time"
 
 	"bedrock-ai/internal/bot/entity"
+	"bedrock-ai/internal/bot/rand"
 	"bedrock-ai/internal/event"
 
 	"github.com/go-gl/mathgl/mgl32"

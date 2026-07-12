@@ -105,8 +105,6 @@ linters-settings:
   gosec:
     excludes:
       - G104   # unhandled errors (errcheck covers this)
-      - G115   # integer overflow conversions (audited separately during security review)
-      - G404   # weak random number generator (non-crypto randomness is acceptable for gameplay)
     severity: medium
     confidence: medium
 

@@ -1,6 +1,7 @@
 package world
 
 import (
+	"bedrock-ai/internal/safecast"
 	"log/slog"
 	"sync"
 
@@ -114,6 +115,6 @@ func (wc *WorldCache) SetBlockRID(x, y, z int32, rid uint32) {
 		c = chunk.New(wc.airRID, wc.r)
 		wc.chunks[pos] = c
 	}
-	c.SetBlock(uint8(x&0xf), int16(y), uint8(z&0xf), 0, rid)
+	c.SetBlock(safecast.To[uint8](x&0xf), safecast.To[int16](y), safecast.To[uint8](z&0xf), 0, rid)
 	wc.mu.Unlock()
 }

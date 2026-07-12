@@ -1,6 +1,7 @@
 package world
 
 import (
+	"bedrock-ai/internal/safecast"
 	"strings"
 
 	"github.com/df-mc/dragonfly/server/block"
@@ -31,7 +32,7 @@ func (wc *WorldCache) BlockRIDAt(x, y, z int32) (uint32, bool) {
 		return wc.airRID, true
 	}
 
-	rid := wc.TranslateRuntimeID(c.Block(uint8(x&0xf), int16(y), uint8(z&0xf), 0))
+	rid := wc.TranslateRuntimeID(c.Block(safecast.To[uint8](x&0xf), safecast.To[int16](y), safecast.To[uint8](z&0xf), 0))
 	return rid, true
 }
 

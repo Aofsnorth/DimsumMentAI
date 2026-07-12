@@ -12,6 +12,7 @@ import (
 
 	"bedrock-ai/internal/bot/entity"
 	"bedrock-ai/internal/event"
+	"bedrock-ai/internal/safecast"
 )
 
 // Bot interface for survival subsystem
@@ -257,7 +258,7 @@ func (m *Manager) eatFoodItem(slot uint32, item protocol.ItemStack) bool {
 			ActionType:      protocol.UseItemActionClickBlock,
 			BlockPosition:   protocol.BlockPos{0, -1, 0},
 			BlockFace:       255, // self-use
-			HotBarSlot:      int32(slot),
+			HotBarSlot:      safecast.To[int32](slot),
 			HeldItem:        protocol.ItemInstance{Stack: item},
 			Position:        m.bot.GetCoords(),
 			ClickedPosition: mgl32.Vec3{0, 0, 0},
@@ -529,7 +530,7 @@ func (m *Manager) UseHealingPotion() bool {
 						ActionType:      protocol.UseItemActionClickBlock,
 						BlockPosition:   protocol.BlockPos{0, -1, 0},
 						BlockFace:       255,
-						HotBarSlot:      int32(slot),
+						HotBarSlot:      safecast.To[int32](slot),
 						HeldItem:        protocol.ItemInstance{Stack: item},
 						Position:        m.bot.GetCoords(),
 						ClickedPosition: mgl32.Vec3{0, 0, 0},
