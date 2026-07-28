@@ -161,6 +161,12 @@ func applyInventoryContent(b *bot.Bot, p *packet.InventoryContent) {
 			if item.StackNetworkID != 0 {
 				b.StackNetworkIDs[globalSlot] = item.StackNetworkID
 			}
+			b.Logger.Debug("inventory slot item",
+				slog.Uint64("slot", uint64(globalSlot)),
+				slog.Int("count", int(item.Stack.Count)),
+				slog.Int("item_network_id", int(item.Stack.NetworkID)),
+				slog.Int("stack_network_id", int(item.StackNetworkID)),
+			)
 		}
 	}
 
@@ -355,9 +361,10 @@ func processItemStackResponse(b *bot.Bot, resp protocol.ItemStackResponse) {
 	pendingCh, craftOutputNetID, hasPending := b.PendingCraftLookup(resp.RequestID)
 
 	if resp.Status != 0 {
-		b.Logger.Info("item stack request rejected",
+		b.Logger.Warn("item stack request rejected",
 			slog.Int("request_id", int(resp.RequestID)),
 			slog.Uint64("status", uint64(resp.Status)),
+			slog.Int("containers", len(resp.ContainerInfo)),
 		)
 		if hasPending {
 			select {

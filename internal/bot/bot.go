@@ -193,6 +193,10 @@ type Bot struct {
 	HeldSlot         uint32
 	StackRequestID   int32
 
+	// craftMu serializes CraftItem so request IDs, stack-ID snapshots, and the
+	// per-request response channel cannot race planner/evaluation actions.
+	craftMu sync.Mutex
+
 	// Pending craft requests: maps ItemStackRequest.RequestID to a pending
 	// craft entry. Used by CraftItem to synchronously wait for the server's
 	// ItemStackResponse instead of fire-and-forget. The outputNetworkID is

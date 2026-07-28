@@ -194,8 +194,8 @@ func (p *Planner) loop() {
 		p.bot.Logger.Info("planner: executing step",
 			"index", step.Index, "action", step.Action, "label", label)
 
-		// Execute the action synchronously.
-		action.ExecuteAndWait(p.bot, label, param, p.user)
+		// Execute the action synchronously and trust only the structured result.
+		status := action.ExecuteAndWait(p.bot, label, param, p.user)
 
 		// Check cancellation after action.
 		select {
@@ -203,108 +203,80 @@ func (p *Planner) loop() {
 			p.todo.MarkFailed(step.Index, "canceled")
 			p.bot.Logger.Info("planner: canceled mid-step")
 			p.markRemainingSkipped()
+			p.finishPlan()
 			return
 		default:
 		}
 
-		// --- Re-evaluate with LLM (the "tool loop") -----------------------
-		feedback := p.buildFeedback(step)
-		systemPrompt := p.buildPlannerSystemPrompt(p.user, feedback)
-
-		evalPrompt := fmt.Sprintf(
-			`[PLANNER FEEDBACK] Step %d "%s" just completed.
-%s
-Review the result. You can:
-1. Reply with <continue/> to proceed to the next step.
-2. Reply with <replan>...</replan> containing new <step> tags to replace remaining steps.
-3. Reply with <done/> if the goal is already achieved or should be abandoned.
-4. Include chat text BEFORE any tag if you want to say something to the player.
-5. Include <action>label:param</action> if you need an extra one-off action before continuing.
-
-Keep any chat text SHORT (1 sentence, casual).`,
-			step.Index+1, step.Action, feedback)
-
-		reply, err := p.client.AskPlanner(systemPrompt, evalPrompt)
-		if err != nil {
-			p.bot.Logger.Warn("planner: LLM re-evaluation failed, continuing sequentially", "error", err)
-			p.todo.MarkCompleted(step.Index, "executed (no LLM eval)")
-			continue
+		if !status.Success {
+			note := status.Error
+			if note == "" {
+				note = "action failed"
+			}
+			p.todo.MarkFailed(step.Index, note)
+			p.markRemainingSkipped()
+			p.finishPlan()
+			return
 		}
 
-		p.handleEvalReply(reply, step)
+		p.todo.MarkCompleted(step.Index, "executed")
+		if p.client == nil || !p.todo.IsActive() {
+			continue
+		}
+		if p.handleEvalReply(step, status) {
+			return
+		}
 	}
 }
 
-// handleEvalReply processes the LLM's re-evaluation response.
-func (p *Planner) handleEvalReply(reply string, step TodoItem) {
-	parsed := ai.Parse(reply)
+// handleEvalReply lets the LLM replan after a completed step. It returns true
+// when the loop should stop. Evaluation chat is intentionally silent so the
+// planner emits only the initial acknowledgement and one truthful final report.
+func (p *Planner) handleEvalReply(step TodoItem, status event.ActionStatus) bool {
+	feedback := p.buildFeedback(step, status)
+	systemPrompt := p.buildPlannerSystemPrompt(p.user, feedback)
+	evalPrompt := fmt.Sprintf(
+		`[PLANNER FEEDBACK] Step %d "%s" completed successfully.
+%s
+Reply with either:
+1. <continue/> to proceed to the next step.
+2. <replan>...</replan> containing new <step> tags to replace remaining steps.
+Do NOT include chat text, <done/>, or extra <action> tags. The execution result above is authoritative.`,
+		step.Index+1, step.Action, feedback)
 
-	// Send any chat text to the player.
-	if parsed.CleanReply != "" {
-		p.bot.SendSafeChat(parsed.CleanReply)
+	reply, err := p.client.AskPlanner(systemPrompt, evalPrompt)
+	if err != nil {
+		p.bot.Logger.Warn("planner: LLM re-evaluation failed, continuing sequentially", "error", err)
+		return false
 	}
 
-	// Check for explicit done/continue/replan markers in the raw reply.
-	rawLower := strings.ToLower(reply)
-
-	if strings.Contains(rawLower, "<done") {
-		p.todo.MarkCompleted(step.Index, "done by LLM")
-		p.bot.Logger.Info("planner: LLM signaled done")
-		p.markRemainingSkipped()
-		return
-	}
-
-	// Check for replan.
 	replanSteps := ai.ParsePlanSteps(reply)
 	if len(replanSteps) > 0 && strings.Contains(reply, "<replan") {
-		p.todo.MarkCompleted(step.Index, "executed, replanned")
 		p.todo.ReplaceRemaining(replanSteps)
 		p.bot.Logger.Info("planner: LLM replanned", "new_steps", len(replanSteps))
-		return
 	}
-
-	// Execute any extra one-off actions the LLM emitted.
-	for _, act := range parsed.Actions {
-		p.bot.Logger.Info("planner: executing extra action from eval", "action", act.Label+":"+act.Param)
-		action.ExecuteAndWait(p.bot, act.Label, act.Param, p.user)
-	}
-
-	if strings.Contains(rawLower, "<continue") || len(parsed.Actions) > 0 {
-		p.todo.MarkCompleted(step.Index, "executed")
-		return
-	}
-
-	// Default: mark completed and continue.
-	p.todo.MarkCompleted(step.Index, "executed")
+	return false
 }
 
-// finishPlan is called when all steps are done. It optionally asks the LLM
-// for a closing message to send to the player.
+// finishPlan reports the authoritative aggregate outcome once. No LLM guess can
+// mark a failed step successful because the todo state is the only input here.
 func (p *Planner) finishPlan() {
 	completed, total := p.todo.Progress()
-	p.bot.Logger.Info("planner: plan finished", "completed", completed, "total", total)
-
+	failedStep, failed := p.todo.FirstFailure()
+	p.bot.Logger.Info("planner: plan finished", "completed", completed, "total", total, "failed", failed)
 	if p.client == nil {
 		p.todo.Clear()
 		return
 	}
 
-	// Ask LLM for a natural closing message.
-	systemPrompt := p.buildPlannerSystemPrompt(p.user, "")
-	closingPrompt := fmt.Sprintf(
-		`[PLANNER] The plan is complete. Goal: "%s"
-Progress: %d/%d steps completed.
-Say something SHORT and natural to the player <%s> about finishing the task. No action tags needed.`,
-		p.todo.Goal(), completed, total, p.user)
-
-	reply, err := p.client.AskPlanner(systemPrompt, closingPrompt)
-	if err == nil {
-		parsed := ai.Parse(reply)
-		if parsed.CleanReply != "" {
-			p.bot.SendSafeChat(parsed.CleanReply)
+	status := event.ActionStatus{Action: "plan", Item: p.todo.Goal(), Count: completed, Success: !failed}
+	if failed {
+		status.Error = failedStep.Note
+		if status.Error == "" {
+			status.Error = "gagal di " + failedStep.Action
 		}
 	}
-
+	p.bot.ReportActionStatus(p.user, status)
 	p.todo.Clear()
 }
 
@@ -315,7 +287,7 @@ func (p *Planner) markRemainingSkipped() {
 }
 
 // buildFeedback gathers the bot's current state for the LLM re-evaluation.
-func (p *Planner) buildFeedback(step TodoItem) string {
+func (p *Planner) buildFeedback(step TodoItem, status event.ActionStatus) string {
 	hp, hunger, coords := p.bot.GetStatusDetails()
 	inv := p.bot.GetInventorySummary()
 	held := p.bot.GetHeldItem()
@@ -329,6 +301,7 @@ func (p *Planner) buildFeedback(step TodoItem) string {
 	if inv != "" {
 		b.WriteString("Inventory: " + inv + "\n")
 	}
+	b.WriteString(fmt.Sprintf("Last action result: success=%v item=%s count=%d\n", status.Success, status.Item, status.Count))
 	b.WriteString("\n")
 	b.WriteString(p.todo.RenderForPrompt())
 	return b.String()

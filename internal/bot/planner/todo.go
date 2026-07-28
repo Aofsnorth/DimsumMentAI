@@ -148,6 +148,18 @@ func (tl *TodoList) MarkFailed(index int, note string) {
 	}
 }
 
+// FirstFailure returns the first failed step, if any.
+func (tl *TodoList) FirstFailure() (TodoItem, bool) {
+	tl.mu.RLock()
+	defer tl.mu.RUnlock()
+	for _, item := range tl.items {
+		if item.Status == StatusFailed {
+			return item, true
+		}
+	}
+	return TodoItem{}, false
+}
+
 // Progress returns (completed, total).
 func (tl *TodoList) Progress() (int, int) {
 	tl.mu.RLock()

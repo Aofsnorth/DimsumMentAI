@@ -174,13 +174,12 @@ func (b *Bot) InjectAIEvent(msg string) {
 	}()
 }
 
-// CraftItem sends an ItemStackRequest with the full vanilla auto-craft action
-// chain: AutoCraftRecipe → CraftResultsDeprecated → Consume(per slot) → Place.
-// BDS rejects requests missing any of these with status=7 (InvalidCraftRequest);
-// dragonfly treats the extra actions as no-ops so the sequence is portable.
-//
-// RequestID follows vanilla convention: negative, decrement by 2.
+// CraftItem sends the vanilla recipe-book auto-craft action sequence and waits
+// for the authoritative ItemStackResponse before returning.
 func (b *Bot) CraftItem(recipeNetID uint32, count int) error {
+	b.craftMu.Lock()
+	defer b.craftMu.Unlock()
+
 	if count <= 0 {
 		count = 1
 	}
@@ -220,6 +219,10 @@ func (b *Bot) CraftItem(recipeNetID uint32, count int) error {
 	}
 	outputNetID := recipe.Output.NetworkID
 	itemName := b.ItemNames[outputNetID]
+	stackNetworkIDs := make(map[uint32]int32, len(picks))
+	for _, pick := range picks {
+		stackNetworkIDs[pick.slot] = b.StackNetworkIDs[pick.slot]
+	}
 
 	b.Logger.Info("CraftItem request",
 		"recipeNetID", recipeNetID,
@@ -250,61 +253,7 @@ func (b *Bot) CraftItem(recipeNetID uint32, count int) error {
 	}
 	b.Mu.Unlock()
 
-	// The vanilla Bedrock client sends this sequence for recipe-book auto-craft:
-	//   1. AutoCraftRecipe  (recipe ID, times crafted, ingredients)
-	//   2. Consume           (one per inventory slot that loses items)
-	//   3. Place             (move output from CreatedOutput to inventory)
-	// A CraftResultsDeprecated action belongs to the legacy manual CraftRecipe
-	// flow, not AutoCraftRecipe. dragonfly ignores the extra action (no-op), but
-	// BDS validates the action sequence and rejects the whole request with
-	// status=7 (InvalidCraftRequest) when it is present.
-	actions := make([]protocol.StackRequestAction, 0, 4+len(picks)+1)
-
-	actions = append(actions, &protocol.AutoCraftRecipeStackRequestAction{
-		RecipeNetworkID: recipeNetID,
-		NumberOfCrafts:  byte(count),
-		TimesCrafted:    byte(count),
-		Ingredients:     recipe.Ingredients,
-	})
-
-	outputCount := int(recipe.Output.Count) * count
-	if outputCount <= 0 {
-		outputCount = count
-	}
-	if outputCount > 64 {
-		outputCount = 64
-	}
-
-	// Consume — one action per inventory slot that loses items. The source
-	// StackNetworkID must match the server's assigned ID for that slot.
-	for _, p := range picks {
-		stackNetID := b.StackNetworkIDs[p.slot]
-		b.Logger.Debug("CraftItem consume", "slot", p.slot, "count", p.count, "stack_network_id", stackNetID)
-		actions = append(actions, &protocol.ConsumeStackRequestAction{
-			DestroyStackRequestAction: protocol.DestroyStackRequestAction{
-				Count: byte(p.count),
-				Source: protocol.StackRequestSlotInfo{
-					Container:      protocol.FullContainerName{ContainerID: protocol.ContainerCombinedHotBarAndInventory},
-					Slot:           byte(p.slot),
-					StackNetworkID: stackNetID,
-				},
-			},
-		})
-	}
-
-	place := &protocol.PlaceStackRequestAction{}
-	place.Count = byte(outputCount)
-	place.Source = protocol.StackRequestSlotInfo{
-		Container:      protocol.FullContainerName{ContainerID: protocol.ContainerCreatedOutput},
-		Slot:           50,
-		StackNetworkID: requestID,
-	}
-	place.Destination = protocol.StackRequestSlotInfo{
-		Container:      protocol.FullContainerName{ContainerID: protocol.ContainerCombinedHotBarAndInventory},
-		Slot:           byte(outputSlot),
-		StackNetworkID: 0,
-	}
-	actions = append(actions, place)
+	actions := buildAutoCraftActions(recipeNetID, recipe, count, picks, stackNetworkIDs, outputSlot)
 
 	pk := &packet.ItemStackRequest{
 		Requests: []protocol.ItemStackRequest{{
@@ -336,4 +285,58 @@ func (b *Bot) CraftItem(recipeNetID uint32, count int) error {
 		b.Mu.Unlock()
 		return fmt.Errorf("server did not respond to craft request within 5s (item: %s)", itemName)
 	}
+}
+
+// buildAutoCraftActions constructs the vanilla recipe-book sequence:
+// AutoCraftRecipe → CraftResultsDeprecated → Consume(s) → Place. BDS validates
+// this exact sequence; missing results or real inventory stack IDs trigger
+// status=7 InvalidCraftRequest. Crafted/pending slots are predicted with -1.
+func buildAutoCraftActions(recipeNetID uint32, recipe RecipeInfo, count int, picks []ingredientPick, stackNetworkIDs map[uint32]int32, outputSlot uint32) []protocol.StackRequestAction {
+	if count <= 0 {
+		count = 1
+	}
+	outputCount := int(recipe.Output.Count) * count
+	if outputCount <= 0 {
+		outputCount = count
+	}
+	if outputCount > 64 {
+		outputCount = 64
+	}
+
+	actions := make([]protocol.StackRequestAction, 0, len(picks)+3)
+	actions = append(actions, &protocol.AutoCraftRecipeStackRequestAction{
+		RecipeNetworkID: recipeNetID,
+		TimesCrafted:    byte(count),
+		Ingredients:     recipe.Ingredients,
+	})
+	actions = append(actions, &protocol.CraftResultsDeprecatedStackRequestAction{
+		ResultItems:  []protocol.ItemStack{recipe.Output},
+		TimesCrafted: byte(count),
+	})
+	for _, pick := range picks {
+		actions = append(actions, &protocol.ConsumeStackRequestAction{
+			DestroyStackRequestAction: protocol.DestroyStackRequestAction{
+				Count: byte(pick.count),
+				Source: protocol.StackRequestSlotInfo{
+					Container:      protocol.FullContainerName{ContainerID: protocol.ContainerCombinedHotBarAndInventory},
+					Slot:           byte(pick.slot),
+					StackNetworkID: stackNetworkIDs[pick.slot],
+				},
+			},
+		})
+	}
+	place := &protocol.PlaceStackRequestAction{}
+	place.Count = byte(outputCount)
+	place.Source = protocol.StackRequestSlotInfo{
+		Container:      protocol.FullContainerName{ContainerID: protocol.ContainerCreatedOutput},
+		Slot:           50,
+		StackNetworkID: -1,
+	}
+	place.Destination = protocol.StackRequestSlotInfo{
+		Container:      protocol.FullContainerName{ContainerID: protocol.ContainerCombinedHotBarAndInventory},
+		Slot:           byte(outputSlot),
+		StackNetworkID: -1,
+	}
+	actions = append(actions, place)
+	return actions
 }

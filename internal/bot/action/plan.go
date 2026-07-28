@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"bedrock-ai/internal/bot"
+	"bedrock-ai/internal/event"
 )
 
 type Step struct {
@@ -34,13 +35,17 @@ func ExecutePlan(b *bot.Bot, steps []Step, user string) {
 	}()
 }
 
-// ExecuteAndWait runs a single action synchronously and blocks until the
-// action has settled (movement idle, gathering complete, craft processed,
-// etc.). Used by the planner's agentic loop so each step completes before
-// re-evaluating with the LLM.
-func ExecuteAndWait(b *bot.Bot, label, param, user string) {
-	Execute(b, label, param, user)
-	waitForActionSettled(b, strings.ToLower(strings.TrimSpace(label)))
+// ExecuteAndWait runs one action synchronously. Craft returns its structured
+// final outcome so the planner never mistakes an in-flight request for a
+// completed success; other actions fall back to the existing settle heuristics.
+func ExecuteAndWait(b *bot.Bot, label, param, user string) event.ActionStatus {
+	normalized := strings.ToLower(strings.TrimSpace(label))
+	if normalized == "craft" {
+		return executeCraftActionSilent(b, param, user)
+	}
+	Execute(b, normalized, param, user)
+	waitForActionSettled(b, normalized)
+	return event.ActionStatus{Action: normalized, Success: true}
 }
 
 func waitForActionSettled(b *bot.Bot, label string) {

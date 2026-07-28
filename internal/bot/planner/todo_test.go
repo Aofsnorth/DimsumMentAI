@@ -157,6 +157,29 @@ func TestTodoList_Clear(t *testing.T) {
 	}
 }
 
+func TestTodoList_FirstFailure(t *testing.T) {
+	t.Parallel()
+	tl := NewTodoList()
+	tl.SetPlan("craft sticks", []string{"craft:oak_planks,4", "craft:stick,4"})
+
+	if _, failed := tl.FirstFailure(); failed {
+		t.Fatal("expected no failure before execution")
+	}
+	step, _ := tl.NextPending()
+	tl.MarkFailed(step.Index, "server rejected craft")
+
+	failedStep, failed := tl.FirstFailure()
+	if !failed {
+		t.Fatal("expected failure")
+	}
+	if failedStep.Action != "craft:oak_planks,4" || failedStep.Note != "server rejected craft" {
+		t.Errorf("unexpected failed step: %+v", failedStep)
+	}
+	if completed, _ := tl.Progress(); completed != 0 {
+		t.Errorf("failed step counted as completed: %d", completed)
+	}
+}
+
 func TestTodoList_Concurrent(t *testing.T) {
 	t.Parallel()
 	tl := NewTodoList()

@@ -1,7 +1,6 @@
 package bot
 
 import (
-	"context"
 	"fmt"
 	"log/slog"
 	"time"
@@ -30,57 +29,61 @@ func (b *Bot) ReportActionStatus(user string, status event.ActionStatus) {
 		return
 	}
 
-	go func() {
-		_, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-		defer cancel()
+	// Run in a caller-owned goroutine. Every status prompt includes a unique
+	// nonce so the LLM's session history cannot answer a stale earlier status
+	// and produce duplicate, contradictory follow-up messages.
+	go reportActionStatusAsync(b, user, status)
+}
 
-		hp, hunger, coords := b.GetStatusDetails()
-		heldItem := b.GetHeldItem()
-		invSummary := b.GetInventorySummary()
-		playerCoords := ""
-		if pc, ok := b.GetPlayerCoords(user); ok {
-			playerCoords = fmt.Sprintf("X:%.0f Y:%.0f Z:%.0f", pc.X(), pc.Y(), pc.Z())
-		}
-		botStatus := fmt.Sprintf("HP: %d/20, Hunger: %d/20", hp, hunger)
+func reportActionStatusAsync(b *Bot, user string, status event.ActionStatus) {
+	hp, hunger, coords := b.GetStatusDetails()
+	heldItem := b.GetHeldItem()
+	invSummary := b.GetInventorySummary()
+	playerCoords := ""
+	if pc, ok := b.GetPlayerCoords(user); ok {
+		playerCoords = fmt.Sprintf("X:%.0f Y:%.0f Z:%.0f", pc.X(), pc.Y(), pc.Z())
+	}
+	botStatus := fmt.Sprintf("HP: %d/20, Hunger: %d/20", hp, hunger)
 
-		systemPrompt := b.AiClient.BuildSystemPrompt(
-			b.Name,
-			coords+" ("+botStatus+")",
-			playerCoords,
-			heldItem,
-			invSummary,
-		)
-		systemPrompt += "\n\n[STATUS REPLY RULES]\n" +
-			"You are generating a short status update after the bot just performed an action for the player.\n" +
-			"- Reply in Indonesian, casually, like a friend.\n" +
-			"- DO NOT use action tags (<action>, <plan>, <followup>, etc.).\n" +
-			"- DO NOT use raw item IDs like 'oak_planks'; use friendly names like 'Oak Planks'.\n" +
-			"- Keep it under 25 words unless the result needs explanation.\n" +
-			"- If the action failed, briefly explain why and offer to help or suggest what to do next.\n" +
-			"- If it succeeded, just say what happened naturally."
+	systemPrompt := b.AiClient.BuildSystemPrompt(
+		b.Name,
+		coords+" ("+botStatus+")",
+		playerCoords,
+		heldItem,
+		invSummary,
+	)
+	systemPrompt += "\n\n[STATUS REPLY RULES]\n" +
+		"You are generating a short status update after the bot just performed an action for the player.\n" +
+		"- Reply in Indonesian, casually, like a friend.\n" +
+		"- DO NOT use action tags (<action>, <plan>, <followup>, etc.).\n" +
+		"- DO NOT use raw item IDs like 'oak_planks'; use friendly names like 'Oak Planks'.\n" +
+		"- Keep it under 25 words unless the result needs explanation.\n" +
+		"- Answer ONLY the latest ACTION RESULT nonce below; ignore older status prompts in this conversation.\n" +
+		"- If the action failed, briefly explain why and offer to help or suggest what to do next.\n" +
+		"- If it succeeded, just say what happened naturally."
 
-		prompt := buildStatusPrompt(status)
+	prompt := buildStatusPrompt(status)
 
-		reply, err := b.AiClient.Ask(user, systemPrompt, prompt)
-		if err != nil {
-			b.Logger.Error("action status LLM call failed", slog.String("error", err.Error()), slog.String("user", user))
-			return
-		}
-		parsed := ai.Parse(reply)
-		if parsed.CleanReply != "" {
-			b.Logger.Info("action status reply sending", slog.String("reply", parsed.CleanReply))
-			b.SendSafeChat(parsed.CleanReply)
-		}
-	}()
+	reply, err := b.AiClient.Ask(user, systemPrompt, prompt)
+	if err != nil {
+		b.Logger.Error("action status LLM call failed", slog.String("error", err.Error()), slog.String("user", user))
+		return
+	}
+	parsed := ai.Parse(reply)
+	if parsed.CleanReply != "" {
+		b.Logger.Info("action status reply sending", slog.String("reply", parsed.CleanReply))
+		b.SendSafeChat(parsed.CleanReply)
+	}
 }
 
 func buildStatusPrompt(status event.ActionStatus) string {
 	item := FormatItemName(status.Item)
+	nonce := time.Now().UnixNano()
 	if status.Error != "" {
-		return fmt.Sprintf("ACTION RESULT: %s failed. Item: %s, count: %d, reason: %s. Generate a natural status reply.", status.Action, item, status.Count, status.Error)
+		return fmt.Sprintf("ACTION RESULT #%d: %s failed. Item: %s, count: %d, reason: %s. Generate a natural status reply.", nonce, status.Action, item, status.Count, status.Error)
 	}
 	if status.Count > 0 {
-		return fmt.Sprintf("ACTION RESULT: %s succeeded. Item: %s, count: %d. Generate a natural status reply.", status.Action, item, status.Count)
+		return fmt.Sprintf("ACTION RESULT #%d: %s succeeded. Item: %s, count: %d. Generate a natural status reply.", nonce, status.Action, item, status.Count)
 	}
-	return fmt.Sprintf("ACTION RESULT: %s succeeded. Item: %s. Generate a natural status reply.", status.Action, item)
+	return fmt.Sprintf("ACTION RESULT #%d: %s succeeded. Item: %s. Generate a natural status reply.", nonce, status.Action, item)
 }

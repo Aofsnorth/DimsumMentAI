@@ -64,3 +64,57 @@ func TestPlanIngredientConsumptionNameMatching(t *testing.T) {
 		t.Errorf("unexpected picks: %+v", picks)
 	}
 }
+
+func TestBuildAutoCraftActionsVanillaSequence(t *testing.T) {
+	t.Parallel()
+	recipe := RecipeInfo{
+		Ingredients: []protocol.ItemDescriptorCount{{
+			Descriptor: &protocol.DefaultItemDescriptor{NetworkID: -212},
+			Count:      1,
+		}},
+		Output: protocol.ItemStack{
+			ItemType: protocol.ItemType{NetworkID: 5},
+			Count:    4,
+		},
+	}
+	picks := []ingredientPick{{slot: 0, count: 1}}
+	actions := buildAutoCraftActions(414, recipe, 1, picks, map[uint32]int32{0: 42}, 3)
+	if len(actions) != 4 {
+		t.Fatalf("len(actions) = %d, want 4", len(actions))
+	}
+
+	auto, ok := actions[0].(*protocol.AutoCraftRecipeStackRequestAction)
+	if !ok {
+		t.Fatalf("actions[0] = %T, want AutoCraftRecipe", actions[0])
+	}
+	if auto.RecipeNetworkID != 414 || auto.NumberOfCrafts != 0 || auto.TimesCrafted != 1 || len(auto.Ingredients) != 1 {
+		t.Errorf("unexpected auto craft fields: %+v", auto)
+	}
+
+	results, ok := actions[1].(*protocol.CraftResultsDeprecatedStackRequestAction)
+	if !ok {
+		t.Fatalf("actions[1] = %T, want CraftResultsDeprecated", actions[1])
+	}
+	if results.TimesCrafted != 1 || len(results.ResultItems) != 1 || results.ResultItems[0].NetworkID != 5 {
+		t.Errorf("unexpected craft results fields: %+v", results)
+	}
+
+	consume, ok := actions[2].(*protocol.ConsumeStackRequestAction)
+	if !ok {
+		t.Fatalf("actions[2] = %T, want Consume", actions[2])
+	}
+	if consume.Count != 1 || consume.Source.Slot != 0 || consume.Source.StackNetworkID != 42 {
+		t.Errorf("unexpected consume fields: %+v", consume)
+	}
+
+	place, ok := actions[3].(*protocol.PlaceStackRequestAction)
+	if !ok {
+		t.Fatalf("actions[3] = %T, want Place", actions[3])
+	}
+	if place.Count != 4 || place.Source.Container.ContainerID != protocol.ContainerCreatedOutput || place.Source.Slot != 50 || place.Source.StackNetworkID != -1 {
+		t.Errorf("unexpected place source fields: %+v", place)
+	}
+	if place.Destination.Container.ContainerID != protocol.ContainerCombinedHotBarAndInventory || place.Destination.Slot != 3 || place.Destination.StackNetworkID != -1 {
+		t.Errorf("unexpected place destination fields: %+v", place)
+	}
+}

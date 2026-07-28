@@ -53,8 +53,26 @@ func handleAttack(b *bot.Bot, param, user string) {
 }
 
 func handleCraft(b *bot.Bot, param, user string) {
+	go executeCraftAction(b, param, user)
+}
+
+// executeCraftAction runs a direct chat craft asynchronously from the caller's
+// perspective and reports the final outcome once.
+func executeCraftAction(b *bot.Bot, param, user string) event.ActionStatus {
+	return runCraftAction(b, param, user, true)
+}
+
+// executeCraftActionSilent runs a planner-owned craft synchronously without a
+// per-step chat report. The planner emits one aggregate report after all steps.
+func executeCraftActionSilent(b *bot.Bot, param, user string) event.ActionStatus {
+	return runCraftAction(b, param, user, false)
+}
+
+func runCraftAction(b *bot.Bot, param, user string, report bool) event.ActionStatus {
+	status := event.ActionStatus{Action: "craft"}
 	if strings.TrimSpace(param) == "" {
-		return
+		status.Error = "item craft kosong"
+		return status
 	}
 	parts := strings.Split(param, ",")
 	itemName := normalizeItemName(parts[0])
@@ -62,18 +80,25 @@ func handleCraft(b *bot.Bot, param, user string) {
 	if len(parts) >= 2 {
 		_, _ = fmt.Sscanf(parts[1], "%d", &count)
 	}
+	status.Item = itemName
+	status.Count = count
 
-	go func() {
-		ctx := context.Background()
-		b.Logger.Debug("Executing craft action", "item", itemName, "desired_count", count)
-		actual, err := craftChain(ctx, b, user, itemName, count, 0)
-		if err != nil {
-			b.Logger.Warn("CraftItem failed", "err", err, "item", itemName)
-			b.ReportActionStatus(user, event.ActionStatus{Action: "craft", Item: itemName, Count: count, Success: false, Error: err.Error()})
-			return
+	b.Logger.Debug("Executing craft action", "item", itemName, "desired_count", count)
+	actual, err := craftChain(context.Background(), b, user, itemName, count, 0)
+	if err != nil {
+		b.Logger.Warn("CraftItem failed", "err", err, "item", itemName)
+		status.Error = err.Error()
+		if report {
+			b.ReportActionStatus(user, status)
 		}
-		b.ReportActionStatus(user, event.ActionStatus{Action: "craft", Item: itemName, Count: actual, Success: true})
-	}()
+		return status
+	}
+	status.Count = actual
+	status.Success = true
+	if report {
+		b.ReportActionStatus(user, status)
+	}
+	return status
 }
 
 // maxCraftDepth bounds chain-crafting recursion (e.g. oak_log -> oak_planks ->
@@ -103,31 +128,16 @@ func craftChain(ctx context.Context, b *bot.Bot, user, itemName string, count, d
 		return 0, fmt.Errorf("resep tidak diketahui: %s", itemName)
 	}
 
-	// 1. Ensure missing ingredients by chain-crafting them first.
-	if err := ensureCraftIngredients(ctx, b, user, recipe, count, depth); err != nil {
-		return 0, err
-	}
-
-	// 2. Bench handling.
-	if recipeNeedsCraftingBench(recipe) {
-		b.Logger.Debug("Craft requires bench, ensuring crafting_table", "item", itemName, "block", recipe.Block)
-		tablePos, ensured := b.InventoryMgr.Crafting().EnsureCraftingTable(ctx)
-		if !ensured {
-			return 0, fmt.Errorf("gak punya crafting table")
-		}
-		if err := b.InventoryMgr.Crafting().OpenCraftingTable(ctx, tablePos); err != nil {
-			b.Logger.Warn("OpenCraftingTable failed", "err", err)
-			return 0, fmt.Errorf("gagal buka crafting table")
-		}
-		defer b.InventoryMgr.Crafting().CloseWindow()
-	} else {
-		b.Logger.Debug("Inventory recipe (no bench needed)", "item", itemName)
-	}
-
-	// 3. Craft. `count` is desired OUTPUT items; convert to craft operations.
+	// 2. Convert desired output into craft operations, then satisfy ingredients
+	// for exactly that many repetitions. Rejection falls back only for recipes
+	// that truly exceed the 2×2 personal grid; planks and sticks never use a
+	// crafting-table window.
 	outputPerCraft := int(recipe.Output.Count)
 	crafts := computeCrafts(count, outputPerCraft)
-	b.Logger.Debug("chain craft step", "item", itemName, "recipeID", recipeID, "crafts", crafts, "depth", depth)
+	if err := ensureCraftIngredients(ctx, b, user, recipe, crafts, depth); err != nil {
+		return 0, err
+	}
+	b.Logger.Debug("chain craft step", "item", itemName, "recipeID", recipeID, "crafts", crafts)
 	if err := b.CraftItem(recipeID, crafts); err != nil {
 		return 0, err
 	}
@@ -183,9 +193,10 @@ func pickBestRecipe(b *bot.Bot, itemName string) (uint32, bot.RecipeInfo, bool) 
 }
 
 // recipeSatisfactionScore rates how ready the bot is to craft a recipe:
-//   2 = every ingredient is already in inventory
-//   1 = every missing ingredient is a plank variant the bot can chain-craft
-//   0 = otherwise (still craftable in principle, lowest preference)
+//
+//	2 = every ingredient is already in inventory
+//	1 = every missing ingredient is a plank variant the bot can chain-craft
+//	0 = otherwise (still craftable in principle, lowest preference)
 func recipeSatisfactionScore(b *bot.Bot, recipe bot.RecipeInfo) int {
 	allHave := true
 	allHaveOrPlank := true
@@ -195,17 +206,11 @@ func recipeSatisfactionScore(b *bot.Bot, recipe bot.RecipeInfo) int {
 			continue
 		}
 		need := int(ing.Count)
-		checkName := name
-		if strings.HasSuffix(strings.ToLower(name), "_planks") {
-			checkName = "planks"
-		}
-		if b.CountItemLike(checkName) >= need {
+		if b.CountItemLike(name) >= need {
 			continue
 		}
 		allHave = false
-		// A missing plank ingredient is fine as long as the bot has some log
-		// or planks it can convert.
-		if checkName == "planks" && (b.CountItemLike("planks") > 0 || b.CountItemLike("log") > 0) {
+		if normalizeIngredientKey(name) == "planks" && (b.CountItemLike("planks") > 0 || b.CountItemLike("log") > 0) {
 			continue
 		}
 		allHaveOrPlank = false
@@ -230,14 +235,7 @@ func ensureCraftIngredients(ctx context.Context, b *bot.Bot, user string, recipe
 			continue
 		}
 		need := int(ing.Count) * crafts
-		// For plank-variant ingredients (warped_planks, oak_planks, etc.) any
-		// plank type satisfies the recipe. Count all planks together so we
-		// don't try to craft a specific variant the bot can't make.
-		checkName := name
-		if strings.HasSuffix(strings.ToLower(name), "_planks") {
-			checkName = "planks"
-		}
-		if need <= 0 || b.CountItemLike(checkName) >= need {
+		if need <= 0 || b.CountItemLike(name) >= need {
 			continue
 		}
 		b.Logger.Debug("chain craft: ingredient missing, crafting it", "ingredient", name, "need", need)
@@ -252,9 +250,13 @@ func ensureCraftIngredients(ctx context.Context, b *bot.Bot, user string, recipe
 // ingredients (e.g. "planks") to a concrete craftable variant the bot can
 // actually make.
 func craftIngredient(ctx context.Context, b *bot.Bot, user, name string, need, depth int) error {
+	key := normalizeIngredientKey(name)
 	candidates := []string{name}
-	if fb, ok := ingredientFallbacks[normalizeIngredientKey(name)]; ok {
-		candidates = fb
+	// Generic tags accept any variant. A named variant (oak_planks) must not
+	// fall through to cherry_planks after the oak attempt fails, because that
+	// makes the final error blame an unrelated wood type.
+	if key == "planks" && strings.EqualFold(name, "planks") {
+		candidates = ingredientFallbacks[key]
 	}
 
 	var lastErr error
