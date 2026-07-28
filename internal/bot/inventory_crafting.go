@@ -142,16 +142,37 @@ func normalizeEquivalentName(name string) string {
 // ingredient. It accepts exact matches, prefixed variants ("minecraft:oak_log"
 // vs "oak_log"), and shared prefixes (e.g. any "*_log" for a generic "log"
 // ingredient). The comparison is case-insensitive.
+//
+// Plank variants are treated as interchangeable: a recipe requiring
+// "warped_planks" is satisfied by "oak_planks" (and vice-versa), since
+// Bedrock crafting tables accept any plank type for stick/plank recipes.
 func itemNameMatches(itemName, ingredientName string) bool {
 	itemName = normalizeEquivalentName(itemName)
 	ingredientName = normalizeEquivalentName(ingredientName)
 	if itemName == ingredientName {
 		return true
 	}
-	if strings.Contains(itemName, ingredientName) || strings.Contains(ingredientName, itemName) {
+	if genericTagMatch(itemName, ingredientName) || genericTagMatch(ingredientName, itemName) {
+		return true
+	}
+	// Any plank variant satisfies any other plank variant requirement.
+	if strings.HasSuffix(itemName, "planks") && strings.HasSuffix(ingredientName, "planks") {
 		return true
 	}
 	return false
+}
+
+// genericTagMatch reports whether tag is a single-word generic material tag
+// ("log", "planks", "stone") that itemName ends with on a word boundary,
+// so a generic "log" ingredient is satisfied by "oak log". The previous
+// bidirectional substring containment let "oak log" satisfy a "dark oak log"
+// requirement ("dark oak log" contains "oak log"), making the bot craft with
+// ingredients it does not own.
+func genericTagMatch(itemName, tag string) bool {
+	if strings.Contains(tag, " ") {
+		return false
+	}
+	return strings.HasSuffix(itemName, " "+tag)
 }
 
 // findFirstEmptyPlayerSlot returns the lowest player-inventory slot (0-35) that
@@ -166,6 +187,34 @@ func findFirstEmptyPlayerSlot(inv map[uint32]protocol.ItemStack) (uint32, bool) 
 	return 0, false
 }
 
+// IngredientName returns a server item name (or tag) for a recipe ingredient
+// descriptor. Used by chain-crafting to decide which intermediate item to
+// craft when an ingredient is missing from the inventory.
+func (b *Bot) IngredientName(ing protocol.ItemDescriptorCount) string {
+	b.Mu.Lock()
+	defer b.Mu.Unlock()
+	name, _ := resolveIngredientIdentity(ing.Descriptor, b.ItemNames)
+	return name
+}
+
+// CountItemLike counts inventory items whose name matches the given ingredient
+// name using the same tolerant rule crafting uses (substring/tag aware).
+func (b *Bot) CountItemLike(name string) int {
+	b.Mu.Lock()
+	defer b.Mu.Unlock()
+	total := 0
+	for _, item := range b.InventoryMap {
+		if item.Count == 0 {
+			continue
+		}
+		itemName := b.ItemNames[item.NetworkID]
+		if itemName != "" && itemNameMatches(itemName, name) {
+			total += int(item.Count)
+		}
+	}
+	return total
+}
+
 func (b *Bot) GetRecipes() map[string]uint32 {
 	b.Mu.Lock()
 	defer b.Mu.Unlock()
@@ -176,6 +225,33 @@ func (b *Bot) GetRecipes() map[string]uint32 {
 		copyMap[k] = v
 	}
 	return copyMap
+}
+
+// GetRecipeCandidates returns every recipe network ID that produces itemName
+// (case-insensitive, with/without the minecraft: prefix). Many items have one
+// recipe per wood variant; callers pick whichever candidate they can satisfy.
+func (b *Bot) GetRecipeCandidates(itemName string) []uint32 {
+	b.Mu.Lock()
+	defer b.Mu.Unlock()
+	name := strings.ToLower(strings.TrimSpace(itemName))
+	if ids, ok := b.RecipeCandidates[name]; ok && len(ids) > 0 {
+		out := make([]uint32, len(ids))
+		copy(out, ids)
+		return out
+	}
+	if ids, ok := b.RecipeCandidates["minecraft:"+name]; ok && len(ids) > 0 {
+		out := make([]uint32, len(ids))
+		copy(out, ids)
+		return out
+	}
+	// Fall back to the single Recipes entry when candidates weren't recorded.
+	if id, ok := b.Recipes[name]; ok {
+		return []uint32{id}
+	}
+	if id, ok := b.Recipes["minecraft:"+name]; ok {
+		return []uint32{id}
+	}
+	return nil
 }
 
 func (b *Bot) GetRecipesByNetID() map[uint32]RecipeInfo {

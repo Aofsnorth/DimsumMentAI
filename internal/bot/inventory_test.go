@@ -20,6 +20,16 @@ func TestItemNameMatches(t *testing.T) {
 		{"minecraft:oak_wood", "oak_log", true},
 		{"oak_log", "spruce_log", false},
 		{"oak_planks", "oak_log", false},
+		{"oak_planks", "warped_planks", true},
+		{"warped_planks", "oak_planks", true},
+		// Generic tag satisfied by a specific variant.
+		{"oak_log", "log", true},
+		{"spruce_log", "log", true},
+		// A specific variant must NOT satisfy a different specific variant. The old
+		// bidirectional containment let "oak_log" satisfy "dark_oak_log".
+		{"oak_log", "dark_oak_log", false},
+		{"dark_oak_log", "oak_log", false},
+		{"oak_log", "stripped_oak_log", false},
 	}
 	for _, tc := range tests {
 		got := itemNameMatches(tc.itemName, tc.ingredientName)

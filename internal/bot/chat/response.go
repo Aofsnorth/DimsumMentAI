@@ -46,10 +46,10 @@ func handleSilentActionResponse(b *bot.Bot, user, systemPrompt string, parsed ai
 	if !isSilentAction(parsed) || len(parsed.Actions) != 1 {
 		return false
 	}
-	if parsed.CleanReply != "" {
-		b.Logger.Info("chat reply sending (pre-silent)", slog.String("reply", parsed.CleanReply))
-		b.SendSafeChat(parsed.CleanReply)
-	}
+	// Do NOT send parsed.CleanReply here. A silent status/inventory action
+	// means "stay silent now, then report". The follow-up LLM call in
+	// handleSilentResponse sends the actual report, so echoing CleanReply first
+	// produced a duplicate message whenever the LLM answered in both places.
 	if parsed.FollowupSec > 0 {
 		go func() {
 			time.Sleep(time.Duration(parsed.FollowupSec) * time.Second)
@@ -99,7 +99,7 @@ func buildChatSteps(b *bot.Bot, parsed ai.ParsedReply, msg string) []action.Step
 	// <action> tag. Synthesize one from the user's request when their verb
 	// clearly maps to a known action.
 	if len(steps) == 0 && isAffirmativeReply(parsed.CleanReply) {
-		steps = inferActionIntent(msg)
+		steps = inferActionIntent(msg, parsed.CleanReply)
 		if len(steps) > 0 {
 			b.Logger.Info("chat inferred action from intent (LLM forgot tag)",
 				slog.String("user_msg", msg),

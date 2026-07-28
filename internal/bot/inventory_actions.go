@@ -67,7 +67,7 @@ func (b *Bot) DropItem(name string, count int) error {
 		Actions: []protocol.InventoryAction{
 			{
 				SourceType:    protocol.InventoryActionSourceContainer,
-				WindowID:      int32(protocol.WindowIDInventory),
+				WindowID:      protocol.WindowIDInventory,
 				InventorySlot: targetSlot,
 				OldItem:       protocol.ItemInstance{Stack: foundItem},
 				NewItem:       newSlotItem,
@@ -174,10 +174,10 @@ func (b *Bot) InjectAIEvent(msg string) {
 	}()
 }
 
-// CraftItem sends an ItemStackRequest with the full vanilla-style action chain
-// (AutoCraftRecipe + Consume per ingredient + Place output → empty slot).
-// Sending only AutoCraftRecipe without the surrounding chain causes strict
-// servers (vanilla/NetherGames) to disconnect the client.
+// CraftItem sends an ItemStackRequest with the full vanilla auto-craft action
+// chain: AutoCraftRecipe → CraftResultsDeprecated → Consume(per slot) → Place.
+// BDS rejects requests missing any of these with status=7 (InvalidCraftRequest);
+// dragonfly treats the extra actions as no-ops so the sequence is portable.
 //
 // RequestID follows vanilla convention: negative, decrement by 2.
 func (b *Bot) CraftItem(recipeNetID uint32, count int) error {
@@ -192,11 +192,10 @@ func (b *Bot) CraftItem(recipeNetID uint32, count int) error {
 		return fmt.Errorf("recipe %d not in cache (waiting for CraftingData)", recipeNetID)
 	}
 
-	// Validate that we have enough ingredients for the requested crafts. We
-	// don't send Consume actions to the server (auto-craft handles consumption
-	// server-side), but we still check locally so we can fail early with a
-	// clear error instead of a server rejection.
-	if _, err := planIngredientConsumption(b.InventoryMap, b.ItemNames, recipe.Ingredients, count); err != nil {
+	// Resolve which inventory slots will be consumed so we can emit the
+	// matching Consume actions below. Also serves as an early validation.
+	picks, err := planIngredientConsumption(b.InventoryMap, b.ItemNames, recipe.Ingredients, count)
+	if err != nil {
 		b.Mu.Unlock()
 		return err
 	}
@@ -251,15 +250,15 @@ func (b *Bot) CraftItem(recipeNetID uint32, count int) error {
 	}
 	b.Mu.Unlock()
 
-	// For AutoCraftRecipe (shift-click recipe book style), the server handles
-	// ingredient consumption internally. The client only sends:
-	//   1. AutoCraftRecipe action (recipe ID, times crafted, ingredients)
-	//   2. Place action (move output from CreatedOutput to inventory slot)
-	//
-	// Sending Consume actions alongside AutoCraftRecipe causes the vanilla BDS
-	// server to reject with status=7 (InvalidCraftRequest) because it doesn't
-	// expect explicit consumption for auto-craft.
-	actions := make([]protocol.StackRequestAction, 0, 2)
+	// The vanilla Bedrock client sends this sequence for recipe-book auto-craft:
+	//   1. AutoCraftRecipe  (recipe ID, times crafted, ingredients)
+	//   2. Consume           (one per inventory slot that loses items)
+	//   3. Place             (move output from CreatedOutput to inventory)
+	// A CraftResultsDeprecated action belongs to the legacy manual CraftRecipe
+	// flow, not AutoCraftRecipe. dragonfly ignores the extra action (no-op), but
+	// BDS validates the action sequence and rejects the whole request with
+	// status=7 (InvalidCraftRequest) when it is present.
+	actions := make([]protocol.StackRequestAction, 0, 4+len(picks)+1)
 
 	actions = append(actions, &protocol.AutoCraftRecipeStackRequestAction{
 		RecipeNetworkID: recipeNetID,
@@ -275,6 +274,24 @@ func (b *Bot) CraftItem(recipeNetID uint32, count int) error {
 	if outputCount > 64 {
 		outputCount = 64
 	}
+
+	// Consume — one action per inventory slot that loses items. The source
+	// StackNetworkID must match the server's assigned ID for that slot.
+	for _, p := range picks {
+		stackNetID := b.StackNetworkIDs[p.slot]
+		b.Logger.Debug("CraftItem consume", "slot", p.slot, "count", p.count, "stack_network_id", stackNetID)
+		actions = append(actions, &protocol.ConsumeStackRequestAction{
+			DestroyStackRequestAction: protocol.DestroyStackRequestAction{
+				Count: byte(p.count),
+				Source: protocol.StackRequestSlotInfo{
+					Container:      protocol.FullContainerName{ContainerID: protocol.ContainerCombinedHotBarAndInventory},
+					Slot:           byte(p.slot),
+					StackNetworkID: stackNetID,
+				},
+			},
+		})
+	}
+
 	place := &protocol.PlaceStackRequestAction{}
 	place.Count = byte(outputCount)
 	place.Source = protocol.StackRequestSlotInfo{
