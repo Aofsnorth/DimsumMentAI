@@ -37,12 +37,10 @@ func (tc *TreeChopper) GatherWood(ctx context.Context, targetCount int, preferre
 	bot := tc.rg.bot
 
 	tc.logger.Debug("Starting wood gathering", "target", targetCount)
-	bot.ReportActionStatus("", event.ActionStatus{
-		Action:  "chop",
-		Item:    "log",
-		Count:   0,
-		Success: true,
-	})
+	// No early ReportActionStatus here — the chopTree success/failure report
+	// at the end is the single source of truth. Reporting Success: true up
+	// front made the LLM announce "dapet oak log" before the bot had even
+	// finished chopping.
 
 	candidates, maxRadius := tc.findTreeCandidates(bot.GetCoords(), preferred)
 	if len(candidates) == 0 {

@@ -3,6 +3,7 @@
 package pathfinder
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/df-mc/dragonfly/server/world/chunk"
@@ -28,11 +29,51 @@ var (
 // GetNeighbors returns all valid neighbor nodes for the given node.
 func (w *LocalWorldModel) GetNeighbors(node Node) []Node {
 	neighbors := make([]Node, 0, 16)
+	before := len(neighbors)
 	neighbors = w.appendLadderNeighbors(neighbors, node)
+	ladderN := len(neighbors) - before
+	before = len(neighbors)
 	neighbors = w.appendCardinalNeighbors(neighbors, node)
+	cardinalN := len(neighbors) - before
+	before = len(neighbors)
 	neighbors = w.appendDiagonalNeighbors(neighbors, node)
+	diagN := len(neighbors) - before
+	before = len(neighbors)
 	neighbors = w.appendScaffoldNeighbors(neighbors, node)
+	scaffoldN := len(neighbors) - before
+	if len(neighbors) == 0 {
+		fmt.Printf("[GetNeighbors empty] node=(%d,%d,%d) ladder=%d cardinal=%d diag=%d scaffold=%d\n",
+			node.X, node.Y, node.Z, ladderN, cardinalN, diagN, scaffoldN)
+	}
 	return neighbors
+}
+
+// DebugNeighborVeto explains why each cardinal direction from n was vetoed.
+// Diagnostic-only; called by A* when start expands to zero neighbors.
+func (w *LocalWorldModel) DebugNeighborVeto(n Node) string {
+	out := fmt.Sprintf("start=(%d,%d,%d):", n.X, n.Y, n.Z)
+	dirs := []struct {
+		name string
+		dx, dz int32
+	}{
+		{"N", 0, -1}, {"S", 0, 1}, {"E", 1, 0}, {"W", -1, 0},
+	}
+	for _, d := range dirs {
+		tx, tz := n.X+d.dx, n.Z+d.dz
+		canStand := w.canStandAt(tx, n.Y, tz)
+		isAir := w.isAirAt(tx, n.Y, tz)
+		feetS := w.IsSolid(tx, n.Y, tz)
+		headS := w.IsSolid(tx, n.Y+1, tz)
+		floorS := w.IsSolid(tx, n.Y-1, tz)
+		feetH := w.IsHazard(tx, n.Y, tz)
+		headH := w.IsHazard(tx, n.Y+1, tz)
+		floorH := w.IsHazard(tx, n.Y-1, tz)
+		halfBlock := w.isHalfBlock(tx, n.Y-1, tz)
+		ladder := w.IsLadder(tx, n.Y, tz)
+		out += fmt.Sprintf(" %s[canStand=%v isAir=%v feet=%v head=%v floor=%v feetHaz=%v headHaz=%v floorHaz=%v half=%v ladder=%v]",
+			d.name, canStand, isAir, feetS, headS, floorS, feetH, headH, floorH, halfBlock, ladder)
+	}
+	return out
 }
 
 // appendLadderNeighbors adds vertical ladder movement and ladder-entry neighbors.

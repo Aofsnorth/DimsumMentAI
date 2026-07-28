@@ -105,9 +105,10 @@ func (tc *TickContext) applyEmote() (emoteJump, emoteSneak bool) {
 		tc.B.EmoteState = ""
 	}
 
-	tc.B.Yaw = tc.Yaw
-	tc.B.Pitch = tc.Pitch
-	tc.B.HeadYaw = tc.HeadYaw
+	// Orientation is persisted once per tick in SendInputLoop after the look
+	// updates. Doing it here too would be redundant; historically this
+	// emote-only writeback was the ONLY persistence, which froze the bot's
+	// body at its spawn yaw whenever no emote was active.
 	return emoteJump, emoteSneak
 }
 

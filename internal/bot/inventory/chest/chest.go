@@ -39,6 +39,7 @@ type Bot interface {
 	SetLookAngles(yaw, pitch float32)
 	WaitForYawSync(targetYaw float32, timeout time.Duration) bool
 	OverrideLookPitch(pitch float32)
+	ResetLook()
 }
 
 type ChestData struct {

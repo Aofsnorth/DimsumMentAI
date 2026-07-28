@@ -57,6 +57,7 @@ func handlePlayerList(b *bot.Bot, p *packet.PlayerList) {
 func handleCraftingData(b *bot.Bot, p *packet.CraftingData) {
 	b.Mu.Lock()
 	b.Recipes = make(map[string]uint32)
+	b.RecipeCandidates = make(map[string][]uint32)
 	b.RecipesByNetID = make(map[uint32]bot.RecipeInfo)
 	for _, r := range p.Recipes {
 		switch recipe := r.(type) {
@@ -68,6 +69,10 @@ func handleCraftingData(b *bot.Bot, p *packet.CraftingData) {
 					b.Recipes[strings.ToLower(name)] = recipe.RecipeNetworkID
 					cleanName := strings.TrimPrefix(name, "minecraft:")
 					b.Recipes[strings.ToLower(cleanName)] = recipe.RecipeNetworkID
+					b.RecipeCandidates[strings.ToLower(name)] = append(b.RecipeCandidates[strings.ToLower(name)], recipe.RecipeNetworkID)
+					if lc := strings.ToLower(cleanName); lc != strings.ToLower(name) {
+						b.RecipeCandidates[lc] = append(b.RecipeCandidates[lc], recipe.RecipeNetworkID)
+					}
 				}
 				b.RecipesByNetID[recipe.RecipeNetworkID] = bot.RecipeInfo{
 					Ingredients: recipe.Input,
@@ -84,6 +89,10 @@ func handleCraftingData(b *bot.Bot, p *packet.CraftingData) {
 					b.Recipes[strings.ToLower(name)] = recipe.RecipeNetworkID
 					cleanName := strings.TrimPrefix(name, "minecraft:")
 					b.Recipes[strings.ToLower(cleanName)] = recipe.RecipeNetworkID
+					b.RecipeCandidates[strings.ToLower(name)] = append(b.RecipeCandidates[strings.ToLower(name)], recipe.RecipeNetworkID)
+					if lc := strings.ToLower(cleanName); lc != strings.ToLower(name) {
+						b.RecipeCandidates[lc] = append(b.RecipeCandidates[lc], recipe.RecipeNetworkID)
+					}
 				}
 				b.RecipesByNetID[recipe.RecipeNetworkID] = bot.RecipeInfo{
 					Ingredients: recipe.Input,

@@ -255,6 +255,15 @@ func (bm *BlockMiner) mineSingle(ctx context.Context, step mineStep, blockName s
 		BlockPosition:   step.Position,
 		BlockFace:       step.Face,
 	})
+	// Explicitly stop breaking so the server clears destroy-progress at this
+	// position. Without this the server still thinks we're mid-break there and
+	// a freshly placed block gets insta-broken.
+	_ = bot.WritePacket(&packet.PlayerAction{
+		EntityRuntimeID: bot.GetEntityRuntimeID(),
+		ActionType:      protocol.PlayerActionStopBreak,
+		BlockPosition:   step.Position,
+		BlockFace:       step.Face,
+	})
 
 	changed := bm.waitForBlockChanged(ctx, step.Position, blockName, 400*time.Millisecond)
 	// Program-based: optimistically clear the block in our world model so the

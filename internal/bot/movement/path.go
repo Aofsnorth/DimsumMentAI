@@ -43,6 +43,19 @@ func RecalculatePath(b *bot.Bot) {
 
 	b.WorldModel.PurgeFalseSolidOverrides()
 
+	// If the bot's feet are inside a solid block (physics pushed it half a
+	// block into the ground, or spawn glitched), snap the start node upward
+	// until it's a standable tile. Otherwise every neighbor is vetoed because
+	// the floor check at start.Y-1 hits the same solid block the bot is
+	// currently inside.
+	for i := 0; i < 3; i++ {
+		if !b.WorldModel.IsSolid(start.X, start.Y, start.Z) &&
+			!b.WorldModel.IsSolid(start.X, start.Y+1, start.Z) {
+			break
+		}
+		start.Y++
+	}
+
 	if standTarget, ok := nearestStandableNode(b, start, target, 2); ok {
 		target = standTarget
 	}
@@ -105,14 +118,67 @@ func RecalculatePath(b *bot.Bot) {
 		}
 		b.Logger.Info("A* pathfinding completed", "nodes", len(path), "path", strings.Join(nodeCoords, " -> "), "movement_state", movementState)
 	} else {
-		// Reset PathIndex together with the path so readers in other goroutines
-		// (steering.go, follow.go) cannot dereference a stale index into nil
-		// and trip "index out of range [N] with length 0".
+		// Reset PathIndex together path so readers in other goroutines
+		// (steering.go, follow.go) cannot dereference stale index into nil
+		// trip "index out range [N] length 0".
 		b.CurrentPath = nil
 		b.PathIndex = 0
 		b.LastPathRecalcTime = time.Now()
-		b.Logger.Warn("A* pathfinding failed to resolve walkable path to destination",
+		b.Logger.Warn("A* pathfinding failed resolve walkable path destination",
 			"start", start, "target", target, "movement_state", movementState)
+		// Diagnostic: dump per-direction walkability around start so we can see
+		// which predicate (floor/head/hazard) is vetoing every neighbor.
+		type probe struct {
+			name          string
+			x, y, z       int32
+			feet, head    bool
+			floor         bool
+			feetH, headH  bool
+			floorH        bool
+		}
+		probes := []probe{}
+		offsets := []struct {
+			name       string
+			dx, dy, dz int32
+		}{
+			{"N", 0, 0, -1}, {"S", 0, 0, 1}, {"E", 1, 0, 0}, {"W", -1, 0, 0},
+		}
+		for _, off := range offsets {
+			tx, ty, tz := start.X+off.dx, start.Y+off.dy, start.Z+off.dz
+			probes = append(probes, probe{
+				name:   off.name,
+				x:      tx, y: ty, z: tz,
+				feet:   b.WorldModel.IsSolid(tx, ty, tz),
+				head:   b.WorldModel.IsSolid(tx, ty+1, tz),
+				floor:  b.WorldModel.IsSolid(tx, ty-1, tz),
+				feetH:  b.WorldModel.IsHazard(tx, ty, tz),
+				headH:  b.WorldModel.IsHazard(tx, ty+1, tz),
+				floorH: b.WorldModel.IsHazard(tx, ty-1, tz),
+			})
+		}
+		for _, p := range probes {
+			b.Logger.Warn("A* neighbor probe",
+				"dir", p.name, "x", p.x, "y", p.y, "z", p.z,
+				"feet_solid", p.feet, "head_solid", p.head, "floor_solid", p.floor,
+				"feet_hazard", p.feetH, "head_hazard", p.headH, "floor_hazard", p.floorH,
+			)
+			// Also dump the raw RID + translated RID + chunk-load state so we can
+			// see whether the wire hash is hitting the local hash table.
+			for dy := int32(0); dy <= 2; dy++ {
+				if rid, loaded := b.WorldCache.GetBlockRID(p.x, p.y+dy-1, p.z); loaded {
+					name, _, nameOK := chunk.RuntimeIDToState(b.WorldCache.TranslateRuntimeID(rid))
+					b.Logger.Warn("A* neighbor RID dump",
+						"dir", p.name,
+						"dy", dy-1,
+						"raw_rid", rid,
+						"translated", b.WorldCache.TranslateRuntimeID(rid),
+						"name_ok", nameOK,
+						"name", name,
+						"solid", b.WorldModel.IsSolid(p.x, p.y+dy-1, p.z),
+					)
+				}
+			}
+		}
 	}
 }
 

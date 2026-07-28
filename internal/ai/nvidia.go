@@ -2,8 +2,6 @@
 package ai
 
 import (
-	"bytes"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -16,6 +14,7 @@ type ChatCompletionRequest struct {
 	Messages    []Message `json:"messages"`
 	Temperature float64   `json:"temperature"`
 	MaxTokens   int       `json:"max_tokens"`
+	Stream      bool      `json:"stream"`
 }
 
 type ChatCompletionResponse struct {
@@ -24,19 +23,23 @@ type ChatCompletionResponse struct {
 	} `json:"choices"`
 }
 
-// NvidiaClient is a generic OpenAI-compatible chat completion client. The name
-// is retained for backward compatibility; the same struct now also serves
-// Minimax, OpenGateway, and any OpenAI-compatible HTTP endpoint via BaseURL.
+// NvidiaClient is a generic multi-protocol chat completion client. Despite the
+// historical name it speaks three wire formats — OpenAI-compatible (default,
+// also used by NVIDIA NIM), Anthropic Messages, and Google Gemini — selected
+// from the configured provider via protocolForProvider.
 type NvidiaClient struct {
 	apiKey   string
 	model    string
 	baseURL  string
 	provider string
+	protocol Protocol
 	client   *http.Client
 	History  *MessageHistory
 	persona  string
 	rules    string
 	language string
+
+	contextWindowOverride int // 0 = auto-detect from model registry
 }
 
 const (
@@ -64,6 +67,10 @@ func envVarForProvider(provider string) string {
 		return "NVIDIA_API_KEY"
 	case "minimax":
 		return "MINIMAX_API_KEY"
+	case "anthropic_compatible":
+		return "ANTHROPIC_API_KEY"
+	case "google_compatible":
+		return "GOOGLE_API_KEY"
 	}
 	return "OPENAI_API_KEY"
 }
@@ -97,7 +104,8 @@ func NewLLMClient(provider, model, baseURL string) *NvidiaClient {
 		model:    model,
 		baseURL:  baseURL,
 		provider: provider,
-		client:   &http.Client{Timeout: 30 * time.Second},
+		protocol: protocolForProvider(provider),
+		client:   &http.Client{Timeout: 120 * time.Second},
 		History:  NewMessageHistory(20),
 		persona:  PromptCharacter,
 		rules:    BedrockSystemRules,
@@ -152,7 +160,10 @@ func (nc *NvidiaClient) BuildSystemPrompt(botName, botCoords, playerCoords, held
 
 	// Inventory
 	if inventoryText != "" {
-		prompt += "\n\nFull inventory: " + inventoryText
+		prompt += "\n\nFull inventory: " + inventoryText +
+			"\n[INVENTORY RULE] The line above is your LIVE inventory \u2014 it has ALREADY been checked for you. " +
+			"When anyone asks what you have, what's in your inventory, or to check your inventory, answer DIRECTLY from this data in the SAME reply. " +
+			"NEVER reply with 'let me check', 'oke aku cek dulu', 'I'll check', or any stalling phrase \u2014 you already have the data, so just state the items now."
 	}
 
 	// Anti-hallucination warning
@@ -187,7 +198,9 @@ func (nc *NvidiaClient) prepareMessages(user, systemPrompt, message string) []Me
 	rawMessages = append(rawMessages, hist...)
 	rawMessages = append(rawMessages, Message{Role: "user", Content: fmt.Sprintf("<%s> %s", user, message)})
 
-	return FixMessages(rawMessages)
+	// Auto-compact so the request never exceeds 25% of the model's context
+	// window; oldest history is dropped first to keep the bot from stalling.
+	return nc.compactToBudget(FixMessages(rawMessages), nc.ContextBudget())
 }
 
 // storeHistory stores the chat turn in the conversation history.
@@ -208,7 +221,7 @@ func (nc *NvidiaClient) completeWithRetry(messages []Message, temperature float6
 	}
 	maxRetries := 4
 	for attempt := 0; attempt < maxRetries; attempt++ {
-		completionResp, statusCode, err := nc.doCompletionRequest(req)
+		reply, statusCode, err := nc.doCompletionRequest(req)
 		if err != nil {
 			if (statusCode == http.StatusTooManyRequests || statusCode == 0) && attempt < maxRetries-1 {
 				time.Sleep(time.Duration(1<<attempt) * time.Second)
@@ -217,59 +230,47 @@ func (nc *NvidiaClient) completeWithRetry(messages []Message, temperature float6
 			return "", err
 		}
 
-		if len(completionResp.Choices) == 0 || completionResp.Choices[0].Message.Content == "" {
+		if reply == "" {
 			if attempt == maxRetries-1 {
-				return "", fmt.Errorf("empty choices from %s API response", nc.provider)
+				return "", fmt.Errorf("empty reply from %s API response", nc.provider)
 			}
 			time.Sleep(500 * time.Millisecond)
 			continue
 		}
 
-		return completionResp.Choices[0].Message.Content, nil
+		return reply, nil
 	}
 	return "", fmt.Errorf("exhausted retries for %s API", nc.provider)
 }
 
-// doCompletionRequest performs a single chat completion HTTP request.
-func (nc *NvidiaClient) doCompletionRequest(req ChatCompletionRequest) (ChatCompletionResponse, int, error) {
-	var empty ChatCompletionResponse
-	bodyBytes, err := json.Marshal(req)
+// doCompletionRequest performs a single chat completion HTTP request using the
+// client's wire protocol and returns the extracted assistant text.
+func (nc *NvidiaClient) doCompletionRequest(req ChatCompletionRequest) (string, int, error) {
+	httpReq, err := nc.buildHTTPRequest(req.Messages, req.Temperature, req.MaxTokens)
 	if err != nil {
-		return empty, 0, fmt.Errorf("marshal request: %w", err)
+		return "", 0, err
 	}
-
-	url := nc.baseURL
-	if url == "" {
-		url = endpointNvidia
-	}
-
-	httpReq, err := http.NewRequest("POST", url, bytes.NewBuffer(bodyBytes))
-	if err != nil {
-		return empty, 0, fmt.Errorf("create HTTP request: %w", err)
-	}
-	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("Authorization", "Bearer "+nc.apiKey)
 
 	resp, err := nc.client.Do(httpReq)
 	if err != nil {
-		return empty, 0, fmt.Errorf("HTTP request: %w", err)
+		return "", 0, fmt.Errorf("HTTP request: %w", err)
 	}
 	defer resp.Body.Close()
 
 	responseBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return empty, resp.StatusCode, fmt.Errorf("read response body: %w", err)
+		return "", resp.StatusCode, fmt.Errorf("read response body: %w", err)
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return empty, resp.StatusCode, fmt.Errorf("HTTP %d from %s API: %s", resp.StatusCode, nc.provider, string(responseBody))
+		return "", resp.StatusCode, fmt.Errorf("HTTP %d from %s API: %s", resp.StatusCode, nc.provider, string(responseBody))
 	}
 
-	var completionResp ChatCompletionResponse
-	if err := json.Unmarshal(responseBody, &completionResp); err != nil {
-		return empty, resp.StatusCode, fmt.Errorf("unmarshal response: %w", err)
+	reply, err := nc.parseReply(responseBody)
+	if err != nil {
+		return "", resp.StatusCode, err
 	}
-	return completionResp, resp.StatusCode, nil
+	return reply, resp.StatusCode, nil
 }
 
 // AskPlanner queries the LLM without storing conversation history. Used by
@@ -282,17 +283,17 @@ func (nc *NvidiaClient) AskPlanner(systemPrompt, message string) (string, error)
 
 	req := ChatCompletionRequest{
 		Model:       nc.model,
-		Messages:    FixMessages(rawMessages),
+		Messages:    nc.compactToBudget(FixMessages(rawMessages), nc.ContextBudget()),
 		Temperature: 0.3, // slightly lower for structured plan output
 		MaxTokens:   512,
 	}
 
-	completionResp, _, err := nc.doCompletionRequest(req)
+	reply, _, err := nc.doCompletionRequest(req)
 	if err != nil {
 		return "", err
 	}
-	if len(completionResp.Choices) == 0 || completionResp.Choices[0].Message.Content == "" {
-		return "", fmt.Errorf("empty choices from %s API response", nc.provider)
+	if reply == "" {
+		return "", fmt.Errorf("empty reply from %s API response", nc.provider)
 	}
-	return completionResp.Choices[0].Message.Content, nil
+	return reply, nil
 }

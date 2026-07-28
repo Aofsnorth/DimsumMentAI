@@ -116,21 +116,24 @@ func validateAIProvider(cfg *Config) error {
 		return nil
 	case "nvidia":
 		return validateAIKeys(cfg, "NVIDIA_API_KEY")
+	case "anthropic_compatible":
+		return validateAIEndpoint(cfg, "ANTHROPIC_API_KEY")
+	case "google_compatible":
+		return validateAIEndpoint(cfg, "GOOGLE_API_KEY")
+	// Legacy aliases, treated as OpenAI-compatible.
 	case "minimax":
 		return validateAIKeys(cfg, "MINIMAX_API_KEY")
-	case "opengateway", "openai_compatible":
-		if os.Getenv("OPENAI_API_KEY") == "" {
-			return fmt.Errorf("OPENAI_API_KEY environment variable is required when provider is '%s'", cfg.AI.Provider)
+	case "opengateway", "openai_compatible", "openai":
+		// API key optional — local servers (vLLM, llama.cpp, etc.) often need none.
+		if cfg.AI.Model == "" {
+			return fmt.Errorf("ai.model is required when provider is '%s'", cfg.AI.Provider)
 		}
 		if cfg.AI.BaseURL == "" {
 			return fmt.Errorf("ai.base_url is required when provider is '%s'", cfg.AI.Provider)
 		}
-		if cfg.AI.Model == "" {
-			return fmt.Errorf("ai.model is required when provider is '%s'", cfg.AI.Provider)
-		}
 		return nil
 	default:
-		return fmt.Errorf("unknown ai.provider %q (expected: nvidia, minimax, opengateway, openai_compatible, none)", cfg.AI.Provider)
+		return fmt.Errorf("unknown ai.provider %q (expected: openai_compatible, anthropic_compatible, google_compatible, nvidia, none)", cfg.AI.Provider)
 	}
 }
 
@@ -140,6 +143,19 @@ func validateAIKeys(cfg *Config, apiKeyEnv string) error {
 	}
 	if cfg.AI.Model == "" {
 		return fmt.Errorf("ai.model is required when provider is '%s'", cfg.AI.Provider)
+	}
+	return nil
+}
+
+// validateAIEndpoint checks key + model + base_url for providers that need an
+// explicit endpoint (every OpenAI/Anthropic/Google-compatible target except the
+// built-in nvidia default).
+func validateAIEndpoint(cfg *Config, apiKeyEnv string) error {
+	if err := validateAIKeys(cfg, apiKeyEnv); err != nil {
+		return err
+	}
+	if cfg.AI.BaseURL == "" {
+		return fmt.Errorf("ai.base_url is required when provider is '%s'", cfg.AI.Provider)
 	}
 	return nil
 }

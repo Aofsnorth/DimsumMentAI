@@ -23,6 +23,7 @@ type Bot interface {
 	NavigateToBlock(x, y, z int32, tolerance float32) bool
 	StopMovement()
 	LookAt(pos mgl32.Vec3)
+	SetTargetTolerance(t float32)
 	InjectAIEvent(msg string)
 	GetHeldItemSlot() uint32
 	GetInventorySlots() map[uint32]protocol.ItemStack

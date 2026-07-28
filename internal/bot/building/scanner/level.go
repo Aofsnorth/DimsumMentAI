@@ -108,6 +108,12 @@ func (s *AreaScanner) clearBlocksLoop(ctx context.Context, blocksToClear []proto
 			BlockPosition:   b,
 			BlockFace:       1,
 		})
+		_ = s.bot.WritePacket(&packet.PlayerAction{
+			EntityRuntimeID: s.bot.GetEntityRuntimeID(),
+			ActionType:      protocol.PlayerActionStopBreak,
+			BlockPosition:   b,
+			BlockFace:       1,
+		})
 
 		world.SetSolid(b.X(), b.Y(), b.Z(), false)
 		clearedCount++

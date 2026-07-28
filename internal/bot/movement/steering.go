@@ -173,13 +173,17 @@ func (tc *TickContext) advancePath(maxHeightDiff float32) {
 }
 
 func (tc *TickContext) checkWalkToArrival() {
+	tol := tc.TargetTolerance
+	if tol <= 0 {
+		tol = 2.0
+	}
 	dyTarget := tc.CurrPos.Y() - tc.TPos.Y()
 	distXZ := float32(math.Sqrt(float64(tc.Dx*tc.Dx + tc.Dz*tc.Dz)))
-	if distXZ < 2.0 && math.Abs(float64(dyTarget)) < 2.0 {
+	if distXZ < tol && math.Abs(float64(dyTarget)) < float64(tol) {
 		tc.B.Mu.Lock()
 		tc.B.MovementState = "idle"
 		tc.B.Mu.Unlock()
-		tc.B.Logger.Debug("bot arrived at target destination (within 2 blocks)", slog.Float64("x", float64(tc.TPos.X())), slog.Float64("y", float64(tc.TPos.Y())), slog.Float64("z", float64(tc.TPos.Z())))
+		tc.B.Logger.Debug("bot arrived at target destination", slog.Float64("x", float64(tc.TPos.X())), slog.Float64("y", float64(tc.TPos.Y())), slog.Float64("z", float64(tc.TPos.Z())), slog.Float64("tolerance", float64(tol)))
 	}
 }
 
@@ -349,9 +353,16 @@ func (tc *TickContext) applyParkourJump() {
 	isParkourLink := nextNode.LinkType == pathfinder.LinkJump ||
 		(nextNode.LinkType == pathfinder.LinkStepJump && horizDistance > 1.5)
 
+	// A* sometimes emits the final approach to the target with an empty
+	// LinkType (the destination node carries no link annotation). When that
+	// node is exactly one block higher than the bot, it is still a step-up —
+	// without this fallback the bot walks into the ledge and never jumps.
+	yDiff := nextNode.Y - baseY
+	unannotatedStepUp := nextNode.LinkType == "" && yDiff == 1 && horizDistance <= 1.5
+
 	if isParkourLink {
 		tc.handleParkourLinkJump(nextNode, pathIndex, lastJumpPathIndex, baseY, horizDistance)
-	} else if nextNode.LinkType == pathfinder.LinkStepJump {
+	} else if nextNode.LinkType == pathfinder.LinkStepJump || unannotatedStepUp {
 		tc.handleStepUpJump(nextNode, baseY)
 	}
 }
@@ -396,9 +407,11 @@ func (tc *TickContext) handleStepUpJump(nextNode pathfinder.Node, baseY int32) {
 	if tc.Dist >= 1.4 {
 		return
 	}
-	if !tc.shouldJumpForYaw() {
-		return
-	}
+	// No yaw gate here: the pathfinder already validated this 1-block step is
+	// reachable, and the bot is adjacent. Requiring body-yaw alignment (which
+	// lags a few ticks behind the head after a turn) made the bot stall at the
+	// ledge, walking into the wall instead of hopping up. checkWallCollision's
+	// groundedStepUp bypass lets the forward motion carry it onto the step.
 	tc.ShouldJump = true
 	tc.JumpReason = fmt.Sprintf("Step Up: nextNode.Y(%d) > baseY(%d)", nextNode.Y, baseY)
 }

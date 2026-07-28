@@ -165,15 +165,18 @@ func (w *LocalWorldModel) IsSolid(x, y, z int32) bool {
 	defer w.mu.RUnlock()
 	k := fmt.Sprintf("%d,%d,%d", x, y, z)
 
+	// Bot body volume wins over everything else this tick. If the bot just
+	// got marked tempSolid at its own position (stuck-recovery), treating the
+	// tile as solid makes GetNeighbors unable to leave the start node and the
+	// whole A* loop deadlocks at path=nil every tick.
+	if w.bodyClearance[k] {
+		return false
+	}
+
 	if expiry, ok := w.tempSolidBlocks[k]; ok {
 		if time.Now().Before(expiry) {
 			return true
 		}
-	}
-
-	// Bot body volume this tick (does not persist).
-	if w.bodyClearance[k] {
-		return false
 	}
 
 	// Persistent overrides from UpdateBlock / mining / building.

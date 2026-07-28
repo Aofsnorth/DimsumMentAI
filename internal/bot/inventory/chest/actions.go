@@ -23,17 +23,21 @@ func (ic *Container) GiveItem(ctx context.Context, itemName string, playerName s
 	}
 
 	dist := ic.distance(botPos, playerPos)
-	if dist > 2.0 {
-		// Bedrock's base drop velocity is ~0.3 m/s — the item can only travel
-		// a fraction of a block. Stand within 1.3 blocks so the tossed item
-		// lands inside the player's pickup range rather than between us.
-		reached := ic.bot.NavigateToBlock(
+	if dist > 3.0 {
+		// Only walk closer when the player is genuinely far. The upward-pitch
+		// throw below reliably lands within ~4 blocks, so nearby players need
+		// no navigation at all. (The old 1.3-block tolerance frequently failed
+		// its path check and aborted the give even when the bot stood right
+		// next to the player.)
+		ic.bot.NavigateToBlock(
 			int32(math.Floor(float64(playerPos.X()))),
 			int32(math.Floor(float64(playerPos.Y()))),
 			int32(math.Floor(float64(playerPos.Z()))),
-			1.3,
+			2.0,
 		)
-		if !reached {
+		// Proceed as long as we're within throw range, regardless of whether
+		// navigation reported an exact "reached"; only abort if still too far.
+		if ic.distance(ic.bot.GetCoords(), playerPos) > 4.5 {
 			ic.logger.Warn("GiveItem: could not reach player", "name", playerName)
 			return false
 		}
@@ -114,11 +118,12 @@ func (ic *Container) GiveItem(ctx context.Context, itemName string, playerName s
 		return false
 	}
 
-	// Brief pause so the drop transaction lands and the entity is on the
-	// ground before we start moving. Without this, the bot's immediate
-	// backward step can re-collect the item or push it out of the player's
-	// pickup range.
-	time.Sleep(150 * time.Millisecond)
+	// Give the server time to actually process the drop transaction and spawn
+	// the item entity BEFORE we start walking. If we navigate immediately,
+	// applyMoveLookTarget rotates the body yaw toward backPos within one tick
+	// and the server applies THAT yaw when spawning the drop — the item flies
+	// backward instead of toward the player.
+	time.Sleep(450 * time.Millisecond)
 
 	ic.logger.Info("Gave item successfully", "item", itemName, "count", count, "to", playerName)
 
@@ -136,6 +141,9 @@ func (ic *Container) GiveItem(ctx context.Context, itemName string, playerName s
 	ic.bot.NavigateTo(backPos)
 	time.Sleep(500 * time.Millisecond)
 	ic.bot.StopMovement()
+	// Release the forced upward look so the head returns to a neutral gaze
+	// instead of staying stuck pointing up after the toss.
+	ic.bot.ResetLook()
 	return true
 }
 

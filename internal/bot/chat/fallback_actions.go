@@ -94,9 +94,12 @@ var countRegex = regexp.MustCompile(`\d+`)
 
 // inferActionIntent guesses an action tag from raw user message text. Use
 // only as a fallback when the LLM replied affirmatively but forgot the
-// <action> markup.
-func inferActionIntent(msg string) []action.Step {
+// <action> markup. The LLM reply is also scanned for the item name, since
+// users often omit it ("coba pegang di tangan") while the reply names it
+// ("oke aku pegang oak log-nya").
+func inferActionIntent(msg, reply string) []action.Step {
 	lower := strings.ToLower(msg)
+	replyLower := strings.ToLower(reply)
 
 	var label string
 	switch {
@@ -106,6 +109,8 @@ func inferActionIntent(msg string) []action.Step {
 		label = "give"
 	case containsAny(lower, "drop", "buang", "lempar"):
 		label = "drop"
+	case containsAny(lower, "pegang", "genggam", "equip", "hold", "pakai", "pake ", "tahan"):
+		label = "equip"
 	case containsAny(lower, "cari", "kumpulin", "kumpulkan", "ambilin", "carikan", "gather"):
 		label = "gather"
 	case containsAny(lower, "tambang", "mining", "mine ", "gali"):
@@ -116,10 +121,11 @@ func inferActionIntent(msg string) []action.Step {
 		return nil
 	}
 
-	// Resolve target item from aliases.
+	// Resolve target item from aliases, preferring the user message and
+	// falling back to the LLM reply.
 	var item string
 	for _, alias := range itemAliases {
-		if strings.Contains(lower, alias[0]) {
+		if strings.Contains(lower, alias[0]) || strings.Contains(replyLower, alias[0]) {
 			item = alias[1]
 			break
 		}
@@ -134,7 +140,10 @@ func inferActionIntent(msg string) []action.Step {
 	}
 
 	param := item
-	if label != "drop" && label != "eat" {
+	switch label {
+	case "drop", "eat", "equip":
+		// These handlers take a bare item name (no count).
+	default:
 		param = fmt.Sprintf("%s,%d", item, count)
 	}
 

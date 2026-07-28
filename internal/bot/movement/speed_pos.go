@@ -162,8 +162,18 @@ func (tc *TickContext) checkWallCollision(targetX, targetZ float32, needsStepUp,
 	minY := int32(math.Floor(float64(wallCheckMinY)))
 	maxY := int32(math.Floor(float64(tc.NextY + 1.8)))
 
+	// When stepping up onto a 1-block ledge while still grounded, the solid
+	// block we are about to jump ONTO sits at body level (minY). A naive scan
+	// reads it as a wall and cancels all forward motion, so the bot just hops
+	// in place against the ledge forever. Ignore that single bottom level here
+	// and rely on the head level (minY+1) to catch genuine 2+ block walls.
+	groundedStepUp := needsStepUp && !isMidJump
+
 	for bx := minX; bx <= maxX; bx++ {
 		for by := minY; by <= maxY; by++ {
+			if groundedStepUp && by == minY {
+				continue
+			}
 			for bz := minZ; bz <= maxZ; bz++ {
 				if tc.B.WorldModel.IsSolid(bx, by, bz) {
 					return true

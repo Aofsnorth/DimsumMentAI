@@ -51,6 +51,7 @@ type TickContext struct {
 	ActivelyClimbing    bool
 	LastPredictedY      float32
 	IsParkourJump       bool
+	TargetTolerance     float32 // arrival tolerance for walk_to (copied from bot)
 }
 
 // SendInputLoop handles the physical updates and steering of the bot
@@ -90,6 +91,7 @@ func SendInputLoop(ctx context.Context, b *bot.Bot, gd minecraft.GameData) {
 			tc.Pitch = b.Pitch
 			tc.HeadYaw = b.HeadYaw
 			tc.VelY = b.VelY
+			tc.TargetTolerance = b.TargetTolerance
 			b.Mu.Unlock()
 
 			tc.FeetX = int32(math.Floor(float64(tc.CurrPos.X())))
@@ -127,6 +129,17 @@ func SendInputLoop(ctx context.Context, b *bot.Bot, gd minecraft.GameData) {
 			tc.updateLookDirection()
 			tc.calculateMovementSpeedAndPosition()
 			tc.writePlayerAuthInputPacket()
+			// Persist computed orientation back to the bot so the next tick's
+			// easing continues from where this tick left off. Without this the
+			// eased Yaw/Pitch/HeadYaw were recomputed from the frozen spawn
+			// angles every tick, so the body could never actually turn to face
+			// its walk direction (it crawled sideways and computeMoveSpeed
+			// kept throttling it because absYawDiff never shrank).
+			b.Mu.Lock()
+			b.Yaw = tc.Yaw
+			b.Pitch = tc.Pitch
+			b.HeadYaw = tc.HeadYaw
+			b.Mu.Unlock()
 			if tick > 0 && tick%200 == 0 {
 				// #region agent log
 				debuglog.Log("C", "movement/movement.go:SendInputLoop", "input loop alive", map[string]any{

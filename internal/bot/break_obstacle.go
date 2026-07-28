@@ -67,6 +67,12 @@ func (b *Bot) BreakObstacleAt(pos protocol.BlockPos) {
 			BlockPosition:   pos,
 			BlockFace:       1,
 		})
+		_ = b.Conn.WritePacket(&packet.PlayerAction{
+			EntityRuntimeID: runtimeID,
+			ActionType:      protocol.PlayerActionStopBreak,
+			BlockPosition:   pos,
+			BlockFace:       1,
+		})
 
 		b.WorldModel.SetSolid(pos.X(), pos.Y(), pos.Z(), false)
 		b.Logger.Info("broke obstacle to unstick path", "pos", pos, "name", name)

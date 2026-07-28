@@ -34,13 +34,14 @@ type SkinConfig struct {
 }
 
 type AIConfig struct {
-	Provider                  string  `yaml:"provider"` // nvidia, minimax, opengateway, openai_compatible
+	Provider                  string  `yaml:"provider"` // openai_compatible, anthropic_compatible, google_compatible, nvidia, none
 	Model                     string  `yaml:"model"`
-	BaseURL                   string  `yaml:"base_url"` // override default endpoint; required for opengateway/openai_compatible
+	BaseURL                   string  `yaml:"base_url"` // endpoint URL; empty uses provider default (nvidia only). Required for the *_compatible providers.
 	MainPlayer                string  `yaml:"main_player"`
 	RespondOnlyToLinkedPlayer bool    `yaml:"respond_only_to_linked_player"`
 	RespondOnlyWhenTagged     bool    `yaml:"respond_only_when_tagged"`
 	CustomPersonality         string  `yaml:"custom_personality"`
+	ContextWindow             int     `yaml:"context_window"`         // override model context window in tokens; 0 = auto-detect. Bot uses 25% of this as its request budget.
 	ProactiveIntervalSec      int     `yaml:"proactive_interval_sec"` // 0 = disabled. Periodic autonomous conversation tick.
 	ProactiveChance           float64 `yaml:"proactive_chance"`       // 0.0-1.0, probability of actually querying LLM each tick.
 }

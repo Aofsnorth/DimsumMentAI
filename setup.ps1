@@ -72,7 +72,7 @@ skin:
 # API key is loaded from .env (NVIDIA_API_KEY / MINIMAX_API_KEY / OPENAI_API_KEY).
 # Copy .env.example to .env and fill in your key. See README.md for details.
 ai:
-  provider: "nvidia" # "nvidia", "minimax", "opengateway", "openai_compatible", or "none"
+  provider: "nvidia" # "openai_compatible", "anthropic_compatible", "google_compatible", "nvidia", or "none"
   model: "openai/gpt-oss-120b"
   main_player: ".OnyxStygian" # Primary player/owner username
   respond_only_to_linked_player: false

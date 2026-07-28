@@ -247,7 +247,11 @@ var actionHandlers = map[string]actionHandler{
 	"guard":  handleAttack,
 	"equip": func(b *bot.Bot, param, _ string) {
 		if param != "" {
-			_ = b.InventoryMgr.EquipItem(param)
+			go func() {
+				if err := b.InventoryMgr.EquipItem(param); err != nil {
+					b.Logger.Warn("equip action failed", "item", param, "error", err)
+				}
+			}()
 		}
 	},
 	"give": handleGive,

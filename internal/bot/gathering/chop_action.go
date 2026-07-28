@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 
+	"bedrock-ai/internal/event"
+
 	"github.com/go-gl/mathgl/mgl32"
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
 	"github.com/sandertv/gophertunnel/minecraft/protocol/packet"
@@ -26,7 +28,40 @@ func (tc *TreeChopper) chopTree(ctx context.Context, basePos protocol.BlockPos, 
 	tc.chopLogBlocks(ctx, logBlocks)
 
 	tc.rg.scaffold.DescendFromTower(ctx, float32(basePos.Y()))
+
+	// Give the server a moment to spawn the dropped item entities before we
+	// start sweeping — otherwise CollectAllDrops runs before the drops are
+	// tracked and finds nothing.
+	time.Sleep(400 * time.Millisecond)
+
+	// Verify the broken logs actually enter the inventory before reporting
+	// success. Previously the bot could break a log, fail to pick it up, and
+	// still announce that gathering was done.
+	before := tc.rg.looter.currentItemCount("log")
 	tc.rg.looter.CollectAllDrops(ctx, 8.0)
+	got := tc.rg.looter.currentItemCount("log") - before
+	if got <= 0 {
+		tc.logger.Warn("Wood broken but not picked up", "target", targetCount)
+		tc.rg.bot.ReportActionStatus("", event.ActionStatus{
+			Action:  "chop",
+			Item:    "log",
+			Success: false,
+			Error:   "kayu sudah dihancurkan tapi belum terambil",
+		})
+		return
+	}
+	tc.logger.Info("Wood collected", "count", got, "target", targetCount)
+	tc.rg.bot.ReportActionStatus("", event.ActionStatus{
+		Action:  "chop",
+		Item:    "log",
+		Count:   got,
+		Success: true,
+	})
+	// Release the last pinned LookAt (topmost log) so the head returns to
+	// neutral instead of staying stuck looking up the trunk.
+	if rl, ok := tc.rg.bot.(interface{ ResetLook() }); ok {
+		rl.ResetLook()
+	}
 }
 
 func (tc *TreeChopper) collectLogBlocks(basePos protocol.BlockPos, targetCount int) []protocol.BlockPos {
@@ -169,9 +204,12 @@ func (tc *TreeChopper) finishBreakBlock(pos protocol.BlockPos) {
 		BlockPosition:   pos,
 		BlockFace:       1,
 	})
+	// StopBreak MUST be the last packet in the sequence. Sending
+	// PredictDestroyBlock here leaves the server in a half-broken state and
+	// any block the player later places at this position gets insta-broken.
 	_ = bot.WritePacket(&packet.PlayerAction{
 		EntityRuntimeID: bot.GetEntityRuntimeID(),
-		ActionType:      protocol.PlayerActionPredictDestroyBlock,
+		ActionType:      protocol.PlayerActionStopBreak,
 		BlockPosition:   pos,
 		BlockFace:       1,
 	})

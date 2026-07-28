@@ -226,6 +226,25 @@ func (b *Bot) OverrideLookPitch(pitch float32) {
 	b.NextIdleLookChange = time.Now().Add(2 * time.Second)
 }
 
+// ResetLook clears any pinned/static look target and levels the pitch to the
+// horizon so the head returns to a neutral forward gaze. Call this after a
+// give/drop that forced an upward pitch (SetLookAngles) — otherwise the head
+// stays stuck looking up because the idle look loop keeps re-applying the
+// pinned static angles.
+func (b *Bot) ResetLook() {
+	b.Mu.Lock()
+	defer b.Mu.Unlock()
+	b.Pitch = 0
+	b.IdleLookTargetPitch = 0
+	b.IdleLookTargetType = ""
+	b.IdleLookTargetID = 0
+	b.LookTargetName = ""
+	b.LookTargetUntil = time.Time{}
+	// Expire the pinned window immediately so applyIdleLook picks a fresh,
+	// natural target on the next tick instead of holding the forced pose.
+	b.NextIdleLookChange = time.Time{}
+}
+
 // WaitForYawSync polls until the movement tick has actually sent a
 // PlayerAuthInput carrying the target yaw to the server, or the timeout
 // elapses. Returns true when sync confirmed. Used before drop transactions

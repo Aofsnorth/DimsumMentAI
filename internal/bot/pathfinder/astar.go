@@ -1,8 +1,8 @@
 package pathfinder
 
 import (
-	"bedrock-ai/internal/safecast"
 	"container/heap"
+	"fmt"
 )
 
 type PriorityQueue []*Node
@@ -35,10 +35,14 @@ func (pq *PriorityQueue) Pop() interface{} {
 // eliminates GC pressure from string allocations during pathfinding.
 // Coordinate range: x/z ±2,097,151 (21 bits), y -2048..+2047 (12 bits).
 func packKey(x, y, z int32) int64 {
-	ux := safecast.To[uint64](x) & 0x1FFFFF
-	uy := safecast.To[uint64](y) & 0xFFF
-	uz := safecast.To[uint64](z) & 0x1FFFFF
-	return safecast.To[int64](ux<<33 | uy<<21 | uz)
+	// Bit-cast int32→uint64 via uint32 (two's complement) instead of
+	// safecast.To: negative coordinates are the norm around spawn, and
+	// safecast clamps them all to 0, collapsing every negative-x/z node
+	// into the same key and making A* think all neighbors are duplicates.
+	ux := uint64(uint32(x)) & 0x1FFFFF
+	uy := uint64(uint32(y)) & 0xFFF
+	uz := uint64(uint32(z)) & 0x1FFFFF
+	return int64(ux<<33 | uy<<21 | uz)
 }
 
 // FindPath executes the A* algorithm in 3D grid space using the provided world walkability rules
@@ -98,6 +102,21 @@ func FindPath(startNode, targetNode Node, world WorldModel, allowFallback bool) 
 
 		for _, neighbor := range world.GetNeighbors(*current) {
 			tryProcessNeighbor(openSet, openMap, closedMap, current, neighbor, targetNode)
+		}
+	}
+
+	// Diagnostic: A* exhausted without reaching target. Report iterations,
+	// open set residue, and best-node distance so we can see whether the
+	// search space exploded or neighbors are being vetoed wholesale.
+	fmt.Printf("[A* exhausted] iterations=%d maxIterations=%d openSetLen=%d closedSetLen=%d bestNodeDist=%.2f allowFallback=%v\n",
+		iterations, maxIterations, openSet.Len(), len(closedMap), closestDistance, allowFallback)
+	if iterations <= 2 {
+		// Start had no neighbors — dump WHY. Probe each cardinal directly
+		// through the same predicates GetNeighbors uses.
+		if w, ok := world.(interface {
+			DebugNeighborVeto(n Node) string
+		}); ok {
+			fmt.Printf("[A* neighbor veto] %s\n", w.DebugNeighborVeto(startNode))
 		}
 	}
 

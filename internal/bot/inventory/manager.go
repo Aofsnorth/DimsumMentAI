@@ -42,6 +42,7 @@ type Bot interface {
 	SetLookAngles(yaw, pitch float32)
 	WaitForYawSync(targetYaw float32, timeout time.Duration) bool
 	OverrideLookPitch(pitch float32)
+	ResetLook()
 	FindItemSlotByName(name string) (uint32, bool)
 	CraftItem(recipeNetID uint32, count int) error
 	GetRecipes() map[string]uint32

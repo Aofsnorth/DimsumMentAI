@@ -62,8 +62,17 @@ func (tc *TickContext) wantsToMove() bool {
 func (tc *TickContext) applyMoveLookTarget() {
 	if tc.Dist > 0.1 && tc.HasHorizontalMove {
 		yawRad := math.Atan2(float64(tc.Dz), float64(tc.Dx))
-		tc.TargetYaw = float32(yawRad*180/math.Pi) - 90
+		targetYaw := float32(yawRad*180/math.Pi) - 90
+		tc.TargetYaw = targetYaw
 		tc.TargetPitch = 0
+		// Snap the head + body much more aggressively toward the walk
+		// direction so computeMoveSpeed doesn't throttle us to 10% while
+		// EaseAngle is still catching up. Easing is nice for idle looks, but
+		// mid-walk it makes the bot face sideways and crawl.
+		tc.HeadYaw = targetYaw
+		// Body still eases, just faster — preserves a hint of torso lag for
+		// realism without the multi-tick crawl.
+		tc.Yaw = EaseAngle(tc.Yaw, targetYaw, 4.0, 40.0, 0.7)
 	} else {
 		tc.TargetYaw = tc.Yaw
 		tc.TargetPitch = tc.Pitch
@@ -100,6 +109,10 @@ func (tc *TickContext) applyFollowLookTarget() {
 		tc.TargetYaw = float32(yawRad*180/math.Pi) - 90
 		pitchRad := math.Atan2(float64(dyP), float64(distP))
 		tc.TargetPitch = float32(-pitchRad * 180 / math.Pi)
+		// Clamp to a comfortable range so the camera never gets stuck looking
+		// straight up/down (which causes the eased pitch to stall at the ±90
+		// boundary and feel unnatural).
+		tc.TargetPitch = clampFloat32(tc.TargetPitch, -85, 85)
 	} else {
 		tc.TargetYaw = tc.Yaw
 		tc.TargetPitch = tc.Pitch
@@ -110,7 +123,7 @@ func (tc *TickContext) applyEasedLookDirection(wantsToMove bool) {
 	yawDiff := angleDifference(tc.TargetYaw, tc.Yaw)
 	absYawDiff := math.Abs(float64(yawDiff))
 	yawSpeed := tc.selectYawSpeed(absYawDiff)
-	pitchSpeed := float32(22.0)
+	pitchSpeed := float32(28.0)
 	if !wantsToMove {
 		tc.TargetYaw, tc.TargetPitch = dampenLookJitter(tc.Yaw, tc.Pitch, tc.TargetYaw, tc.TargetPitch)
 		pitchSpeed = 12.0
@@ -348,7 +361,10 @@ func naturalLookAngles(originFeet, target mgl32.Vec3, currentYaw float32) (float
 	if distH < 1.0 {
 		pitch = clampFloat32(pitch, -18, 18)
 	} else {
-		pitch = clampFloat32(pitch, -40, 40)
+		// Asymmetric clamp: real players idle-look slightly downward more
+		// often than upward (ground, feet, blocks nearby). Capping the up
+		// angle at 25° keeps the head from appearing stuck skyward.
+		pitch = clampFloat32(pitch, -25, 40)
 	}
 	if math.Abs(float64(pitch)) < 1.25 {
 		pitch = 0
@@ -444,7 +460,10 @@ func (tc *TickContext) randomIdleBlock(maxDist int32) (mgl32.Vec3, bool) {
 		if dx*dx+dz*dz < 4 {
 			continue
 		}
-		dy := safecast.To[int32](rand.Intn(5)) - 1
+		// Bias dy downward/level (-1..+1) so the bot's idle gaze stays near
+		// the horizon instead of picking blocks above eye level and pinning
+		// the head upward for seconds at a time.
+		dy := safecast.To[int32](rand.Intn(3)) - 1
 		x, y, z := feetX+dx, feetY+dy, feetZ+dz
 		if tc.B.WorldModel.IsSolid(x, y, z) &&
 			!tc.B.WorldModel.IsHazard(x, y, z) &&

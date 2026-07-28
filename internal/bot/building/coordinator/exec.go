@@ -157,6 +157,12 @@ func (ba *BuilderAgent) executeUndoLoop(ctx context.Context, count int) {
 			BlockPosition:   pos,
 			BlockFace:       1,
 		})
+		_ = ba.bot.WritePacket(&packet.PlayerAction{
+			EntityRuntimeID: ba.bot.GetEntityRuntimeID(),
+			ActionType:      protocol.PlayerActionStopBreak,
+			BlockPosition:   pos,
+			BlockFace:       1,
+		})
 
 		ba.bot.GetLocalWorldModel().SetSolid(safecast.To[int32](entry.X), safecast.To[int32](entry.Y), safecast.To[int32](entry.Z), false)
 		time.Sleep(150 * time.Millisecond)

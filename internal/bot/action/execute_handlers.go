@@ -65,63 +65,236 @@ func handleCraft(b *bot.Bot, param, user string) {
 
 	go func() {
 		ctx := context.Background()
-
-		b.Mu.Lock()
-		recipeID, ok := b.Recipes[itemName]
-		if !ok {
-			recipeID, ok = b.Recipes["minecraft:"+itemName]
-		}
-		recipe, recipeOK := b.RecipesByNetID[recipeID]
-		b.Mu.Unlock()
-
-		if !ok {
-			b.Logger.Warn("ExecuteAction: recipe not found for item", "item", itemName)
-			b.ReportActionStatus(user, event.ActionStatus{Action: "craft", Item: itemName, Success: false, Error: "resep tidak diketahui"})
-			return
-		}
-		if !recipeOK {
-			// Server's CraftingData hasn't populated yet for this network ID;
-			// shouldn't happen in practice but guard anyway.
-			b.Logger.Warn("ExecuteAction: recipe net ID not in RecipesByNetID cache", "item", itemName, "id", recipeID)
-			return
-		}
-
-		needsBench := recipeNeedsCraftingBench(recipe)
-		if needsBench {
-			b.Logger.Debug("Craft requires bench, ensuring crafting_table", "item", itemName, "block", recipe.Block)
-			tablePos, ensured := b.InventoryMgr.Crafting().EnsureCraftingTable(ctx)
-			if !ensured {
-				b.ReportActionStatus(user, event.ActionStatus{Action: "craft", Item: itemName, Success: false, Error: "gak punya crafting table"})
-				return
-			}
-			if err := b.InventoryMgr.Crafting().OpenCraftingTable(ctx, tablePos); err != nil {
-				b.Logger.Warn("OpenCraftingTable failed", "err", err)
-				b.ReportActionStatus(user, event.ActionStatus{Action: "craft", Item: itemName, Success: false, Error: "gagal buka crafting table"})
-				return
-			}
-			defer b.InventoryMgr.Crafting().CloseWindow()
-		} else {
-			b.Logger.Debug("Inventory recipe (no bench needed)", "item", itemName)
-		}
-
-		// The count parameter is the number of OUTPUT ITEMS the player wants,
-		// not the number of craft operations. Convert it to the number of craft
-		// operations using the recipe's output count.
-		outputPerCraft := int(recipe.Output.Count)
-		crafts := computeCrafts(count, outputPerCraft)
-		b.Logger.Debug("Executing craft action", "item", itemName, "recipeID", recipeID, "desired_count", count, "crafts", crafts)
-		if err := b.CraftItem(recipeID, crafts); err != nil {
+		b.Logger.Debug("Executing craft action", "item", itemName, "desired_count", count)
+		actual, err := craftChain(ctx, b, user, itemName, count, 0)
+		if err != nil {
 			b.Logger.Warn("CraftItem failed", "err", err, "item", itemName)
 			b.ReportActionStatus(user, event.ActionStatus{Action: "craft", Item: itemName, Count: count, Success: false, Error: err.Error()})
 			return
 		}
-		// Report actual output produced (crafts * outputPerCraft, capped at 64).
-		actualOutput := outputPerCraft * crafts
-		if actualOutput > 64 {
-			actualOutput = 64
-		}
-		b.ReportActionStatus(user, event.ActionStatus{Action: "craft", Item: itemName, Count: actualOutput, Success: true})
+		b.ReportActionStatus(user, event.ActionStatus{Action: "craft", Item: itemName, Count: actual, Success: true})
 	}()
+}
+
+// maxCraftDepth bounds chain-crafting recursion (e.g. oak_log -> oak_planks ->
+// stick is depth 2) so a malformed recipe graph can never loop forever.
+const maxCraftDepth = 4
+
+// ingredientFallbacks maps a generic/tag ingredient keyword to concrete
+// craftable items, tried in order, so chain-crafting can satisfy e.g.
+// a "planks" requirement by making oak_planks from oak_log.
+//
+// Specific plank variants (warped_planks, crimson_planks) are normalised to
+// the "planks" key via normalizeIngredientKey so they resolve here too.
+var ingredientFallbacks = map[string][]string{
+	"planks": {"oak_planks", "spruce_planks", "birch_planks", "jungle_planks", "acacia_planks", "dark_oak_planks", "mangrove_planks", "cherry_planks"},
+}
+
+// craftChain crafts `count` of itemName, first chain-crafting any missing
+// ingredients that themselves have known recipes. It returns the number of
+// output items actually produced.
+func craftChain(ctx context.Context, b *bot.Bot, user, itemName string, count, depth int) (int, error) {
+	if depth > maxCraftDepth {
+		return 0, fmt.Errorf("rantai craft terlalu dalam untuk %s", itemName)
+	}
+
+	recipeID, recipe, ok := pickBestRecipe(b, itemName)
+	if !ok {
+		return 0, fmt.Errorf("resep tidak diketahui: %s", itemName)
+	}
+
+	// 1. Ensure missing ingredients by chain-crafting them first.
+	if err := ensureCraftIngredients(ctx, b, user, recipe, count, depth); err != nil {
+		return 0, err
+	}
+
+	// 2. Bench handling.
+	if recipeNeedsCraftingBench(recipe) {
+		b.Logger.Debug("Craft requires bench, ensuring crafting_table", "item", itemName, "block", recipe.Block)
+		tablePos, ensured := b.InventoryMgr.Crafting().EnsureCraftingTable(ctx)
+		if !ensured {
+			return 0, fmt.Errorf("gak punya crafting table")
+		}
+		if err := b.InventoryMgr.Crafting().OpenCraftingTable(ctx, tablePos); err != nil {
+			b.Logger.Warn("OpenCraftingTable failed", "err", err)
+			return 0, fmt.Errorf("gagal buka crafting table")
+		}
+		defer b.InventoryMgr.Crafting().CloseWindow()
+	} else {
+		b.Logger.Debug("Inventory recipe (no bench needed)", "item", itemName)
+	}
+
+	// 3. Craft. `count` is desired OUTPUT items; convert to craft operations.
+	outputPerCraft := int(recipe.Output.Count)
+	crafts := computeCrafts(count, outputPerCraft)
+	b.Logger.Debug("chain craft step", "item", itemName, "recipeID", recipeID, "crafts", crafts, "depth", depth)
+	if err := b.CraftItem(recipeID, crafts); err != nil {
+		return 0, err
+	}
+	actual := outputPerCraft * crafts
+	if actual > 64 {
+		actual = 64
+	}
+	return actual, nil
+}
+
+// pickBestRecipe selects the recipe network ID for itemName whose ingredients
+// the bot can most readily satisfy. Many items (e.g. "stick") have one recipe
+// per wood variant; the server-sent Recipes map keeps only the last one, so we
+// scan all candidates and prefer one the bot can either satisfy directly from
+// inventory or via a known plank fallback. Returns the chosen ID, its recipe
+// info, and ok=false when no recipe is known at all.
+func pickBestRecipe(b *bot.Bot, itemName string) (uint32, bot.RecipeInfo, bool) {
+	candidates := b.GetRecipeCandidates(itemName)
+	if len(candidates) == 0 {
+		return 0, bot.RecipeInfo{}, false
+	}
+	byNetID := b.GetRecipesByNetID()
+
+	var fallbackID uint32
+	var fallbackInfo bot.RecipeInfo
+	haveFallback := false
+	bestScore := -1
+	var bestID uint32
+	var bestInfo bot.RecipeInfo
+
+	for _, id := range candidates {
+		info, ok := byNetID[id]
+		if !ok {
+			continue
+		}
+		if !haveFallback {
+			fallbackID, fallbackInfo, haveFallback = id, info, true
+		}
+		score := recipeSatisfactionScore(b, info)
+		if score > bestScore {
+			bestScore = score
+			bestID, bestInfo = id, info
+		}
+	}
+
+	if bestScore >= 0 {
+		return bestID, bestInfo, true
+	}
+	if haveFallback {
+		return fallbackID, fallbackInfo, true
+	}
+	return 0, bot.RecipeInfo{}, false
+}
+
+// recipeSatisfactionScore rates how ready the bot is to craft a recipe:
+//   2 = every ingredient is already in inventory
+//   1 = every missing ingredient is a plank variant the bot can chain-craft
+//   0 = otherwise (still craftable in principle, lowest preference)
+func recipeSatisfactionScore(b *bot.Bot, recipe bot.RecipeInfo) int {
+	allHave := true
+	allHaveOrPlank := true
+	for _, ing := range recipe.Ingredients {
+		name := b.IngredientName(ing)
+		if name == "" {
+			continue
+		}
+		need := int(ing.Count)
+		checkName := name
+		if strings.HasSuffix(strings.ToLower(name), "_planks") {
+			checkName = "planks"
+		}
+		if b.CountItemLike(checkName) >= need {
+			continue
+		}
+		allHave = false
+		// A missing plank ingredient is fine as long as the bot has some log
+		// or planks it can convert.
+		if checkName == "planks" && (b.CountItemLike("planks") > 0 || b.CountItemLike("log") > 0) {
+			continue
+		}
+		allHaveOrPlank = false
+	}
+	switch {
+	case allHave:
+		return 2
+	case allHaveOrPlank:
+		return 1
+	default:
+		return 0
+	}
+}
+
+// ensureCraftIngredients chain-crafts any recipe ingredient the bot does not
+// already have enough of, so multi-tier items (stick <- planks <- log) craft
+// from raw materials in one request.
+func ensureCraftIngredients(ctx context.Context, b *bot.Bot, user string, recipe bot.RecipeInfo, crafts, depth int) error {
+	for _, ing := range recipe.Ingredients {
+		name := b.IngredientName(ing)
+		if name == "" {
+			continue
+		}
+		need := int(ing.Count) * crafts
+		// For plank-variant ingredients (warped_planks, oak_planks, etc.) any
+		// plank type satisfies the recipe. Count all planks together so we
+		// don't try to craft a specific variant the bot can't make.
+		checkName := name
+		if strings.HasSuffix(strings.ToLower(name), "_planks") {
+			checkName = "planks"
+		}
+		if need <= 0 || b.CountItemLike(checkName) >= need {
+			continue
+		}
+		b.Logger.Debug("chain craft: ingredient missing, crafting it", "ingredient", name, "need", need)
+		if err := craftIngredient(ctx, b, user, name, need, depth); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// craftIngredient crafts `need` of an ingredient, resolving generic/tag
+// ingredients (e.g. "planks") to a concrete craftable variant the bot can
+// actually make.
+func craftIngredient(ctx context.Context, b *bot.Bot, user, name string, need, depth int) error {
+	candidates := []string{name}
+	if fb, ok := ingredientFallbacks[normalizeIngredientKey(name)]; ok {
+		candidates = fb
+	}
+
+	var lastErr error
+	for _, c := range candidates {
+		if _, ok := lookupRecipe(b, c); !ok {
+			continue
+		}
+		if _, err := craftChain(ctx, b, user, c, need, depth+1); err != nil {
+			lastErr = err
+			continue
+		}
+		return nil
+	}
+	if lastErr == nil {
+		lastErr = fmt.Errorf("tidak punya bahan untuk %s", name)
+	}
+	return lastErr
+}
+
+// lookupRecipe resolves a recipe network ID by item name.
+func lookupRecipe(b *bot.Bot, name string) (uint32, bool) {
+	b.Mu.Lock()
+	defer b.Mu.Unlock()
+	id, ok := b.Recipes[name]
+	if !ok {
+		id, ok = b.Recipes["minecraft:"+name]
+	}
+	return id, ok
+}
+
+// normalizeIngredientKey lowercases and strips the minecraft: prefix so a tag
+// like "minecraft:planks" maps to the ingredientFallbacks key "planks".
+// Specific plank variants (warped_planks, crimson_planks, etc.) are collapsed
+// to "planks" so the fallback list covers them.
+func normalizeIngredientKey(name string) string {
+	name = strings.ToLower(strings.TrimPrefix(strings.TrimSpace(name), "minecraft:"))
+	if strings.HasSuffix(name, "_planks") {
+		return "planks"
+	}
+	return name
 }
 
 // recipeNeedsCraftingBench determines whether a recipe truly requires a 3×3
@@ -129,23 +302,24 @@ func handleCraft(b *bot.Bot, param, user string) {
 // made in the player's personal 2×2 inventory grid even if the server tags them
 // with Block="crafting_table". We use the recipe shape/dimensions as the
 // ground truth.
+//
+// Note: dragonfly's handleAutoCraft requires craft.Block()=="crafting_table"
+// for AutoCraftRecipe regardless of grid size, and a crafting_table tag covers
+// BOTH the 3×3 table and the 2×2 inventory grid, so we never need to open a
+// table window for AutoCraft — the recipe network ID carries that association.
 func recipeNeedsCraftingBench(recipe bot.RecipeInfo) bool {
 	if recipe.Block == "" {
 		return false
 	}
 
 	// Non-crafting-table blocks (furnace, stonecutter, cartography_table,
-	// blast_furnace, etc.) require their own special interface. We don't
-	// attempt to craft those in the 2×2 inventory grid.
+	// blast_furnace, etc.) require their own special interface.
 	if recipe.Block != "crafting_table" {
 		return true
 	}
 
-	// Block == "crafting_table". If the recipe actually fits in a 2×2 grid
-	// (inventory recipes such as oak_planks, sticks, crafting_table) we can
-	// bypass the bench. Some servers tag these recipes with
-	// Block="crafting_table" even though the vanilla client allows them in
-	// the personal crafting grid.
+	// Block == "crafting_table". If the recipe fits in a 2×2 grid it can be
+	// auto-crafted against the inventory grid without opening a table.
 	if recipe.Shapeless {
 		return len(recipe.Ingredients) > 4
 	}
@@ -306,10 +480,12 @@ func handleDrop(b *bot.Bot, param, user string) {
 		}
 
 		if foundPlayer {
-			// Brief pause so the drop transaction lands and the entity is on
-			// the ground before we step back. Without this, the bot's
-			// immediate backward step can re-collect the item.
-			time.Sleep(150 * time.Millisecond)
+			// Give the server time to process the drop transaction and spawn
+			// the item BEFORE we rotate/move. Navigating immediately swings the
+			// body yaw toward backPos within one tick; if the server applies
+			// that yaw when spawning the drop, the item flies backward instead
+			// of toward the player.
+			time.Sleep(450 * time.Millisecond)
 
 			// Step back a short distance so the dropped item ends up outside
 			// the bot's pickup radius. We move opposite to the player direction.
@@ -327,6 +503,9 @@ func handleDrop(b *bot.Bot, param, user string) {
 				time.Sleep(500 * time.Millisecond)
 				b.StopMovement()
 			}
+			// Release the forced upward look so the head returns to a neutral
+			// gaze instead of staying stuck pointing up after the toss.
+			b.ResetLook()
 		}
 
 		b.Logger.Debug("handleDrop complete", "item", itemName, "count", count, "target", target)

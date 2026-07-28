@@ -1,11 +1,13 @@
 package world
 
 import (
-	"bedrock-ai/internal/safecast"
 	"bytes"
+	"encoding/binary"
+	"sort"
+
+	"bedrock-ai/internal/safecast"
 
 	"github.com/df-mc/dragonfly/server/world/chunk"
-	"github.com/sandertv/gophertunnel/minecraft/nbt"
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
 )
 
@@ -22,25 +24,116 @@ func (wc *WorldCache) precomputeBlockHashes() {
 		return
 	}
 
+	var scratch []byte
 	count := uint32(0)
+	airRID, airFound := chunk.StateToRuntimeID("minecraft:air", nil)
+	var airHash uint32
 	for {
 		name, properties, found := chunk.RuntimeIDToState(count)
 		if !found {
 			break
 		}
 
-		sNoVer := struct {
-			Name       string         `nbt:"name"`
-			Properties map[string]any `nbt:"states"`
-		}{Name: name, Properties: properties}
-
-		leBytes, err := nbt.MarshalEncoding(sNoVer, nbt.LittleEndian)
-		if err == nil {
-			h := fnv1a(leBytes)
-			wc.hashToRID[h] = count
+		hash, sc := networkBlockHash(name, properties, scratch)
+		scratch = sc
+		wc.hashToRID[hash] = count
+		if airFound && count == airRID {
+			airHash = hash
 		}
 		count++
 	}
+	if wc.logger != nil {
+		wc.logger.Info("precomputed block hashes",
+			"total", count,
+			"air_rid", airRID,
+			"air_hash", airHash,
+			"air_found", airFound,
+		)
+	}
+}
+
+// networkBlockHash produces the canonical "network block hash" Bedrock uses
+// for UseBlockNetworkIDHashes. Algorithm mirrors dragonfly's
+// network_block_hash.go: name + sorted properties encoded as raw NBT tags
+// (little-endian, no version field) then FNV-1a. The previous implementation
+// used nbt.MarshalEncoding, whose byte layout does not match Bedrock's and
+// produced hashes that never appeared on the wire.
+func networkBlockHash(name string, properties map[string]any, scratch []byte) (uint32, []byte) {
+	if name == "minecraft:unknown" {
+		return 0xfffffffe, scratch
+	}
+
+	keys := make([]string, 0, len(properties))
+	for k := range properties {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	data := scratch[:0]
+	writeString := func(str string) {
+		data = binary.LittleEndian.AppendUint16(data, uint16(len(str)))
+		data = append(data, []byte(str)...)
+	}
+
+	data = append(data, 10) // compound
+	data = append(data, 0)
+	data = append(data, 0)
+
+	data = append(data, 8) // string
+	writeString("name")
+	writeString(name)
+
+	data = append(data, 10) // compound
+	writeString("states")
+	for _, k := range keys {
+		v := properties[k]
+		switch v := v.(type) {
+		case string:
+			data = append(data, 8)
+			writeString(k)
+			writeString(v)
+		case uint8:
+			data = append(data, 1)
+			writeString(k)
+			data = append(data, v)
+		case int8:
+			data = append(data, 1)
+			writeString(k)
+			data = append(data, byte(v))
+		case bool:
+			b := byte(0)
+			if v {
+				b = 1
+			}
+			data = append(data, 1)
+			writeString(k)
+			data = append(data, b)
+		case uint16:
+			data = append(data, 2)
+			writeString(k)
+			data = binary.LittleEndian.AppendUint16(data, v)
+		case int16:
+			data = append(data, 2)
+			writeString(k)
+			data = binary.LittleEndian.AppendUint16(data, uint16(v))
+		case uint32:
+			data = append(data, 3)
+			writeString(k)
+			data = binary.LittleEndian.AppendUint32(data, v)
+		case int32:
+			data = append(data, 3)
+			writeString(k)
+			data = binary.LittleEndian.AppendUint32(data, uint32(v))
+		default:
+			// Skip unknown NBT types — dragonfly panics here, but we prefer a
+			// partial hash map over crashing the bot during world load.
+			continue
+		}
+	}
+	data = append(data, 0) // end
+	data = append(data, 0)
+
+	return fnv1a(data), data
 }
 
 func fnv1a(data []byte) uint32 {
@@ -137,12 +230,44 @@ func (wc *WorldCache) decodeNetworkPalettedStorage(buf *bytes.Buffer) (*paletted
 	}
 
 	palette := make([]uint32, paletteCount)
+	rawPalette := make([]int32, paletteCount)
 	for i := int32(0); i < paletteCount; i++ {
 		v, err := readVarint32(buf)
 		if err != nil {
 			return nil, err
 		}
-		palette[i] = wc.TranslateRuntimeID(safecast.To[uint32](v))
+		rawPalette[i] = v
+		// Bit-cast, not safecast: Bedrock block state hashes are uint32 FNV-1a
+		// values that can exceed 2^31. readVarint32 returns them as int32, and
+		// safecast clamps negative values to 0 — collapsing every high-bit hash
+		// into RID 0 (cyan_terracotta) and making the world look solid.
+		palette[i] = wc.TranslateRuntimeID(uint32(v))
+	}
+
+	// Diagnostic: dump the first storage's raw + translated palette so we can
+	// see exactly what Bedrock sent (hashes or runtime IDs) and how the local
+	// hash map handled each entry.
+	if wc.logger != nil && len(rawPalette) > 0 && wc.paletteDumpCount < 3 {
+		wc.paletteDumpCount++
+		lim := 8
+		if len(rawPalette) < lim {
+			lim = len(rawPalette)
+		}
+		raw := make([]int32, lim)
+		tr := make([]uint32, lim)
+		hits := make([]bool, lim)
+		copy(raw, rawPalette[:lim])
+		copy(tr, palette[:lim])
+		for i := 0; i < lim; i++ {
+			hits[i] = wc.HashLookupHit(uint32(rawPalette[i]))
+		}
+		wc.logger.Info("palette dump",
+			"bitsPerBlock", bitsPerBlock,
+			"paletteCount", paletteCount,
+			"raw", raw,
+			"translated", tr,
+			"hash_hit", hits,
+		)
 	}
 
 	return &palettedResult{

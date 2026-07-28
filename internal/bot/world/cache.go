@@ -24,6 +24,7 @@ type WorldCache struct {
 	logger    *slog.Logger
 	hashToRID map[uint32]uint32
 	useHashes bool
+	paletteDumpCount int
 }
 
 // NewWorldCache creates a WorldCache.
@@ -76,6 +77,16 @@ func (wc *WorldCache) TranslateRuntimeID(rid uint32) uint32 {
 		return realRID
 	}
 	return rid
+}
+
+// HashLookupHit reports whether rid appears in the precomputed hash map.
+// Diagnostic-only; used by the A* neighbor probe to see whether wire hashes
+// are hitting the local table.
+func (wc *WorldCache) HashLookupHit(rid uint32) bool {
+	wc.mu.RLock()
+	defer wc.mu.RUnlock()
+	_, ok := wc.hashToRID[rid]
+	return ok
 }
 
 // StoreBlobs saves blob payloads from ClientCacheMissResponse.

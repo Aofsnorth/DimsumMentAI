@@ -137,6 +137,7 @@ type Bot struct {
 	MovementState    string // "idle", "walk_to", "follow"
 	TargetPos        mgl32.Vec3
 	TargetPlayerName string
+	TargetTolerance  float32 // arrival tolerance for walk_to (default 2.0; tightened for item pickup)
 
 	// LastChatPartner is the most recent player the bot had a conversation
 	// with. Used by action status reports to know whom to address when the
@@ -182,9 +183,15 @@ type Bot struct {
 	StackNetworkIDs map[uint32]int32
 	ItemNames       map[int32]string
 	Recipes         map[string]uint32
-	RecipesByNetID  map[uint32]RecipeInfo
-	HeldSlot        uint32
-	StackRequestID  int32
+	// RecipeCandidates maps an output item name to ALL recipe network IDs that
+	// produce it. Many items (e.g. "stick") have one recipe per wood variant;
+	// keeping every candidate lets the crafter pick the one whose ingredients
+	// the bot actually has, instead of whichever recipe happened to be written
+	// to Recipes last.
+	RecipeCandidates map[string][]uint32
+	RecipesByNetID   map[uint32]RecipeInfo
+	HeldSlot         uint32
+	StackRequestID   int32
 
 	// Pending craft requests: maps ItemStackRequest.RequestID to a pending
 	// craft entry. Used by CraftItem to synchronously wait for the server's
@@ -262,12 +269,14 @@ func newBot(opts ...Option) (*Bot, error) {
 		PlayerUUIDs:         make(map[uuid.UUID]string),
 		RecentBotMessages:   make(map[string]time.Time),
 		MovementState:       "idle",
+		TargetTolerance:     2.0,
 		Language:            "Indonesian",
 		StatePath:           "data/bot_state.json",
 		InventoryMap:        make(map[uint32]protocol.ItemStack),
 		StackNetworkIDs:     make(map[uint32]int32),
 		ItemNames:           make(map[int32]string),
 		Recipes:             make(map[string]uint32),
+		RecipeCandidates:    make(map[string][]uint32),
 		RecipesByNetID:      make(map[uint32]RecipeInfo),
 		pendingCrafts:       make(map[int32]pendingCraft),
 		StackRequestID:      -1,

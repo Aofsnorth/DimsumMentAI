@@ -46,6 +46,12 @@ func (bp *BlockPlacer) digBlock(ctx context.Context, pos protocol.BlockPos) {
 		BlockPosition:   pos,
 		BlockFace:       1,
 	})
+	_ = bp.bot.WritePacket(&packet.PlayerAction{
+		EntityRuntimeID: bp.bot.GetEntityRuntimeID(),
+		ActionType:      protocol.PlayerActionStopBreak,
+		BlockPosition:   pos,
+		BlockFace:       1,
+	})
 	time.Sleep(100 * time.Millisecond)
 }
 

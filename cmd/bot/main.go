@@ -118,6 +118,11 @@ func main() {
 		)
 		aiClient = ai.NewLLMClient(cfg.AI.Provider, cfg.AI.Model, cfg.AI.BaseURL)
 		aiClient.SetLanguage(cfg.Bot.Language)
+		aiClient.SetContextWindow(cfg.AI.ContextWindow)
+		logger.Info("context window budget",
+			slog.Int("window_tokens", aiClient.ContextWindow()),
+			slog.Int("budget_tokens", aiClient.ContextBudget()),
+		)
 		if cfg.AI.CustomPersonality != "" {
 			aiClient.SetPersona(cfg.AI.CustomPersonality)
 		}

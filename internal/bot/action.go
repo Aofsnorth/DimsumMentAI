@@ -21,6 +21,16 @@ func (b *Bot) WalkTo(pos mgl32.Vec3) {
 	b.RecalculatePath()
 }
 
+// SetTargetTolerance sets the arrival tolerance (in blocks) used by the
+// steering loop when checking whether a walk_to target has been reached.
+// The default is 2.0; callers that need sub-block precision (e.g. item
+// pickup) can tighten it and restore the default afterwards.
+func (b *Bot) SetTargetTolerance(t float32) {
+	b.Mu.Lock()
+	b.TargetTolerance = t
+	b.Mu.Unlock()
+}
+
 func (b *Bot) ComeToPlayer(username string) bool {
 	target, ok := b.playerApproachPosition(username)
 	if !ok {
