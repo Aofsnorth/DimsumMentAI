@@ -156,7 +156,7 @@ func (nc *NvidiaClient) buildAnthropicRequest(messages []Message, temperature fl
 		case "system":
 			system = append(system, m.Content)
 		case "user", "assistant":
-			msgs = append(msgs, anthropicMessage{Role: m.Role, Content: m.Content})
+			msgs = append(msgs, anthropicMessage(m))
 		}
 	}
 

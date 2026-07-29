@@ -52,7 +52,6 @@ func (wc *WorldCache) IsBlockAir(x, y, z int32) (bool, bool) {
 
 // IsRIDSolid checks if the given block runtime ID is solid.
 func (wc *WorldCache) IsRIDSolid(rid uint32) bool {
-	originalRID := rid
 	rid = wc.TranslateRuntimeID(rid)
 	name, _, ok := chunk.RuntimeIDToState(rid)
 	if ok && isBlockNamePassable(name) {
@@ -61,17 +60,6 @@ func (wc *WorldCache) IsRIDSolid(rid uint32) bool {
 
 	b, ok := world.BlockByRuntimeID(rid)
 	if !ok {
-		// Unknown RID — previously we returned "solid" here, which made the
-		// whole pathfinder think the world was a solid cube when hash
-		// translation failed. Treat unknown blocks as non-solid so the bot
-		// can at least walk; real blockers (trees, walls) have valid RIDs.
-		if wc.logger != nil {
-			wc.logger.Warn("IsRIDSolid: unknown RID, treating as non-solid",
-				"original_rid", originalRID, "translated_rid", rid,
-				"use_hashes", wc.useHashes,
-				"hash_to_rid_size", len(wc.hashToRID),
-			)
-		}
 		return false
 	}
 

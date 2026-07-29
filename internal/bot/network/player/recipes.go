@@ -70,7 +70,7 @@ func handleCraftingData(b *bot.Bot, p *packet.CraftingData) {
 					cleanName := strings.TrimPrefix(name, "minecraft:")
 					b.Recipes[strings.ToLower(cleanName)] = recipe.RecipeNetworkID
 					b.RecipeCandidates[strings.ToLower(name)] = append(b.RecipeCandidates[strings.ToLower(name)], recipe.RecipeNetworkID)
-					if lc := strings.ToLower(cleanName); lc != strings.ToLower(name) {
+					if lc := strings.ToLower(cleanName); !strings.EqualFold(lc, name) {
 						b.RecipeCandidates[lc] = append(b.RecipeCandidates[lc], recipe.RecipeNetworkID)
 					}
 				}
@@ -90,7 +90,7 @@ func handleCraftingData(b *bot.Bot, p *packet.CraftingData) {
 					cleanName := strings.TrimPrefix(name, "minecraft:")
 					b.Recipes[strings.ToLower(cleanName)] = recipe.RecipeNetworkID
 					b.RecipeCandidates[strings.ToLower(name)] = append(b.RecipeCandidates[strings.ToLower(name)], recipe.RecipeNetworkID)
-					if lc := strings.ToLower(cleanName); lc != strings.ToLower(name) {
+					if lc := strings.ToLower(cleanName); !strings.EqualFold(lc, name) {
 						b.RecipeCandidates[lc] = append(b.RecipeCandidates[lc], recipe.RecipeNetworkID)
 					}
 				}

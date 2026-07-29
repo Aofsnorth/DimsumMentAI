@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"sort"
 	"strings"
 	"time"
 
@@ -53,7 +54,14 @@ func handleAttack(b *bot.Bot, param, user string) {
 }
 
 func handleCraft(b *bot.Bot, param, user string) {
-	go executeCraftAction(b, param, user)
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				b.Logger.Error("craft action panicked", "panic", r)
+			}
+		}()
+		executeCraftAction(b, param, user)
+	}()
 }
 
 // executeCraftAction runs a direct chat craft asynchronously from the caller's
@@ -257,8 +265,18 @@ func ensureCraftIngredients(ctx context.Context, b *bot.Bot, user string, recipe
 func craftIngredient(ctx context.Context, b *bot.Bot, user, name string, need, depth int) error {
 	candidates := resolveIngredientCandidates(name)
 
+	// Sort candidates by availability: prioritize those we can actually craft
+	// based on what materials we have in inventory
+	sortedCandidates := make([]string, len(candidates))
+	copy(sortedCandidates, candidates)
+
+	if len(sortedCandidates) > 1 {
+		// For planks, prioritize based on available logs
+		sortCandidatesByAvailability(b, sortedCandidates)
+	}
+
 	var lastErr error
-	for _, c := range candidates {
+	for _, c := range sortedCandidates {
 		if _, ok := lookupRecipe(b, c); !ok {
 			continue
 		}
@@ -318,6 +336,42 @@ func resolveIngredientCandidates(name string) []string {
 		return ingredientFallbacks["planks"]
 	}
 	return []string{name}
+}
+
+// sortCandidatesByAvailability reorders candidates to prioritize those whose
+// base materials (e.g. logs for planks) are actually in the bot's inventory.
+// This prevents the bot from trying to craft cherry_planks when it only has
+// oak_log.
+func sortCandidatesByAvailability(b *bot.Bot, candidates []string) {
+	type candidate struct {
+		name  string
+		score int
+	}
+	scored := make([]candidate, 0, len(candidates))
+
+	for _, c := range candidates {
+		score := 0
+		// For planks, check if we have the corresponding log
+		if strings.HasSuffix(c, "_planks") {
+			logType := strings.TrimSuffix(c, "_planks") + "_log"
+			if b.CountItemLike(logType) > 0 {
+				score = 2 // Has exact log type
+			} else if b.CountItemLike("log") > 0 {
+				score = 1 // Has some log, might work
+			}
+		}
+		scored = append(scored, candidate{name: c, score: score})
+	}
+
+	// Sort by score descending (higher score = more available)
+	sort.Slice(scored, func(i, j int) bool {
+		return scored[i].score > scored[j].score
+	})
+
+	// Copy back to original slice
+	for i, sc := range scored {
+		candidates[i] = sc.name
+	}
 }
 
 // recipeNeedsCraftingBench determines whether a recipe truly requires a 3×3

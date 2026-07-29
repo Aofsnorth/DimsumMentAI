@@ -29,6 +29,7 @@ var packetHandlers = map[uint32]func(*bot.Bot, packet.Packet) bool{
 	packet.IDMobEquipment:                handleMobEquipment,
 	packet.IDUpdateAttributes:            handleUpdateAttributesPacket,
 	packet.IDNetworkStackLatency:         handleNetworkStackLatency,
+	packet.IDPacketViolationWarning:      handlePacketViolationWarning,
 }
 
 // HandlePlayerPacket dispatches a packet to the appropriate handler.

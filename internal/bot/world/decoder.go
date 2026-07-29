@@ -71,7 +71,7 @@ func networkBlockHash(name string, properties map[string]any, scratch []byte) (u
 
 	data := scratch[:0]
 	writeString := func(str string) {
-		data = binary.LittleEndian.AppendUint16(data, uint16(len(str)))
+		data = binary.LittleEndian.AppendUint16(data, safecast.To[uint16](len(str)))
 		data = append(data, []byte(str)...)
 	}
 
@@ -115,7 +115,7 @@ func networkBlockHash(name string, properties map[string]any, scratch []byte) (u
 		case int16:
 			data = append(data, 2)
 			writeString(k)
-			data = binary.LittleEndian.AppendUint16(data, uint16(v))
+			data = binary.LittleEndian.AppendUint16(data, safecast.To[uint16](int32(v)&0xffff))
 		case uint32:
 			data = append(data, 3)
 			writeString(k)
@@ -123,7 +123,7 @@ func networkBlockHash(name string, properties map[string]any, scratch []byte) (u
 		case int32:
 			data = append(data, 3)
 			writeString(k)
-			data = binary.LittleEndian.AppendUint32(data, uint32(v))
+			data = binary.LittleEndian.AppendUint32(data, safecast.To[uint32](int64(v)&0xffffffff))
 		default:
 			// Skip unknown NBT types — dragonfly panics here, but we prefer a
 			// partial hash map over crashing the bot during world load.
@@ -241,7 +241,7 @@ func (wc *WorldCache) decodeNetworkPalettedStorage(buf *bytes.Buffer) (*paletted
 		// values that can exceed 2^31. readVarint32 returns them as int32, and
 		// safecast clamps negative values to 0 — collapsing every high-bit hash
 		// into RID 0 (cyan_terracotta) and making the world look solid.
-		palette[i] = wc.TranslateRuntimeID(uint32(v))
+		palette[i] = wc.TranslateRuntimeID(safecast.To[uint32](int64(v) & 0xffffffff))
 	}
 
 	// Diagnostic: dump the first storage's raw + translated palette so we can
@@ -259,7 +259,7 @@ func (wc *WorldCache) decodeNetworkPalettedStorage(buf *bytes.Buffer) (*paletted
 		copy(raw, rawPalette[:lim])
 		copy(tr, palette[:lim])
 		for i := 0; i < lim; i++ {
-			hits[i] = wc.HashLookupHit(uint32(rawPalette[i]))
+			hits[i] = wc.HashLookupHit(safecast.To[uint32](int64(rawPalette[i]) & 0xffffffff))
 		}
 		wc.logger.Info("palette dump",
 			"bitsPerBlock", bitsPerBlock,

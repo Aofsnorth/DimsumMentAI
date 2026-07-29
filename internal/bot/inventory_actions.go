@@ -225,7 +225,17 @@ func (b *Bot) CraftItem(recipeNetID uint32, count int) error {
 	itemName := b.ItemNames[outputNetID]
 	stackNetworkIDs := make(map[uint32]int32, len(picks))
 	for _, pick := range picks {
-		stackNetworkIDs[pick.slot] = b.StackNetworkIDs[pick.slot]
+		stackNetID := b.StackNetworkIDs[pick.slot]
+		if stackNetID == 0 {
+			b.Mu.Unlock()
+			return fmt.Errorf("cannot craft: slot %d has invalid StackNetworkID (0) - inventory not synced", pick.slot)
+		}
+		stackNetworkIDs[pick.slot] = stackNetID
+		b.Logger.Debug("CraftItem ingredient pick",
+			"slot", pick.slot,
+			"count", pick.count,
+			"stackNetworkID", stackNetID,
+		)
 	}
 
 	// Snapshot itemNames before releasing b.Mu so we can log outside the
@@ -274,6 +284,19 @@ func (b *Bot) CraftItem(recipeNetID uint32, count int) error {
 		RequestID: requestID,
 		Actions:   actions,
 	}
+
+	// Debug log the full request details
+	b.Logger.Debug("CraftItem sending request",
+		"requestID", requestID,
+		"recipeNetID", recipeNetID,
+		"item", itemName,
+		"count", count,
+		"actionsCount", len(actions),
+		"picks", len(picks),
+	)
+
+	// Queue the request to be sent embedded in the next PlayerAuthInput tick.
+	// This is how vanilla Bedrock clients send ItemStackRequests.
 	if err := b.QueueItemStackRequest(request); err != nil {
 		b.Mu.Lock()
 		delete(b.pendingCrafts, requestID)

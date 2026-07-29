@@ -129,12 +129,12 @@ func RecalculatePath(b *bot.Bot) {
 		// Diagnostic: dump per-direction walkability around start so we can see
 		// which predicate (floor/head/hazard) is vetoing every neighbor.
 		type probe struct {
-			name          string
-			x, y, z       int32
-			feet, head    bool
-			floor         bool
-			feetH, headH  bool
-			floorH        bool
+			name         string
+			x, y, z      int32
+			feet, head   bool
+			floor        bool
+			feetH, headH bool
+			floorH       bool
 		}
 		probes := []probe{}
 		offsets := []struct {
@@ -146,8 +146,8 @@ func RecalculatePath(b *bot.Bot) {
 		for _, off := range offsets {
 			tx, ty, tz := start.X+off.dx, start.Y+off.dy, start.Z+off.dz
 			probes = append(probes, probe{
-				name:   off.name,
-				x:      tx, y: ty, z: tz,
+				name: off.name,
+				x:    tx, y: ty, z: tz,
 				feet:   b.WorldModel.IsSolid(tx, ty, tz),
 				head:   b.WorldModel.IsSolid(tx, ty+1, tz),
 				floor:  b.WorldModel.IsSolid(tx, ty-1, tz),

@@ -3,6 +3,8 @@ package pathfinder
 import (
 	"container/heap"
 	"fmt"
+
+	"bedrock-ai/internal/safecast"
 )
 
 type PriorityQueue []*Node
@@ -39,10 +41,10 @@ func packKey(x, y, z int32) int64 {
 	// safecast.To: negative coordinates are the norm around spawn, and
 	// safecast clamps them all to 0, collapsing every negative-x/z node
 	// into the same key and making A* think all neighbors are duplicates.
-	ux := uint64(uint32(x)) & 0x1FFFFF
-	uy := uint64(uint32(y)) & 0xFFF
-	uz := uint64(uint32(z)) & 0x1FFFFF
-	return int64(ux<<33 | uy<<21 | uz)
+	ux := safecast.To[uint64](int64(x) & 0x1FFFFF)
+	uy := safecast.To[uint64](int64(y) & 0xFFF)
+	uz := safecast.To[uint64](int64(z) & 0x1FFFFF)
+	return safecast.To[int64](ux<<33 | uy<<21 | uz)
 }
 
 // FindPath executes the A* algorithm in 3D grid space using the provided world walkability rules

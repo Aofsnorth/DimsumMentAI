@@ -17,10 +17,12 @@
 package main
 
 import (
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -39,6 +41,7 @@ func main() {
 	local := flag.String("local", "0.0.0.0:19132", "local listen address the real Minecraft client connects to")
 	tokenPath := flag.String("token", "configs/token.json", "path to the saved Microsoft Live token (shared with the bot)")
 	outPath := flag.String("out", "logs/proxy-capture.jsonl", "path to write the packet capture")
+	rawPath := flag.String("raw", "", "optional path for raw PlayerAuthInput/ItemStackRequest payloads")
 	flag.Parse()
 
 	src, err := tokenSource(*tokenPath)
@@ -58,6 +61,12 @@ func main() {
 	}
 	defer out.Close()
 	rec := &recorder{enc: json.NewEncoder(out)}
+	raw, closeRaw, err := newRawRecorder(*rawPath)
+	if err != nil {
+		fmt.Printf("create raw capture: %v\n", err)
+		os.Exit(1)
+	}
+	defer closeRaw()
 
 	status, err := minecraft.NewForeignStatusProvider(*remote)
 	if err != nil {
@@ -72,6 +81,7 @@ func main() {
 	listener, err := minecraft.ListenConfig{
 		StatusProvider:         status,
 		AuthenticationDisabled: true,
+		PacketFunc:             raw,
 	}.Listen("raknet", *local)
 	if err != nil {
 		fmt.Printf("listen %s: %v\n", *local, err)
@@ -81,6 +91,9 @@ func main() {
 
 	fmt.Printf("MITM proxy listening on %s -> %s\n", *local, *remote)
 	fmt.Printf("Capture file: %s\n", *outPath)
+	if *rawPath != "" {
+		fmt.Printf("Raw capture file: %s\n", *rawPath)
+	}
 	fmt.Println("Now open Minecraft and connect to this machine (e.g. 127.0.0.1:19132).")
 	fmt.Println("Stay connected for at least 40 seconds, then disconnect. Ctrl+C to stop the proxy.")
 
@@ -191,7 +204,7 @@ func (r *recorder) packet(dir string, start time.Time, pk packet.Packet) {
 	}
 	switch p := pk.(type) {
 	case *packet.PlayerAuthInput:
-		entry["full"] = map[string]any{
+		full := map[string]any{
 			"tick":      p.Tick,
 			"position":  vec3(p.Position),
 			"moveVec":   vec2(p.MoveVector),
@@ -203,6 +216,10 @@ func (r *recorder) packet(dir string, start time.Time, pk packet.Packet) {
 			"playMode":  p.PlayMode,
 			"flags":     decodeInputFlags(p.InputData),
 		}
+		if p.InputData.Load(packet.InputFlagPerformItemStackRequest) {
+			full["itemStackRequest"] = p.ItemStackRequest
+		}
+		entry["full"] = full
 	case *packet.ClientMovementPredictionSync:
 		entry["full"] = map[string]any{
 			"entityUniqueID": p.EntityUniqueID,
@@ -226,6 +243,36 @@ func (r *recorder) event(kind, msg string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	_ = r.enc.Encode(map[string]any{"event": kind, "msg": msg, "wall": time.Now().Format(time.RFC3339Nano)})
+}
+
+func newRawRecorder(path string) (func(packet.Header, []byte, net.Addr, net.Addr), func(), error) {
+	if path == "" {
+		return nil, func() {}, nil
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return nil, nil, err
+	}
+	file, err := os.Create(path)
+	if err != nil {
+		return nil, nil, err
+	}
+	var mu sync.Mutex
+	enc := json.NewEncoder(file)
+	capture := func(header packet.Header, payload []byte, src, dst net.Addr) {
+		if header.PacketID != packet.IDPlayerAuthInput && header.PacketID != packet.IDItemStackRequest {
+			return
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		_ = enc.Encode(map[string]any{
+			"packet_id": header.PacketID,
+			"payload":   hex.EncodeToString(payload),
+			"src":       src.String(),
+			"dst":       dst.String(),
+			"wall":      time.Now().Format(time.RFC3339Nano),
+		})
+	}
+	return capture, func() { _ = file.Close() }, nil
 }
 
 // inputFlagNames maps PlayerAuthInput InputData bit indices to readable names,

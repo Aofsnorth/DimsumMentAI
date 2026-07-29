@@ -53,7 +53,7 @@ func (w *LocalWorldModel) GetNeighbors(node Node) []Node {
 func (w *LocalWorldModel) DebugNeighborVeto(n Node) string {
 	out := fmt.Sprintf("start=(%d,%d,%d):", n.X, n.Y, n.Z)
 	dirs := []struct {
-		name string
+		name   string
 		dx, dz int32
 	}{
 		{"N", 0, -1}, {"S", 0, 1}, {"E", 1, 0}, {"W", -1, 0},

@@ -237,3 +237,14 @@ func handleNetworkStackLatency(b *bot.Bot, pk packet.Packet) bool {
 	}
 	return true
 }
+
+func handlePacketViolationWarning(b *bot.Bot, pk packet.Packet) bool {
+	p := pk.(*packet.PacketViolationWarning)
+	b.Logger.Error("SERVER SENT PACKET VIOLATION WARNING - BOT WILL BE DISCONNECTED",
+		slog.Int("type", int(p.Type)),
+		slog.Int("severity", int(p.Severity)),
+		slog.Int("packet_id", int(p.PacketID)),
+		slog.String("context", p.ViolationContext),
+	)
+	return true
+}

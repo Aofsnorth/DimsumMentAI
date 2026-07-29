@@ -16,14 +16,14 @@ type chunkPos struct {
 
 // WorldCache stores decoded chunk data received from the server.
 type WorldCache struct {
-	mu        sync.RWMutex
-	chunks    map[chunkPos]*chunk.Chunk
-	blobs     map[uint64][]byte // client blob cache payloads from ClientCacheMissResponse
-	airRID    uint32            // runtime ID that represents air
-	r         cube.Range        // vertical range of the world (usually [-64, 319])
-	logger    *slog.Logger
-	hashToRID map[uint32]uint32
-	useHashes bool
+	mu               sync.RWMutex
+	chunks           map[chunkPos]*chunk.Chunk
+	blobs            map[uint64][]byte // client blob cache payloads from ClientCacheMissResponse
+	airRID           uint32            // runtime ID that represents air
+	r                cube.Range        // vertical range of the world (usually [-64, 319])
+	logger           *slog.Logger
+	hashToRID        map[uint32]uint32
+	useHashes        bool
 	paletteDumpCount int
 }
 
