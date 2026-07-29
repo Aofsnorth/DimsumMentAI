@@ -30,6 +30,16 @@ func TestContainerSlotOffset(t *testing.T) {
 	}
 }
 
+func TestStackResponseSlotOffset(t *testing.T) {
+	t.Parallel()
+	if got := stackResponseSlotOffset(protocol.ContainerInventory); got != 0 {
+		t.Fatalf("ContainerInventory stack response offset = %d, want 0", got)
+	}
+	if got := stackResponseSlotOffset(protocol.ContainerArmor); got != 36 {
+		t.Fatalf("ContainerArmor stack response offset = %d, want 36", got)
+	}
+}
+
 func TestCoveredSlotSet_HotBar(t *testing.T) {
 	t.Parallel()
 	slots := coveredSlotSet(protocol.ContainerHotBar)
@@ -188,6 +198,35 @@ func newTestBot() *bot.Bot {
 		InventoryMap:    make(map[uint32]protocol.ItemStack),
 		StackNetworkIDs: make(map[uint32]int32),
 		Logger:          slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError})),
+	}
+}
+
+func TestProcessItemStackResponseInventorySlotIsGlobal(t *testing.T) {
+	t.Parallel()
+	b := newTestBot()
+	b.InventoryMap[0] = protocol.ItemStack{ItemType: protocol.ItemType{NetworkID: 17}, Count: 1}
+	b.InventoryMap[9] = protocol.ItemStack{ItemType: protocol.ItemType{NetworkID: 5}, Count: 7}
+
+	processItemStackResponse(b, protocol.ItemStackResponse{
+		Status: protocol.ItemStackResponseStatusOK,
+		ContainerInfo: []protocol.StackResponseContainerInfo{{
+			Container: protocol.FullContainerName{ContainerID: protocol.ContainerInventory},
+			SlotInfo: []protocol.StackResponseSlotInfo{{
+				Slot:           0,
+				Count:          2,
+				StackNetworkID: 99,
+			}},
+		}},
+	})
+
+	if got := b.InventoryMap[0].Count; got != 2 {
+		t.Fatalf("slot 0 count = %d, want 2", got)
+	}
+	if got := b.InventoryMap[9].Count; got != 7 {
+		t.Fatalf("slot 9 count = %d, want unchanged 7", got)
+	}
+	if got := b.StackNetworkIDs[0]; got != 99 {
+		t.Fatalf("slot 0 stack ID = %d, want 99", got)
 	}
 }
 

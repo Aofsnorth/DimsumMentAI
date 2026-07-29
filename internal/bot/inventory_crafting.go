@@ -11,8 +11,9 @@ import (
 )
 
 type ingredientPick struct {
-	slot  uint32
-	count int
+	slot            uint32
+	count           int
+	ingredientIndex int
 }
 
 // planIngredientConsumption resolves each recipe ingredient to inventory slots
@@ -57,7 +58,7 @@ func planIngredientConsumption(inv map[uint32]protocol.ItemStack, itemNames map[
 	}
 
 	picks := make([]ingredientPick, 0, len(ingredients))
-	for _, ing := range ingredients {
+	for ingredientIndex, ing := range ingredients {
 		need := int(ing.Count) * times
 		if need <= 0 {
 			continue
@@ -79,6 +80,9 @@ func planIngredientConsumption(inv map[uint32]protocol.ItemStack, itemNames map[
 			matched, need = consumeMatchingSlots(inv, itemNames, remaining, need, func(itemName string, itemNetID int32) bool {
 				return itemNetID == networkID
 			})
+		}
+		for i := range matched {
+			matched[i].ingredientIndex = ingredientIndex
 		}
 		picks = append(picks, matched...)
 

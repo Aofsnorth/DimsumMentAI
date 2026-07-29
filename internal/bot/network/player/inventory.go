@@ -346,6 +346,17 @@ func applyInventoryTransaction(b *bot.Bot, p *packet.InventoryTransaction) {
 // contains authoritative slot updates that must be applied to keep
 // InventoryMap in sync — otherwise the bot's view of its inventory drifts
 // from the server's after every transaction.
+// stackResponseSlotOffset maps ItemStackResponse container slots to the bot's
+// global inventory slots. Unlike InventoryContent, ContainerInventory already
+// uses the combined 0..35 slot numbering in StackRequest responses.
+func stackResponseSlotOffset(containerID byte) uint32 {
+	if containerID == protocol.ContainerInventory || containerID == protocol.ContainerCombinedHotBarAndInventory {
+		return 0
+	}
+	return containerSlotOffset(containerID)
+}
+
+// applyItemStackResponse processes an ItemStackResponse packet, which the server sends after the client's ItemStackRequest (crafting, moving items, dropping, etc.) is approved or rejected. When approved, the response contains authoritative slot updates that must be applied to keep InventoryMap in sync — otherwise the bot's view of its inventory drifts from the server's after every transaction.
 func applyItemStackResponse(b *bot.Bot, p *packet.ItemStackResponse) {
 	b.Mu.Lock()
 	defer b.Mu.Unlock()
@@ -376,20 +387,25 @@ func processItemStackResponse(b *bot.Bot, resp protocol.ItemStackResponse) {
 		return
 	}
 
+	updates := make([]bot.StackResponseUpdate, 0)
 	for _, container := range resp.ContainerInfo {
 		containerID := container.Container.ContainerID
-		if !isPlayerInventoryContainer(containerID) {
-			continue
-		}
-		offset := containerSlotOffset(containerID)
+		offset := stackResponseSlotOffset(containerID)
 		for _, slotInfo := range container.SlotInfo {
-			applySlotUpdate(b, slotInfo, offset+uint32(slotInfo.Slot), craftOutputNetID)
+			updates = append(updates, bot.StackResponseUpdate{
+				ContainerID:    containerID,
+				Slot:           slotInfo.Slot,
+				StackNetworkID: slotInfo.StackNetworkID,
+			})
+			if isPlayerInventoryContainer(containerID) {
+				applySlotUpdate(b, slotInfo, offset+uint32(slotInfo.Slot), craftOutputNetID)
+			}
 		}
 	}
 
 	if hasPending {
 		select {
-		case pendingCh <- bot.CraftResult(true):
+		case pendingCh <- bot.CraftResultWithUpdates(true, updates):
 		default:
 		}
 		b.PendingCraftDelete(resp.RequestID)

@@ -224,26 +224,51 @@ type Bot struct {
 	ScaffoldingActive   bool
 }
 
-// pendingCraft tracks a single in-flight CraftItem request. The channel
-// receives a craftResult when the server's ItemStackResponse arrives.
-// outputNetID is the recipe output's item type NetworkID, used by the
-// response handler to tag newly-created inventory slots.
+// pendingCraft tracks a single in-flight item stack request. The response
+// channel receives a craftResult when the server's ItemStackResponse arrives.
+// outputNetID tags newly-created inventory slots when the response omits their
+// item type.
 type pendingCraft struct {
 	ch          chan craftResult
 	outputNetID int32
 }
 
-// craftResult is sent to a pending craft's channel when the server's
-// ItemStackResponse arrives. accepted=false means the server rejected the
-// request (non-zero status).
-type craftResult struct {
-	accepted bool
+// StackResponseUpdate carries an authoritative stack ID for a request-local
+// container slot.
+type StackResponseUpdate struct {
+	ContainerID    byte
+	Slot           byte
+	StackNetworkID int32
 }
 
-// CraftResult creates a craftResult value. Exported so the network/player
-// package can send results to pending craft channels.
+// craftResult is sent to a pending request channel when the server's
+// ItemStackResponse arrives. accepted=false means rejection.
+type craftResult struct {
+	accepted bool
+	updates  []StackResponseUpdate
+}
+
+// CraftResult creates a result without slot updates.
 func CraftResult(accepted bool) craftResult {
-	return craftResult{accepted: accepted}
+	return craftResultWithUpdates(accepted, nil)
+}
+
+// CraftResultWithUpdates creates a result with authoritative request-local IDs.
+func CraftResultWithUpdates(accepted bool, updates []StackResponseUpdate) craftResult {
+	return craftResultWithUpdates(accepted, updates)
+}
+
+func craftResultWithUpdates(accepted bool, updates []StackResponseUpdate) craftResult {
+	return craftResult{accepted: accepted, updates: updates}
+}
+
+func (r craftResult) stackNetworkID(containerID, slot byte) int32 {
+	for _, update := range r.updates {
+		if update.ContainerID == containerID && update.Slot == slot {
+			return update.StackNetworkID
+		}
+	}
+	return 0
 }
 
 // QueueItemStackRequest schedules an inventory request for the next

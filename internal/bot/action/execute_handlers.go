@@ -277,11 +277,16 @@ func craftIngredient(ctx context.Context, b *bot.Bot, user, name string, need, d
 
 	var lastErr error
 	for _, c := range sortedCandidates {
+		if len(sortedCandidates) > 1 && !candidateMaterialAvailable(b, c) {
+			continue
+		}
 		if _, ok := lookupRecipe(b, c); !ok {
 			continue
 		}
 		if _, err := craftChain(ctx, b, user, c, need, depth+1); err != nil {
-			lastErr = err
+			if lastErr == nil {
+				lastErr = err
+			}
 			continue
 		}
 		return nil
@@ -336,6 +341,15 @@ func resolveIngredientCandidates(name string) []string {
 		return ingredientFallbacks["planks"]
 	}
 	return []string{name}
+}
+
+func candidateMaterialAvailable(b *bot.Bot, candidate string) bool {
+	candidate = strings.TrimPrefix(strings.ToLower(candidate), "minecraft:")
+	if !strings.HasSuffix(candidate, "_planks") {
+		return true
+	}
+	logName := strings.TrimSuffix(candidate, "_planks") + "_log"
+	return b.CountItemLike(logName) > 0
 }
 
 // sortCandidatesByAvailability reorders candidates to prioritize those whose

@@ -1,6 +1,12 @@
 package action
 
-import "testing"
+import (
+	"testing"
+
+	"bedrock-ai/internal/bot"
+
+	"github.com/sandertv/gophertunnel/minecraft/protocol"
+)
 
 func TestNormalizeIngredientKey(t *testing.T) {
 	t.Parallel()
@@ -104,6 +110,22 @@ func TestResolveIngredientCandidates_SpecificPlankStaysSingle(t *testing.T) {
 		if len(got) != 1 || got[0] != tc.want {
 			t.Errorf("resolveIngredientCandidates(%q) = %v, want [%q]", tc.in, got, tc.want)
 		}
+	}
+}
+
+func TestCandidateMaterialAvailableUsesMatchingLog(t *testing.T) {
+	t.Parallel()
+	b := &bot.Bot{
+		InventoryMap: map[uint32]protocol.ItemStack{
+			0: {ItemType: protocol.ItemType{NetworkID: 17}, Count: 1},
+		},
+		ItemNames: map[int32]string{17: "minecraft:oak_log"},
+	}
+	if !candidateMaterialAvailable(b, "oak_planks") {
+		t.Fatal("oak_planks should be available from oak_log")
+	}
+	if candidateMaterialAvailable(b, "cherry_planks") {
+		t.Fatal("cherry_planks must not be available from oak_log")
 	}
 }
 
