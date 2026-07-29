@@ -64,6 +64,7 @@ func SendInputLoop(ctx context.Context, b *bot.Bot, gd minecraft.GameData) {
 
 	var lastPredictedY float32 = initPos.Y()
 	prevPos := initPos
+	var connErr bool
 
 	for {
 		select {
@@ -128,7 +129,9 @@ func SendInputLoop(ctx context.Context, b *bot.Bot, gd minecraft.GameData) {
 			}
 			tc.updateLookDirection()
 			tc.calculateMovementSpeedAndPosition()
-			tc.writePlayerAuthInputPacket()
+			if !tc.writePlayerAuthInputPacket() {
+				connErr = true
+			}
 			// Persist computed orientation back to the bot so the next tick's
 			// easing continues from where this tick left off. Without this the
 			// eased Yaw/Pitch/HeadYaw were recomputed from the frozen spawn
@@ -153,6 +156,10 @@ func SendInputLoop(ctx context.Context, b *bot.Bot, gd minecraft.GameData) {
 
 			lastPredictedY = tc.LastPredictedY
 			prevPos = tc.CurrPos
+
+			if connErr {
+				return
+			}
 		}
 	}
 }

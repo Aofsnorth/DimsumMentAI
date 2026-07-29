@@ -8,7 +8,7 @@
 
 # Server binaries
 server/
-
+/threads
 # Worktrees
 import.worktrees/
 

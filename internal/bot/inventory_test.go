@@ -87,7 +87,7 @@ func TestBuildAutoCraftActionsVanillaSequence(t *testing.T) {
 	if !ok {
 		t.Fatalf("actions[0] = %T, want AutoCraftRecipe", actions[0])
 	}
-	if auto.RecipeNetworkID != 414 || auto.NumberOfCrafts != 0 || auto.TimesCrafted != 1 || len(auto.Ingredients) != 1 {
+	if auto.RecipeNetworkID != 414 || auto.NumberOfCrafts != 1 || auto.TimesCrafted != 1 || len(auto.Ingredients) != 1 {
 		t.Errorf("unexpected auto craft fields: %+v", auto)
 	}
 

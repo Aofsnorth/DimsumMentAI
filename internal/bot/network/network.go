@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
 	"time"
 
 	"bedrock-ai/internal/bot"
@@ -24,6 +25,7 @@ func PacketLoop(ctx context.Context, b *bot.Bot) error {
 	for {
 		select {
 		case <-ctx.Done():
+			fmt.Fprintln(os.Stderr, "DEBUG: PacketLoop saw ctx.Done(), err=", ctx.Err())
 			b.Logger.Info("shutting down", slog.String("reason", ctx.Err().Error()))
 			return nil
 		default:
@@ -32,6 +34,7 @@ func PacketLoop(ctx context.Context, b *bot.Bot) error {
 		readStart := time.Now()
 		pk, err := b.Conn.ReadPacket()
 		if err != nil {
+			fmt.Fprintln(os.Stderr, "DEBUG: PacketLoop ReadPacket err=", err)
 			return handleReadError(b, err, readStart, lastReadAt)
 		}
 
@@ -64,6 +67,13 @@ func handleReadError(b *bot.Bot, err error, readStart, lastReadAt time.Time) err
 		"handleMs":   time.Since(readStart).Milliseconds(),
 		"runId":      "post-fix",
 	})
+
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		b.Logger.Info("connection closed during shutdown",
+			slog.String("reason", err.Error()),
+		)
+		return nil
+	}
 
 	var disc minecraft.DisconnectError
 	if errors.As(err, &disc) {

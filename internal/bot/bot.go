@@ -203,7 +203,8 @@ type Bot struct {
 	// the item type NetworkID of the recipe's output, used to fill in the
 	// item type when the server creates a new slot (the response only carries
 	// the stack instance ID, not the item type).
-	pendingCrafts map[int32]pendingCraft
+	pendingCrafts           map[int32]pendingCraft
+	pendingItemStackRequest *protocol.ItemStackRequest
 
 	// Emotes / Animations state
 	EmoteState string
@@ -245,6 +246,32 @@ func CraftResult(accepted bool) craftResult {
 	return craftResult{accepted: accepted}
 }
 
+// QueueItemStackRequest schedules an inventory request for the next
+// PlayerAuthInput tick. Modern Bedrock sends these requests inline with player
+// input instead of as standalone ItemStackRequest packets.
+func (b *Bot) QueueItemStackRequest(request protocol.ItemStackRequest) error {
+	b.Mu.Lock()
+	defer b.Mu.Unlock()
+	if b.pendingItemStackRequest != nil {
+		return fmt.Errorf("item stack request already queued")
+	}
+	b.pendingItemStackRequest = &request
+	return nil
+}
+
+// TakeItemStackRequest removes and returns the request queued for the next
+// PlayerAuthInput tick.
+func (b *Bot) TakeItemStackRequest() (protocol.ItemStackRequest, bool) {
+	b.Mu.Lock()
+	defer b.Mu.Unlock()
+	if b.pendingItemStackRequest == nil {
+		return protocol.ItemStackRequest{}, false
+	}
+	request := *b.pendingItemStackRequest
+	b.pendingItemStackRequest = nil
+	return request, true
+}
+
 // PendingCraftLookup returns the channel and output NetworkID for a pending
 // craft request. Returns ok=false if no pending craft exists for requestID.
 // Caller MUST hold b.Mu.
@@ -283,7 +310,7 @@ func newBot(opts ...Option) (*Bot, error) {
 		RecipeCandidates:    make(map[string][]uint32),
 		RecipesByNetID:      make(map[uint32]RecipeInfo),
 		pendingCrafts:       make(map[int32]pendingCraft),
-		StackRequestID:      -1,
+		StackRequestID:      0,
 		Health:              20,
 		Hunger:              20,
 		WorldModel:          pathfinder.NewLocalWorldModel(),

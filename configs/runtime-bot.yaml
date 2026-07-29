@@ -1,0 +1,44 @@
+# ============================================
+#  Minecraft Bedrock AI Bot Configuration
+# ============================================
+
+# --- Server Settings ---
+server:
+  host: "127.0.0.1"
+  port: 19140
+  offline: true # true = no Xbox Live auth (local server)
+
+# --- Bot Identity ---
+bot:
+  name: "Luna" # In-game display name
+  language: "Indonesian" # AI reply language, e.g. "English", "Indonesian", "Japanese"
+  log_level: "debug" # debug, info, warn, or error
+  debug: false # Enable visualizer debug features (break, place, inventory buttons)
+  state_path: ".runtime-bot-state.json"
+
+# --- Skin & Geometry ---
+skin:
+  image_path: "imports/skins/image/Anime-thing-on-planetminecraft-com.png"
+  arm_size: "slim" # "slim" (Alex) or "wide" (Steve)
+
+# --- AI & LLM Settings ---
+# Supported providers (all OpenAI-compatible chat-completion format):
+#   - nvidia              → uses https://integrate.api.nvidia.com (env: NVIDIA_API_KEY)
+#   - openai_compatible   → generic; requires base_url (env: OPENAI_API_KEY)
+#   - none                → disable AI
+ai:
+  provider: "openai_compatible"
+  model: "kc/inclusionai/ling-3.0-flash:free"
+  # API key is loaded from .env (NVIDIA_API_KEY). See .env.example.
+  base_url: "http://localhost:20128/v1" # leave empty to use provider default (nvidia). Required for openai_compatible/anthropic_compatible/google_compatible.
+  main_player: "OnyxStygian"
+  respond_only_to_linked_player: false
+  respond_only_when_tagged: false # true = only respond when tagged/named in chat (e.g. Luna or @Luna)
+  custom_personality: "" # Custom LLM personality prompt override (leave empty to use default)
+  context_window: 0 # Model context window in tokens; 0 = auto-detect. Bot uses 25% of this as its per-request budget and auto-compacts history beyond it.
+
+# --- Chat Throttle Settings ---
+chat:
+  duplicate_window_sec: 3 # Same player + same message within N seconds is dropped
+  rate_limit_window_sec: 10 # Window for global flood protection
+  max_messages_per_window: 100 # Max messages handled across all players in rate window

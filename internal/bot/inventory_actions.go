@@ -205,7 +205,11 @@ func (b *Bot) CraftItem(recipeNetID uint32, count int) error {
 		return fmt.Errorf("inventory full, cannot place crafted output")
 	}
 
-	b.StackRequestID -= 2
+	// Vanilla Bedrock expects strictly positive, monotonically incrementing
+	// RequestIDs on ItemStackRequest. Initial value -1 + decrement produced
+	// negative IDs that some servers reject without explanation, so start
+	// at 1 and bump by 1 per request.
+	b.StackRequestID++
 	requestID := b.StackRequestID
 
 	// Register a pending craft channel so applyItemStackResponse can notify
@@ -224,6 +228,18 @@ func (b *Bot) CraftItem(recipeNetID uint32, count int) error {
 		stackNetworkIDs[pick.slot] = b.StackNetworkIDs[pick.slot]
 	}
 
+	// Snapshot itemNames before releasing b.Mu so we can log outside the
+	// lock without racing the PacketLoop's inventory updates.
+	itemNames := make(map[int32]string, len(b.ItemNames))
+	for k, v := range b.ItemNames {
+		itemNames[k] = v
+	}
+	b.Mu.Unlock()
+
+	// Log outside b.Mu lock to avoid blocking PacketLoop from processing
+	// the ItemStackResponse. The response handler (applyItemStackResponse)
+	// needs b.Mu - if we hold it during verbose logging, the server's
+	// response arrives but can't be applied, causing a 5s timeout.
 	b.Logger.Info("CraftItem request",
 		"recipeNetID", recipeNetID,
 		"item", itemName,
@@ -242,7 +258,7 @@ func (b *Bot) CraftItem(recipeNetID uint32, count int) error {
 		var ingName string
 		if dd, ok := ing.Descriptor.(*protocol.DefaultItemDescriptor); ok {
 			ingNetID = int32(dd.NetworkID)
-			ingName = b.ItemNames[ingNetID]
+			ingName = itemNames[ingNetID]
 		}
 		b.Logger.Info("CraftItem ingredient",
 			"index", i,
@@ -251,22 +267,29 @@ func (b *Bot) CraftItem(recipeNetID uint32, count int) error {
 			"count", ing.Count,
 		)
 	}
-	b.Mu.Unlock()
 
 	actions := buildAutoCraftActions(recipeNetID, recipe, count, picks, stackNetworkIDs, outputSlot)
 
-	pk := &packet.ItemStackRequest{
-		Requests: []protocol.ItemStackRequest{{
-			RequestID: requestID,
-			Actions:   actions,
-		}},
+	request := protocol.ItemStackRequest{
+		RequestID: requestID,
+		Actions:   actions,
 	}
-	if err := b.Conn.WritePacket(pk); err != nil {
+	if err := b.QueueItemStackRequest(request); err != nil {
 		b.Mu.Lock()
 		delete(b.pendingCrafts, requestID)
 		b.Mu.Unlock()
-		return fmt.Errorf("write craft request: %w", err)
+		return fmt.Errorf("queue craft request: %w", err)
 	}
+
+	// Log awaiting state so the user sees the bot is alive during the
+	// response wait (typically 100-500ms, can spike to several seconds on
+	// busy servers). Without this the bot looks frozen between the
+	// request and either the accepted/timeout log.
+	b.Logger.Info("CraftItem awaiting response",
+		"recipeNetID", recipeNetID,
+		"item", itemName,
+		"requestID", requestID,
+	)
 
 	// Wait for the server's ItemStackResponse. The response handler
 	// (applyItemStackResponse) will send a craftResult to resultCh. If the
@@ -274,15 +297,39 @@ func (b *Bot) CraftItem(recipeNetID uint32, count int) error {
 	select {
 	case result := <-resultCh:
 		if !result.accepted {
+			b.Logger.Warn("CraftItem rejected",
+				"recipeNetID", recipeNetID,
+				"item", itemName,
+				"requestID", requestID,
+			)
 			return fmt.Errorf("server rejected craft request (item: %s)", itemName)
 		}
 		// Craft accepted. The response handler already updated InventoryMap
 		// with the correct item type (using outputNetID for new slots).
+		// Logged at INFO so the chain-craft caller can see the recipe's
+		// specific variant was accepted (e.g. "oak_planks accepted" vs
+		// the silent bare request log above).
+		b.Logger.Info("CraftItem accepted",
+			"recipeNetID", recipeNetID,
+			"item", itemName,
+			"count", count,
+		)
 		return nil
+	case <-b.Conn.Context().Done():
+		b.Mu.Lock()
+		delete(b.pendingCrafts, requestID)
+		b.Mu.Unlock()
+		return fmt.Errorf("connection closed while waiting for craft response (item: %s)", itemName)
 	case <-time.After(5 * time.Second):
 		b.Mu.Lock()
 		delete(b.pendingCrafts, requestID)
 		b.Mu.Unlock()
+		b.Logger.Warn("CraftItem timeout",
+			"recipeNetID", recipeNetID,
+			"item", itemName,
+			"requestID", requestID,
+			"timeout", "5s",
+		)
 		return fmt.Errorf("server did not respond to craft request within 5s (item: %s)", itemName)
 	}
 }
@@ -304,9 +351,11 @@ func buildAutoCraftActions(recipeNetID uint32, recipe RecipeInfo, count int, pic
 	}
 
 	actions := make([]protocol.StackRequestAction, 0, len(picks)+3)
+	craftsByte := byte(count)
 	actions = append(actions, &protocol.AutoCraftRecipeStackRequestAction{
 		RecipeNetworkID: recipeNetID,
-		TimesCrafted:    byte(count),
+		NumberOfCrafts:  craftsByte,
+		TimesCrafted:    craftsByte,
 		Ingredients:     recipe.Ingredients,
 	})
 	actions = append(actions, &protocol.CraftResultsDeprecatedStackRequestAction{

@@ -22,11 +22,21 @@ func interactNoise(tick uint64, amp, phase float32) float32 {
 	return amp * float32(math.Sin(t*0.087)+0.4*math.Sin(t*0.191+1.1))
 }
 
-func (tc *TickContext) writePlayerAuthInputPacket() {
+func (tc *TickContext) writePlayerAuthInputPacket() bool {
 	tc.prepareMoveVector()
 	emoteJump, emoteSneak := tc.applyEmote()
 	inputData := tc.buildInputData(emoteJump, emoteSneak)
-	tc.sendPlayerAuthInput(inputData)
+	itemStackRequest := tc.takeItemStackRequest(inputData)
+	return tc.sendPlayerAuthInput(inputData, itemStackRequest)
+}
+
+func (tc *TickContext) takeItemStackRequest(inputData protocol.Bitset) *protocol.ItemStackRequest {
+	request, ok := tc.B.TakeItemStackRequest()
+	if !ok {
+		return nil
+	}
+	inputData.Set(packet.InputFlagPerformItemStackRequest)
+	return &request
 }
 
 func (tc *TickContext) prepareMoveVector() {
@@ -222,8 +232,8 @@ func (tc *TickContext) applyMovementInputFlags(inputData protocol.Bitset) {
 	}
 }
 
-func (tc *TickContext) sendPlayerAuthInput(inputData protocol.Bitset) {
-	pk := tc.buildPlayerAuthInputPacket(inputData)
+func (tc *TickContext) sendPlayerAuthInput(inputData protocol.Bitset, itemStackRequest *protocol.ItemStackRequest) bool {
+	pk := tc.buildPlayerAuthInputPacket(inputData, itemStackRequest)
 	tc.logPlayerAuthInputCond()
 	if err := tc.B.Conn.WritePacket(pk); err != nil {
 		tc.B.Logger.Warn("SendInputLoop: connection closed or write failed", "error", err.Error())
@@ -233,16 +243,17 @@ func (tc *TickContext) sendPlayerAuthInput(inputData protocol.Bitset) {
 			"tick":  tc.Tick,
 		})
 		// #endregion
-		return
+		return false
 	}
 	tc.B.Mu.Lock()
 	tc.B.LastSentInputYaw = tc.Yaw
 	tc.B.LastSentInputPitch = tc.Pitch
 	tc.B.Mu.Unlock()
+	return true
 }
 
-func (tc *TickContext) buildPlayerAuthInputPacket(inputData protocol.Bitset) *packet.PlayerAuthInput {
-	return &packet.PlayerAuthInput{
+func (tc *TickContext) buildPlayerAuthInputPacket(inputData protocol.Bitset, itemStackRequest *protocol.ItemStackRequest) *packet.PlayerAuthInput {
+	pk := &packet.PlayerAuthInput{
 		Position: tc.CurrPos.Add(mgl32.Vec3{0, 1.62, 0}),
 		Pitch:    tc.Pitch,
 		Yaw:      tc.Yaw,
@@ -267,6 +278,10 @@ func (tc *TickContext) buildPlayerAuthInputPacket(inputData protocol.Bitset) *pa
 		AnalogueMoveVector: tc.MoveVec,
 		RawMoveVector:      tc.MoveVec,
 	}
+	if itemStackRequest != nil {
+		pk.ItemStackRequest = *itemStackRequest
+	}
+	return pk
 }
 
 func (tc *TickContext) logPlayerAuthInputCond() {

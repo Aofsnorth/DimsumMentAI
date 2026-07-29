@@ -137,7 +137,12 @@ func craftChain(ctx context.Context, b *bot.Bot, user, itemName string, count, d
 	if err := ensureCraftIngredients(ctx, b, user, recipe, crafts, depth); err != nil {
 		return 0, err
 	}
-	b.Logger.Debug("chain craft step", "item", itemName, "recipeID", recipeID, "crafts", crafts)
+	b.Logger.Info("chain craft step",
+		"item", itemName,
+		"recipeID", recipeID,
+		"crafts", crafts,
+		"depth", depth,
+	)
 	if err := b.CraftItem(recipeID, crafts); err != nil {
 		return 0, err
 	}
@@ -250,14 +255,7 @@ func ensureCraftIngredients(ctx context.Context, b *bot.Bot, user string, recipe
 // ingredients (e.g. "planks") to a concrete craftable variant the bot can
 // actually make.
 func craftIngredient(ctx context.Context, b *bot.Bot, user, name string, need, depth int) error {
-	key := normalizeIngredientKey(name)
-	candidates := []string{name}
-	// Generic tags accept any variant. A named variant (oak_planks) must not
-	// fall through to cherry_planks after the oak attempt fails, because that
-	// makes the final error blame an unrelated wood type.
-	if key == "planks" && strings.EqualFold(name, "planks") {
-		candidates = ingredientFallbacks[key]
-	}
+	candidates := resolveIngredientCandidates(name)
 
 	var lastErr error
 	for _, c := range candidates {
@@ -297,6 +295,29 @@ func normalizeIngredientKey(name string) string {
 		return "planks"
 	}
 	return name
+}
+
+// resolveIngredientCandidates returns the list of item names to try when
+// satisfying an ingredient. For generic Bedrock ingredient names
+// (e.g. "planks", "minecraft:planks") it returns the wood-variant fallback
+// list so the crafter can satisfy "any planks" using whatever wood the bot
+// actually has. For specific variant names (e.g. "oak_planks",
+// "minecraft:oak_planks") it returns just that name — a named variant must
+// not silently fall through to a different wood type on failure, because
+// that would blame the wrong wood in the final error.
+//
+// Note: prior to this helper the comparison was
+// `strings.EqualFold(name, "planks")`, which always failed for the
+// `minecraft:planks` form that Bedrock actually sends in CraftingData — so
+// chain-crafting sticks failed with "tidak punya bahan untuk minecraft:planks"
+// even when the bot had oak_log.
+func resolveIngredientCandidates(name string) []string {
+	n := strings.ToLower(strings.TrimSpace(name))
+	n = strings.TrimPrefix(n, "minecraft:")
+	if n == "planks" {
+		return ingredientFallbacks["planks"]
+	}
+	return []string{name}
 }
 
 // recipeNeedsCraftingBench determines whether a recipe truly requires a 3×3

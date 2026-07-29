@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"os"
 	"time"
 
 	"bedrock-ai/internal/bot/building/coordinator"
@@ -31,7 +32,12 @@ func (b *Bot) Run(ctx context.Context) error {
 		return err
 	}
 	b.Conn = conn
-	defer b.Conn.Close()
+	defer func() {
+		// Mirror the connect-goroutine's stderr print so any exit path
+		// (panic, error return, normal shutdown) leaves a clear breadcrumb.
+		fmt.Fprintln(os.Stderr, "DEBUG: Run() returning, defer closing conn")
+		_ = b.Conn.Close()
+	}()
 
 	b.initSpawn(gd)
 	defer b.SaveLastStandingPosition()
@@ -39,7 +45,9 @@ func (b *Bot) Run(ctx context.Context) error {
 	b.startLoops(ctx, gd)
 
 	if PacketLoopFunc != nil {
-		return PacketLoopFunc(ctx, b)
+		err := PacketLoopFunc(ctx, b)
+		fmt.Fprintln(os.Stderr, "DEBUG: PacketLoopFunc returned err:", err)
+		return err
 	}
 	return nil
 }
@@ -52,8 +60,15 @@ func (b *Bot) connect(ctx context.Context) (*minecraft.Conn, minecraft.GameData,
 
 	go func() {
 		<-ctx.Done()
+		// Use fmt.Fprintln so the message reaches stderr immediately even
+		// if the slog handler is buffered or the process is about to exit.
+		// Without this, intermittent shutdowns (e.g. context canceled mid-craft)
+		// looked like crashed bots because the slog "shutdown requested" line
+		// had no time to flush before os.Exit(1).
+		fmt.Fprintln(os.Stderr, "DEBUG: ctx.Done() fired, closing connection")
 		b.Logger.Info("shutdown requested, closing connection")
 		_ = conn.Close()
+		fmt.Fprintln(os.Stderr, "DEBUG: conn.Close() returned")
 	}()
 
 	if parsedUUID, err := uuid.Parse(conn.IdentityData().Identity); err == nil {

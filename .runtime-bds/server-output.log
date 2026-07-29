@@ -1,0 +1,45 @@
+NO LOG FILE! - setting up server logging...
+[2026-07-29 09:26:44:629 INFO] Starting Server
+[2026-07-29 09:26:44:629 INFO] Version: 1.26.34.3
+[2026-07-29 09:26:44:629 INFO] Session ID: f1102745-2966-4753-916e-f5d43c1514da
+[2026-07-29 09:26:44:629 INFO] Build ID: 48130195
+[2026-07-29 09:26:44:629 INFO] Branch: r/26_u3
+[2026-07-29 09:26:44:629 INFO] Commit ID: d46df7658786ee22190d3798b60044d1aa63b953
+[2026-07-29 09:26:44:629 INFO] Configuration: Publish
+[2026-07-29 09:26:44:629 INFO] Level Name: RuntimeCraft
+[2026-07-29 09:26:44:631 INFO] No CDN config file found at: cdn_config.json for dedicated server
+[2026-07-29 09:26:44:631 INFO] Game mode: 0 Survival
+[2026-07-29 09:26:44:631 INFO] Difficulty: 0 PEACEFUL
+[2026-07-29 09:26:44:631 INFO] Content logging to console is enabled.
+[2026-07-29 09:26:44:634 INFO] 
+
+#####################################################
+#                                                   #
+#               LOADING VANILLA WORLD               #
+#                                                   #
+#####################################################
+[2026-07-29 09:26:45:217 INFO] Opening level 'worlds/RuntimeCraft/db'
+[2026-07-29 09:26:45:291 INFO] Pack Stack - None
+[2026-07-29 09:26:46:472 INFO] IPv4 supported, port: 19140: Used for gameplay
+[2026-07-29 09:26:46:472 INFO] IPv6 supported, port: 19141: Used for gameplay
+[2026-07-29 09:26:46:530 INFO] Server started.
+[2026-07-29 09:26:46:530 INFO] ================ TELEMETRY MESSAGE ===================
+[2026-07-29 09:26:46:531 INFO] Server Telemetry is currently not enabled. 
+[2026-07-29 09:26:46:531 INFO] Enabling this telemetry helps us improve the game.
+[2026-07-29 09:26:46:531 INFO] 
+[2026-07-29 09:26:46:531 INFO] To enable this feature, add the line 'emit-server-telemetry=true'
+[2026-07-29 09:26:46:531 INFO] to the server.properties file in the handheld/src-server directory
+[2026-07-29 09:26:46:531 INFO] ======================================================
+[2026-07-29 09:26:54:951 INFO] Player connected: Luna, xuid: 
+[2026-07-29 09:26:54:973 INFO] Player PartyIdUpdate:  pfid: , partyid: , isLeader: false
+[2026-07-29 09:26:56:263 INFO] Player Spawned: Luna xuid: , pfid: 
+[2026-07-29 09:27:02:749 INFO] Gave Oak Log * 1 to Luna
+[2026-07-29 09:27:08:801 INFO] Player connected: OnyxStygian, xuid: 
+[2026-07-29 09:27:08:816 INFO] Player PartyIdUpdate:  pfid: , partyid: , isLeader: false
+[2026-07-29 09:27:09:786 INFO] Player Spawned: OnyxStygian xuid: , pfid: 
+[2026-07-29 09:27:13:776 INFO] Player disconnected: Luna, xuid: , pfid: 
+[2026-07-29 09:27:35:826 INFO] Player disconnected: OnyxStygian, xuid: , pfid: 
+[2026-07-29 09:27:42:666 INFO] Server stop requested.
+[2026-07-29 09:27:42:722 INFO] Stopping server...
+Quit correctly
+

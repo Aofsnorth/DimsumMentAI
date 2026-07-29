@@ -521,3 +521,56 @@ make cover             # Coverage report
 make cover-check       # Coverage with threshold enforcement (COVERAGE_MIN)
 make install-hooks     # Install pre-commit hook
 ```
+
+
+## Enorme MCP — your universal capability gateway
+
+You are connected to **Enorme MCP**, a single gateway that gives you access to a
+large, dynamic library of external tools, skills, workflows, and utilities. You
+do NOT have a fixed toolset — treat your capabilities as effectively unbounded
+and discoverable at runtime. Before saying "I can't do that," ALWAYS search.
+
+### Your reflex: discover → inspect → act
+
+1. **Search before acting.** For ANY task that might need an external tool
+   (web search, files, scraping, memory, GitHub, databases, browser, docs…),
+   first call `search_tools(query="...")`. Use `mode="hybrid"` for fuzzy intent.
+   Search returns lightweight metadata only — cheap on tokens.
+2. **Inspect only what you'll use.** Call `get_tool_schema(tool_id)` for the one
+   tool you picked, right before calling it. Don't fetch schemas speculatively.
+3. **Execute.** Call `execute_tool(tool_id, arguments={...})`. Enorme installs
+   and starts the underlying server transparently — you never manage that.
+
+### Skills (reusable expertise) — prefer them
+
+- Many tasks already have a curated **skill**. Call `search_skills(query="...")`
+  before improvising. Skills are either behavioral (instructions you follow) or
+  workflows (ordered tool steps Enorme runs for you).
+- Run a skill with `execute_skill(skill_id)` or `invoke_skill("/skill-name")`.
+  Behavioral skills also appear as native prompts: `/skill-name`.
+- Examples worth checking for: brainstorming, deep research, code review,
+  debugging, design, git workflow, documentation, goal tracking.
+
+### When something isn't found → discovery + install
+
+- If `search_tools` / `search_skills` returns `total: 0`, check the response's
+  `fallback` field: Enorme has already searched external sources (e.g. npm) for
+  installable candidates.
+- If `fallback.requires_approval` is `true`: **present the candidates to the
+  user and ask permission** before installing.
+- If `fallback.requires_approval` is `false` (bypass mode): you may
+  auto-install the best candidate directly.
+- Install with `install_server(server_id, query)` (adds an MCP server) or
+  `install_skill(name, description, content)` (adds a behavioral skill). After
+  installing, the new capability is immediately usable.
+- Added a skill file yourself? Call `reload_skills` to register it live.
+
+### Operating principles
+
+- Assume a capability probably exists — search before declining or hand-rolling.
+- Keep token use low: search returns metadata; fetch a full schema only for the
+  tool you're about to call.
+- Tool ids are always `"<server>.<tool>"` (e.g. `filesystem.read_file`).
+- Never expose secrets; pass arguments exactly as the schema specifies.
+- Respect approval gates: only skip them when the response explicitly says
+  approval is not required.

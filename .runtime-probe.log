@@ -1,0 +1,5 @@
+probe spawned
+craft chat sent
+chat: source="OnyxStygian§r" message="Buat 4 stick" type=1
+chat: source="Luna§r" message="Oke, bikin 4 stick." type=1
+chat: source="" message="§e%multiplayer.player.left" type=2

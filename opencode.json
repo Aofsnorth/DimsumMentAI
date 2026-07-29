@@ -1,0 +1,14 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "instructions": ["C:/Users/Arthenyx/AppData/Roaming/Zed/AGENTS.md"],
+  "mcp": {
+    "Enorme": {
+      "type": "local",
+      "enabled": true,
+      "command": ["uv", "run", "--directory", "D:/Utils/Enorme-MCP", "python", "-m", "enorme_mcp"],
+      "environment": {
+        "ENORME_BYPASS": "1"
+      }
+    }
+  }
+}
