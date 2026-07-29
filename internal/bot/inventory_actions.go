@@ -205,11 +205,10 @@ func (b *Bot) CraftItem(recipeNetID uint32, count int) error {
 		return fmt.Errorf("inventory full, cannot place crafted output")
 	}
 
-	// Vanilla Bedrock expects strictly positive, monotonically incrementing
-	// RequestIDs on ItemStackRequest. Initial value -1 + decrement produced
-	// negative IDs that some servers reject without explanation, so start
-	// at 1 and bump by 1 per request.
-	b.StackRequestID++
+	if b.StackRequestID >= 0 {
+		b.StackRequestID = -1
+	}
+	b.StackRequestID -= 2
 	requestID := b.StackRequestID
 
 	// Register a pending craft channel so applyItemStackResponse can notify
@@ -281,8 +280,9 @@ func (b *Bot) CraftItem(recipeNetID uint32, count int) error {
 	actions := buildAutoCraftActions(recipeNetID, recipe, count, picks, stackNetworkIDs, outputSlot)
 
 	request := protocol.ItemStackRequest{
-		RequestID: requestID,
-		Actions:   actions,
+		RequestID:  requestID,
+		Actions:    actions,
+		FilterCause: -1,
 	}
 
 	// Debug log the full request details
@@ -295,13 +295,13 @@ func (b *Bot) CraftItem(recipeNetID uint32, count int) error {
 		"picks", len(picks),
 	)
 
-	// Queue the request to be sent embedded in the next PlayerAuthInput tick.
-	// This is how vanilla Bedrock clients send ItemStackRequests.
-	if err := b.QueueItemStackRequest(request); err != nil {
+	if err := b.Conn.WritePacket(&packet.ItemStackRequest{
+		Requests: []protocol.ItemStackRequest{request},
+	}); err != nil {
 		b.Mu.Lock()
 		delete(b.pendingCrafts, requestID)
 		b.Mu.Unlock()
-		return fmt.Errorf("queue craft request: %w", err)
+		return fmt.Errorf("send craft request: %w", err)
 	}
 
 	// Log awaiting state so the user sees the bot is alive during the
