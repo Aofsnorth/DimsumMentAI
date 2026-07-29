@@ -65,7 +65,7 @@ func TestPlanIngredientConsumptionNameMatching(t *testing.T) {
 	}
 }
 
-func TestBuildAutoCraftActionsVanillaSequence(t *testing.T) {
+func TestBuildCraftActionsVanillaSequence(t *testing.T) {
 	t.Parallel()
 	recipe := RecipeInfo{
 		Ingredients: []protocol.ItemDescriptorCount{{
@@ -83,12 +83,12 @@ func TestBuildAutoCraftActionsVanillaSequence(t *testing.T) {
 		t.Fatalf("len(actions) = %d, want 4", len(actions))
 	}
 
-	auto, ok := actions[0].(*protocol.AutoCraftRecipeStackRequestAction)
+	craft, ok := actions[0].(*protocol.CraftRecipeStackRequestAction)
 	if !ok {
-		t.Fatalf("actions[0] = %T, want AutoCraftRecipe", actions[0])
+		t.Fatalf("actions[0] = %T, want CraftRecipe", actions[0])
 	}
-	if auto.RecipeNetworkID != 414 || auto.NumberOfCrafts != 1 || auto.TimesCrafted != 1 || len(auto.Ingredients) != 1 {
-		t.Errorf("unexpected auto craft fields: %+v", auto)
+	if craft.RecipeNetworkID != 414 || craft.NumberOfCrafts != 1 {
+		t.Errorf("unexpected craft fields: %+v", craft)
 	}
 
 	results, ok := actions[1].(*protocol.CraftResultsDeprecatedStackRequestAction)

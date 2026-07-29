@@ -374,12 +374,9 @@ func buildAutoCraftActions(recipeNetID uint32, recipe RecipeInfo, count int, pic
 	}
 
 	actions := make([]protocol.StackRequestAction, 0, len(picks)+3)
-	craftsByte := byte(count)
-	actions = append(actions, &protocol.AutoCraftRecipeStackRequestAction{
+	actions = append(actions, &protocol.CraftRecipeStackRequestAction{
 		RecipeNetworkID: recipeNetID,
-		NumberOfCrafts:  craftsByte,
-		TimesCrafted:    craftsByte,
-		Ingredients:     recipe.Ingredients,
+		NumberOfCrafts:  byte(count),
 	})
 	actions = append(actions, &protocol.CraftResultsDeprecatedStackRequestAction{
 		ResultItems:  []protocol.ItemStack{recipe.Output},
