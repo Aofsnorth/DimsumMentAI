@@ -277,11 +277,11 @@ func (b *Bot) CraftItem(recipeNetID uint32, count int) error {
 		)
 	}
 
-	actions := buildAutoCraftActions(recipeNetID, recipe, count, picks, stackNetworkIDs, outputSlot)
+	actions := buildCraftActions(recipeNetID, recipe, count, picks, stackNetworkIDs, outputSlot)
 
 	request := protocol.ItemStackRequest{
-		RequestID:  requestID,
-		Actions:    actions,
+		RequestID:   requestID,
+		Actions:     actions,
 		FilterCause: -1,
 	}
 
@@ -357,11 +357,7 @@ func (b *Bot) CraftItem(recipeNetID uint32, count int) error {
 	}
 }
 
-// buildAutoCraftActions constructs the vanilla recipe-book sequence:
-// AutoCraftRecipe → CraftResultsDeprecated → Consume(s) → Place. BDS validates
-// this exact sequence; missing results or real inventory stack IDs trigger
-// status=7 InvalidCraftRequest. Crafted/pending slots are predicted with -1.
-func buildAutoCraftActions(recipeNetID uint32, recipe RecipeInfo, count int, picks []ingredientPick, stackNetworkIDs map[uint32]int32, outputSlot uint32) []protocol.StackRequestAction {
+func buildCraftActions(recipeNetID uint32, recipe RecipeInfo, count int, picks []ingredientPick, stackNetworkIDs map[uint32]int32, outputSlot uint32) []protocol.StackRequestAction {
 	if count <= 0 {
 		count = 1
 	}

@@ -78,7 +78,7 @@ func TestBuildCraftActionsVanillaSequence(t *testing.T) {
 		},
 	}
 	picks := []ingredientPick{{slot: 0, count: 1}}
-	actions := buildAutoCraftActions(414, recipe, 1, picks, map[uint32]int32{0: 42}, 3)
+	actions := buildCraftActions(414, recipe, 1, picks, map[uint32]int32{0: 42}, 3)
 	if len(actions) != 4 {
 		t.Fatalf("len(actions) = %d, want 4", len(actions))
 	}
