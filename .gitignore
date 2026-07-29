@@ -9,6 +9,9 @@
 # Server binaries
 server/
 /threads
+
+# BDS runtime (Bedrock Dedicated Server)
+.runtime-bds/
 # Worktrees
 import.worktrees/
 
