@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"bedrock-ai/internal/bot/entity"
+	"bedrock-ai/internal/bot/movement/animation"
 	"bedrock-ai/internal/event"
 
 	"github.com/go-gl/mathgl/mgl32"
@@ -159,7 +160,7 @@ func (bm *BlockMiner) evaluateMineCandidate(target protocol.BlockPos, botPos mgl
 		return mineStep{}, "", false
 	}
 
-	step, ok := planMineStep(world, botPos, target)
+	step, ok := planMineStep(botMineWorld{bot: bm.rg.bot, model: world}, botPos, target)
 	if !ok || dugPositions[mineKey(step.Position)] {
 		return mineStep{}, "", false
 	}
@@ -177,31 +178,16 @@ func (bm *BlockMiner) evaluateMineCandidate(target protocol.BlockPos, botPos mgl
 }
 
 func (bm *BlockMiner) breakBlock(ctx context.Context, step mineStep, blockName string) bool {
-	// Clear any solid block between bot's eye and the target aim point first.
-	// The server rejects break requests that aren't in line-of-sight, so digging
-	// "through" something silently fails. This also mimics how a human player
-	// would naturally clear the path.
-	for depth := 0; depth < 5; depth++ {
-		obs, obsName, ok := bm.findReachObstruction(step.Position, step.Aim)
-		if !ok {
-			break
-		}
-		bm.logger.Info("clearing obstruction before target", "obstruction_pos", obs, "name", obsName, "target_pos", step.Position)
-		obsStep, planned := planMineStep(bm.rg.bot.GetLocalWorldModel(), bm.rg.bot.GetCoords(), obs)
-		if !planned || obsStep.Position != obs {
-			obsStep = mineStep{
-				Position:           obs,
-				Face:               0,
-				Aim:                mgl32.Vec3{float32(obs.X()) + 0.5, float32(obs.Y()) + 0.5, float32(obs.Z()) + 0.5},
-				CountsTowardTarget: false,
-			}
-		}
-		if !bm.mineSingle(ctx, obsStep, obsName) {
-			break
-		}
+	bot := bm.rg.bot
+	visibleStep, visible := planMineStep(
+		botMineWorld{bot: bot, model: bot.GetLocalWorldModel()},
+		bot.GetCoords(),
+		step.Position,
+	)
+	if !visible {
+		return false
 	}
-
-	return bm.mineSingle(ctx, step, blockName)
+	return bm.mineSingle(ctx, visibleStep, blockName)
 }
 
 // mineSingle performs one break (no recursion, no obstruction check). Used
@@ -227,10 +213,7 @@ func (bm *BlockMiner) mineSingle(ctx context.Context, step mineStep, blockName s
 	elapsed := time.Duration(0)
 	swingInterval := 150 * time.Millisecond
 	for elapsed < breakTime {
-		_ = bot.WritePacket(&packet.Animate{
-			ActionType:      packet.AnimateActionSwingArm,
-			EntityRuntimeID: bot.GetEntityRuntimeID(),
-		})
+		_ = bot.WritePacket(animation.MineSwing(bot.GetEntityRuntimeID()))
 		bot.LookAt(step.Aim)
 
 		wait := swingInterval
@@ -275,64 +258,6 @@ func (bm *BlockMiner) mineSingle(ctx context.Context, step mineStep, blockName s
 		bm.logger.Debug("server did not confirm block break (assuming success)", "name", blockName, "pos", step.Position)
 	}
 	return true
-}
-
-// findReachObstruction walks a ray from the bot's eye position toward aim and
-// returns the first solid block (other than the target itself) it hits. Empty
-// blocks, the target block, and blocks outside reach (~5 blocks) are skipped.
-func (bm *BlockMiner) findReachObstruction(target protocol.BlockPos, aim mgl32.Vec3) (protocol.BlockPos, string, bool) {
-	bot := bm.rg.bot
-	pos := bot.GetCoords()
-	eye := mgl32.Vec3{pos.X(), pos.Y() + 1.62, pos.Z()}
-
-	dx := aim.X() - eye.X()
-	dy := aim.Y() - eye.Y()
-	dz := aim.Z() - eye.Z()
-	dist := float32(math.Sqrt(float64(dx*dx + dy*dy + dz*dz)))
-	if dist <= 0.001 {
-		return protocol.BlockPos{}, "", false
-	}
-
-	// Sample every 0.2 blocks along the ray, up to reach. Track which block
-	// cells we've already inspected so we don't probe the same cell twice.
-	const reach float32 = 5.5
-	const stepSize float32 = 0.2
-	rayLen := reach
-	if dist < reach {
-		rayLen = dist
-	}
-	maxSteps := int(math.Floor(float64(rayLen / stepSize)))
-	seen := make(map[[3]int32]bool, maxSteps)
-	world := bot.GetLocalWorldModel()
-	for i := 1; i <= maxSteps; i++ {
-		t := float32(i) * stepSize / dist
-		if t > 1 {
-			t = 1
-		}
-		x := eye.X() + dx*t
-		y := eye.Y() + dy*t
-		z := eye.Z() + dz*t
-		bx := int32(math.Floor(float64(x)))
-		by := int32(math.Floor(float64(y)))
-		bz := int32(math.Floor(float64(z)))
-		key := [3]int32{bx, by, bz}
-		if seen[key] {
-			continue
-		}
-		seen[key] = true
-		if bx == target.X() && by == target.Y() && bz == target.Z() {
-			continue
-		}
-		if !world.IsSolid(bx, by, bz) {
-			continue
-		}
-		name, _ := bot.GetBlockName(bx, by, bz)
-		if strings.EqualFold(name, "minecraft:bedrock") {
-			return protocol.BlockPos{}, "", false
-		}
-		return protocol.BlockPos{bx, by, bz}, name, true
-	}
-	return protocol.BlockPos{}, "", false
 }
 
 func (bm *BlockMiner) waitForBlockChanged(ctx context.Context, pos protocol.BlockPos, oldName string, timeout time.Duration) bool {

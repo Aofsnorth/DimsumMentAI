@@ -201,20 +201,32 @@ func newTestBot() *bot.Bot {
 	}
 }
 
+func testItemInstance(networkID int32, count uint16, stackNetworkID int32) protocol.ItemInstance {
+	return protocol.ItemInstance{
+		StackNetworkID: stackNetworkID,
+		Stack: protocol.ItemStack{
+			ItemType: protocol.ItemType{NetworkID: networkID},
+			Count:    count,
+		},
+	}
+}
+
 func TestProcessItemStackResponseInventorySlotIsGlobal(t *testing.T) {
 	t.Parallel()
 	b := newTestBot()
 	b.InventoryMap[0] = protocol.ItemStack{ItemType: protocol.ItemType{NetworkID: 17}, Count: 1}
 	b.InventoryMap[9] = protocol.ItemStack{ItemType: protocol.ItemType{NetworkID: 5}, Count: 7}
 
-	processItemStackResponse(b, protocol.ItemStackResponse{
-		Status: protocol.ItemStackResponseStatusOK,
-		ContainerInfo: []protocol.StackResponseContainerInfo{{
-			Container: protocol.FullContainerName{ContainerID: protocol.ContainerInventory},
-			SlotInfo: []protocol.StackResponseSlotInfo{{
-				Slot:           0,
-				Count:          2,
-				StackNetworkID: 99,
+	applyItemStackResponse(b, &packet.ItemStackResponse{
+		Responses: []protocol.ItemStackResponse{{
+			Status: protocol.ItemStackResponseStatusOK,
+			ContainerInfo: []protocol.StackResponseContainerInfo{{
+				Container: protocol.FullContainerName{ContainerID: protocol.ContainerInventory},
+				SlotInfo: []protocol.StackResponseSlotInfo{{
+					Slot:           0,
+					Count:          2,
+					StackNetworkID: 99,
+				}},
 			}},
 		}},
 	})
@@ -279,5 +291,148 @@ func TestApplyInventoryContent_FullWindowIDInventory(t *testing.T) {
 	}
 	if stack, ok := b.InventoryMap[10]; !ok || stack.Count != 12 {
 		t.Errorf("expected slot 10 to have 12 items, got %v", stack)
+	}
+}
+
+func TestApplyInventoryContentReportsOnlyRealHeldChanges(t *testing.T) {
+	t.Parallel()
+
+	t.Run("identical full sync", func(t *testing.T) {
+		t.Parallel()
+		b := newTestBot()
+		b.HeldSlot = 2
+		held := testItemInstance(58, 2, 41)
+		b.InventoryMap[2] = held.Stack
+		b.StackNetworkIDs[2] = held.StackNetworkID
+
+		content := make([]protocol.ItemInstance, playerInvSlotCount)
+		content[2] = held
+		updated := applyInventoryContent(b, &packet.InventoryContent{
+			WindowID:  protocol.WindowIDInventory,
+			Container: protocol.FullContainerName{ContainerID: protocol.ContainerCombinedHotBarAndInventory},
+			Content:   content,
+		})
+
+		if updated {
+			t.Fatal("identical full sync requested an equipment refresh")
+		}
+	})
+
+	t.Run("held count changes", func(t *testing.T) {
+		t.Parallel()
+		b := newTestBot()
+		b.HeldSlot = 2
+		before := testItemInstance(58, 2, 41)
+		b.InventoryMap[2] = before.Stack
+		b.StackNetworkIDs[2] = before.StackNetworkID
+
+		content := make([]protocol.ItemInstance, playerInvSlotCount)
+		content[2] = testItemInstance(58, 1, 41)
+		updated := applyInventoryContent(b, &packet.InventoryContent{
+			WindowID:  protocol.WindowIDInventory,
+			Container: protocol.FullContainerName{ContainerID: protocol.ContainerCombinedHotBarAndInventory},
+			Content:   content,
+		})
+
+		if !updated {
+			t.Fatal("held count change did not request an equipment refresh")
+		}
+	})
+}
+
+func TestApplyInventorySlotReportsHeldSlotChanges(t *testing.T) {
+	t.Parallel()
+
+	b := newTestBot()
+	b.HeldSlot = 2
+	b.InventoryMap[2] = protocol.ItemStack{ItemType: protocol.ItemType{NetworkID: 58}, Count: 1}
+	b.StackNetworkIDs[2] = 41
+
+	heldUpdated := applyInventorySlot(b, &packet.InventorySlot{
+		WindowID: protocol.WindowIDInventory,
+		Slot:     2,
+		NewItem:  protocol.ItemInstance{},
+	})
+	if !heldUpdated {
+		t.Fatal("held slot update was not reported")
+	}
+	if _, ok := b.InventoryMap[2]; ok {
+		t.Fatal("empty held slot remained in inventory")
+	}
+	if _, ok := b.StackNetworkIDs[2]; ok {
+		t.Fatal("empty held slot retained its stack network ID")
+	}
+
+	nonHeldUpdated := applyInventorySlot(b, &packet.InventorySlot{
+		WindowID: protocol.WindowIDInventory,
+		Slot:     5,
+		NewItem: protocol.ItemInstance{
+			StackNetworkID: 42,
+			Stack: protocol.ItemStack{
+				ItemType: protocol.ItemType{NetworkID: 5},
+				Count:    3,
+			},
+		},
+	})
+	if nonHeldUpdated {
+		t.Fatal("non-held slot update requested an equipment refresh")
+	}
+}
+
+func TestApplyItemStackResponseReportsHeldCountChange(t *testing.T) {
+	t.Parallel()
+
+	b := newTestBot()
+	b.HeldSlot = 4
+	b.InventoryMap[4] = protocol.ItemStack{ItemType: protocol.ItemType{NetworkID: 58}, Count: 2}
+	b.StackNetworkIDs[4] = 51
+
+	updated := applyItemStackResponse(b, &packet.ItemStackResponse{
+		Responses: []protocol.ItemStackResponse{{
+			Status: protocol.ItemStackResponseStatusOK,
+			ContainerInfo: []protocol.StackResponseContainerInfo{{
+				Container: protocol.FullContainerName{ContainerID: protocol.ContainerInventory},
+				SlotInfo: []protocol.StackResponseSlotInfo{{
+					Slot:           4,
+					Count:          1,
+					StackNetworkID: 51,
+				}},
+			}},
+		}},
+	})
+	if !updated {
+		t.Fatal("held stack response update was not reported")
+	}
+	if got := b.InventoryMap[4].Count; got != 1 {
+		t.Fatalf("held stack count = %d, want 1", got)
+	}
+}
+
+func TestApplyInventoryTransactionReportsHeldCountChange(t *testing.T) {
+	t.Parallel()
+
+	b := newTestBot()
+	b.HeldSlot = 1
+	before := testItemInstance(58, 2, 61)
+	after := testItemInstance(58, 1, 61)
+	b.InventoryMap[1] = before.Stack
+	b.StackNetworkIDs[1] = before.StackNetworkID
+
+	updated := applyInventoryTransaction(b, &packet.InventoryTransaction{
+		Actions: []protocol.InventoryAction{{
+			SourceType:    protocol.InventoryActionSourceContainer,
+			WindowID:      protocol.WindowIDInventory,
+			InventorySlot: 1,
+			OldItem:       before,
+			NewItem:       after,
+		}},
+		TransactionData: &protocol.NormalTransactionData{},
+	})
+
+	if !updated {
+		t.Fatal("held transaction count change did not request an equipment refresh")
+	}
+	if got := b.InventoryMap[1].Count; got != 1 {
+		t.Fatalf("held transaction count = %d, want 1", got)
 	}
 }

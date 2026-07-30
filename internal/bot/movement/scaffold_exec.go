@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"bedrock-ai/internal/bot"
+	"bedrock-ai/internal/bot/movement/animation"
 	"bedrock-ai/internal/bot/pathfinder"
 	"bedrock-ai/internal/event"
 	"bedrock-ai/internal/safecast"
@@ -86,10 +87,7 @@ func mineBlockIfSolid(b *bot.Bot, x, y, z int32) {
 	elapsed := time.Duration(0)
 	swingInterval := 250 * time.Millisecond
 	for elapsed < breakTime {
-		_ = b.WritePacket(&packet.Animate{
-			ActionType:      packet.AnimateActionSwingArm,
-			EntityRuntimeID: b.GetEntityRuntimeID(),
-		})
+		_ = b.WritePacket(animation.MineSwing(b.GetEntityRuntimeID()))
 		b.LookAt(targetCenter)
 		time.Sleep(swingInterval)
 		elapsed += swingInterval

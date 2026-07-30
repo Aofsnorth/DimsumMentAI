@@ -1,6 +1,9 @@
 package ai
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestProtocolForProvider(t *testing.T) {
 	t.Parallel()
@@ -16,6 +19,17 @@ func TestProtocolForProvider(t *testing.T) {
 		if got := protocolForProvider(provider); got != want {
 			t.Errorf("protocolForProvider(%q) = %q, want %q", provider, got, want)
 		}
+	}
+}
+
+func TestBedrockSystemRulesExposePlaceAction(t *testing.T) {
+	t.Parallel()
+
+	if !strings.Contains(BedrockSystemRules, "<action>place:item_name</action>") {
+		t.Fatal("BedrockSystemRules does not expose the registered place action")
+	}
+	if !strings.Contains(BedrockSystemRules, "do not use drop") {
+		t.Fatal("BedrockSystemRules does not distinguish placing a block from dropping an item")
 	}
 }
 

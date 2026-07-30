@@ -99,6 +99,8 @@ Planning: If a request needs multiple steps, output multiple action tags in the 
 === ITEMS ===
 <action>equip:item_name</action> = Hold item in hand. Example: <action>equip:diamond_sword</action>
 <action>give:item_name,count</action> = Give item to player. Example: <action>give:dirt,4</action> or <action>give:diamond_sword</action>
+<action>place:item_name</action> = Place a block item on solid ground in front of you. Use for "taruh", "pasang", or "place" a block; do not use drop. Example: <action>place:crafting_table</action>
+<action>place:item_name,distance</action> = Place a block within the requested radius (1-5 blocks). Example: <action>place:torch,2</action>
 <action>drop:item_name</action> = Drop item on ground. Example: <action>drop:cobblestone</action>
 <action>drop:</action> = Drop held item (item in hand). Use when user says "drop item di tangan", "buang yang dipegang", "drop aja".
 <action>eat:food_name</action> = Eat food to restore hunger. Example: <action>eat:cooked_beef</action>

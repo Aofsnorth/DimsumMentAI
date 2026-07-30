@@ -1,6 +1,7 @@
 package combat
 
 import (
+	"bedrock-ai/internal/bot/entity"
 	"bedrock-ai/internal/event"
 	"bedrock-ai/internal/safecast"
 	"context"
@@ -23,14 +24,14 @@ func (cm *CombatManager) Tick(ctx context.Context) {
 	friendly := cm.friendlyMode
 	cm.mu.Unlock()
 
-	entities := cm.bot.GetEntities()
-	target, ok := entities[targetID]
-	if !ok || target.Health <= 0 {
+	target, ok := cm.currentTarget(targetID)
+	if !ok {
 		cm.mu.Lock()
 		if cm.inCombat && cm.targetID == targetID {
 			cm.recentKills[targetID] = time.Now()
 			cm.inCombat = false
 			cm.targetID = 0
+			cm.pvpTarget = ""
 			cm.logger.Info("Target eliminated or despawned")
 			cm.mu.Unlock()
 			cm.bot.StopMovement()
@@ -71,9 +72,52 @@ func (cm *CombatManager) Tick(ctx context.Context) {
 	}
 
 	if dist <= 3.5 && time.Since(cm.lastAttack) >= 500*time.Millisecond {
+		if !cm.hasLineOfSight(target) {
+			cm.logger.Info("Target out of sight; not attacking", "name", target.Name)
+			return
+		}
 		cm.attack(targetID, target.Position)
 		cm.lastAttack = time.Now()
 	}
+}
+
+// currentTarget resolves the engaged target from tracked actors, falling back
+// to the retained PVP username so player targets stay attackable with fresh
+// positions each tick.
+func (cm *CombatManager) currentTarget(targetID uint64) (*entity.Info, bool) {
+	entities := cm.bot.GetEntities()
+	if target, ok := entities[targetID]; ok {
+		if target.Health > 0 {
+			return target, true
+		}
+		return nil, false
+	}
+	cm.mu.Lock()
+	pvpTarget := cm.pvpTarget
+	cm.mu.Unlock()
+	if pvpTarget == "" {
+		return nil, false
+	}
+	id, pos, ok := cm.bot.FindPlayer(pvpTarget)
+	if !ok || id != targetID {
+		return nil, false
+	}
+	return &entity.Info{
+		ID:       targetID,
+		Type:     "player",
+		Name:     pvpTarget,
+		Position: pos,
+		Health:   20,
+	}, true
+}
+
+// hasLineOfSight revalidates that every cell between the bot and the target
+// is loaded and non-solid before swinging.
+func (cm *CombatManager) hasLineOfSight(target *entity.Info) bool {
+	origin := cm.bot.GetCoords()
+	start := origin.Add(mgl32.Vec3{0, 1.62, 0})
+	end := target.Position.Add(mgl32.Vec3{0, 1.2, 0})
+	return entity.HasLineOfSight(cm.bot.GetLocalWorldModel(), cm.bot, start, end)
 }
 
 func (cm *CombatManager) attack(targetID uint64, targetPos mgl32.Vec3) {
@@ -82,6 +126,7 @@ func (cm *CombatManager) attack(targetID uint64, targetPos mgl32.Vec3) {
 	_ = cm.bot.WritePacket(&packet.Animate{
 		ActionType:      packet.AnimateActionSwingArm,
 		EntityRuntimeID: botRuntimeID,
+		SwingSource:     packet.AnimateSwingSourceAttack,
 	})
 
 	slot := cm.bot.GetHeldItemSlot()

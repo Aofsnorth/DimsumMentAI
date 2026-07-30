@@ -77,7 +77,8 @@ func (td *ThreatDetector) Scan(ctx context.Context) {
 
 	td.cleanupCooldowns(now)
 
-	closestHostile, closestDist, newThreats := td.evaluateThreats(botPos, entities, now)
+	visible := entity.VisibleMobs(td.bot.GetLocalWorldModel(), td.bot, botPos, entities, 16, nil)
+	closestHostile, closestDist, newThreats := td.evaluateThreats(botPos, visible, now)
 	if closestHostile == nil {
 		return
 	}
@@ -95,23 +96,17 @@ func (td *ThreatDetector) cleanupCooldowns(now time.Time) {
 	td.mu.Unlock()
 }
 
-func (td *ThreatDetector) evaluateThreats(botPos mgl32.Vec3, entities map[uint64]*entity.Info, now time.Time) (*entity.Info, float32, []*entity.Info) {
+func (td *ThreatDetector) evaluateThreats(botPos mgl32.Vec3, entities []*entity.Info, now time.Time) (*entity.Info, float32, []*entity.Info) {
 	var closestHostile *entity.Info
 	closestDist := float32(math.MaxFloat32)
 	var newThreats []*entity.Info
 
 	for _, ent := range entities {
-		if ent.Health <= 0 {
-			continue
-		}
 		if !isHostileEntity(ent) {
 			continue
 		}
 
 		dist := td.distance(botPos, ent.Position)
-		if dist > 16.0 {
-			continue
-		}
 
 		if dist < closestDist {
 			closestDist = dist

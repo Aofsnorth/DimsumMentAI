@@ -104,10 +104,26 @@ func handleMoveActorDelta(b *bot.Bot, pk packet.Packet) bool {
 	p := pk.(*packet.MoveActorDelta)
 	b.Mu.Lock()
 	if act, ok := b.Actors[p.EntityRuntimeID]; ok {
-		act.Position = p.Position
+		mergeActorDeltaPosition(act, p)
 	}
 	b.Mu.Unlock()
 	return true
+}
+
+// mergeActorDeltaPosition applies only axes flagged present in the delta
+// packet. Unflagged axes decode as zero and must not reset the tracked value.
+func mergeActorDeltaPosition(act *entity.Info, p *packet.MoveActorDelta) {
+	pos := act.Position
+	if p.Flags&packet.MoveActorDeltaFlagHasX != 0 {
+		pos[0] = p.Position.X()
+	}
+	if p.Flags&packet.MoveActorDeltaFlagHasY != 0 {
+		pos[1] = p.Position.Y()
+	}
+	if p.Flags&packet.MoveActorDeltaFlagHasZ != 0 {
+		pos[2] = p.Position.Z()
+	}
+	act.Position = pos
 }
 
 func handleMoveActorAbsolute(b *bot.Bot, pk packet.Packet) bool {
@@ -180,7 +196,7 @@ func handleInventoryContent(b *bot.Bot, pk packet.Packet) bool {
 		slog.Int("items_count", len(p.Content)),
 	)
 	if isPlayerInv {
-		applyInventoryContent(b, p)
+		syncHeldEquipmentIfUpdated(b, applyInventoryContent(b, p))
 	}
 	return true
 }
@@ -200,19 +216,28 @@ func handleInventorySlot(b *bot.Bot, pk packet.Packet) bool {
 		slog.Int("count", int(p.NewItem.Stack.Count)),
 	)
 	if isPlayerInv {
-		applyInventorySlot(b, p)
+		syncHeldEquipmentIfUpdated(b, applyInventorySlot(b, p))
 	}
 	return true
 }
 
 func handleItemStackResponse(b *bot.Bot, pk packet.Packet) bool {
-	applyItemStackResponse(b, pk.(*packet.ItemStackResponse))
+	syncHeldEquipmentIfUpdated(b, applyItemStackResponse(b, pk.(*packet.ItemStackResponse)))
 	return true
 }
 
 func handleInventoryTransaction(b *bot.Bot, pk packet.Packet) bool {
-	applyInventoryTransaction(b, pk.(*packet.InventoryTransaction))
+	syncHeldEquipmentIfUpdated(b, applyInventoryTransaction(b, pk.(*packet.InventoryTransaction)))
 	return true
+}
+
+func syncHeldEquipmentIfUpdated(b *bot.Bot, updated bool) {
+	if !updated {
+		return
+	}
+	if err := b.SyncHeldEquipment(); err != nil {
+		b.Logger.Warn("failed to sync held equipment", slog.Any("error", err))
+	}
 }
 
 func handleMobEquipment(b *bot.Bot, pk packet.Packet) bool {

@@ -1,6 +1,7 @@
 package placer
 
 import (
+	"bedrock-ai/internal/bot/movement/animation"
 	"bedrock-ai/internal/safecast"
 	"context"
 	"strings"
@@ -23,10 +24,7 @@ func (bp *BlockPlacer) clearObstructions(ctx context.Context, x, y, z int) {
 }
 
 func (bp *BlockPlacer) digBlock(ctx context.Context, pos protocol.BlockPos) {
-	_ = bp.bot.WritePacket(&packet.Animate{
-		ActionType:      packet.AnimateActionSwingArm,
-		EntityRuntimeID: bp.bot.GetEntityRuntimeID(),
-	})
+	_ = bp.bot.WritePacket(animation.MineSwing(bp.bot.GetEntityRuntimeID()))
 	_ = bp.bot.WritePacket(&packet.PlayerAction{
 		EntityRuntimeID: bp.bot.GetEntityRuntimeID(),
 		ActionType:      protocol.PlayerActionStartBreak,

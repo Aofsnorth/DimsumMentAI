@@ -29,6 +29,9 @@ type Bot interface {
 	SendChat(msg string)
 	ReportActionStatus(user string, status event.ActionStatus)
 	GetEntityRuntimeID() uint64
+	GetLocalWorldModel() entity.WorldModel
+	GetBlockName(x, y, z int32) (string, bool)
+	FindPlayer(username string) (uint64, mgl32.Vec3, bool)
 }
 
 // Weapon priorities for automatic equipment
@@ -42,6 +45,7 @@ type CombatManager struct {
 	bot          Bot
 	logger       *slog.Logger
 	targetID     uint64
+	pvpTarget    string
 	inCombat     bool
 	friendlyMode bool
 	shieldUp     bool
@@ -75,7 +79,7 @@ func (cm *CombatManager) EngageTarget(id uint64) {
 	defer cm.mu.Unlock()
 
 	entities := cm.bot.GetEntities()
-	entity, ok := entities[id]
+	info, ok := entities[id]
 	if !ok {
 		cm.logger.Warn("Failed to engage: entity not found", "id", id)
 		return
@@ -86,10 +90,29 @@ func (cm *CombatManager) EngageTarget(id uint64) {
 	}
 
 	cm.targetID = id
+	cm.pvpTarget = ""
 	cm.inCombat = true
-	cm.logger.Info("Engaging combat target", "name", entity.Name, "id", id, "type", entity.Type)
+	cm.logger.Info("Engaging combat target", "name", info.Name, "id", id, "type", info.Type)
 
 	go cm.equipBestWeapon()
+}
+
+// EngagePlayer targets a tracked player by username for PVP. The username is
+// retained so the tick loop can re-resolve the fresh position each tick.
+// Returns false when the player is not currently tracked.
+func (cm *CombatManager) EngagePlayer(username string) bool {
+	id, _, ok := cm.bot.FindPlayer(username)
+	if !ok || id == 0 {
+		return false
+	}
+	cm.mu.Lock()
+	defer cm.mu.Unlock()
+	cm.targetID = id
+	cm.pvpTarget = username
+	cm.inCombat = true
+	cm.logger.Info("Engaging PVP target", "username", username, "id", id)
+	go cm.equipBestWeapon()
+	return true
 }
 
 func (cm *CombatManager) Disengage() {
@@ -101,5 +124,6 @@ func (cm *CombatManager) Disengage() {
 	}
 	cm.inCombat = false
 	cm.targetID = 0
+	cm.pvpTarget = ""
 	cm.bot.StopMovement()
 }

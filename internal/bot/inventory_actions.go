@@ -16,13 +16,10 @@ import (
 
 func (b *Bot) DropItem(name string, count int) error {
 	b.Mu.Lock()
-	defer b.Mu.Unlock()
 
 	var targetSlot uint32
 	var foundItem protocol.ItemStack
 	found := false
-
-	// Find the item by name
 	for slot, item := range b.InventoryMap {
 		if item.Count <= 0 {
 			continue
@@ -35,92 +32,23 @@ func (b *Bot) DropItem(name string, count int) error {
 			break
 		}
 	}
-
 	if !found {
-		return fmt.Errorf("item %s not found in inventory", name)
+		b.Mu.Unlock()
+		return fmt.Errorf("item %q not found in inventory", name)
 	}
 
-	if count <= 0 || count > int(foundItem.Count) {
-		count = int(foundItem.Count)
+	item := protocol.ItemInstance{StackNetworkID: b.StackNetworkIDs[targetSlot], Stack: foundItem}
+	b.Mu.Unlock()
+
+	transaction, swing, dropped, err := buildDropPackets(b.Conn.GameData().EntityRuntimeID, targetSlot, item, count)
+	if err != nil {
+		return fmt.Errorf("drop %q from inventory slot %d: %w", name, targetSlot, err)
 	}
-
-	// Create dropped item transaction
-	dropItem := foundItem
-	dropItem.Count = safecast.To[uint16](count)
-
-	remaining := foundItem.Count - safecast.To[uint16](count)
-	var newSlotItem protocol.ItemInstance
-	if remaining > 0 {
-		newSlotItem = protocol.ItemInstance{
-			Stack: protocol.ItemStack{
-				ItemType:       foundItem.ItemType,
-				BlockRuntimeID: foundItem.BlockRuntimeID,
-				Count:          remaining,
-				NBTData:        foundItem.NBTData,
-				CanBePlacedOn:  foundItem.CanBePlacedOn,
-				CanBreak:       foundItem.CanBreak,
-				HasNetworkID:   foundItem.HasNetworkID,
-			},
-		}
+	if err := b.Conn.WritePacket(transaction); err != nil {
+		return fmt.Errorf("drop %d %q from inventory slot %d: send transaction: %w", dropped, name, targetSlot, err)
 	}
-
-	tx := &packet.InventoryTransaction{
-		Actions: []protocol.InventoryAction{
-			{
-				SourceType:    protocol.InventoryActionSourceContainer,
-				WindowID:      protocol.WindowIDInventory,
-				InventorySlot: targetSlot,
-				OldItem:       protocol.ItemInstance{Stack: foundItem},
-				NewItem:       newSlotItem,
-			},
-			{
-				SourceType:    protocol.InventoryActionSourceWorld,
-				SourceFlags:   1, // Drop item flag
-				InventorySlot: 0,
-				OldItem:       protocol.ItemInstance{},
-				NewItem:       protocol.ItemInstance{Stack: dropItem},
-			},
-		},
-		TransactionData: &protocol.NormalTransactionData{},
-	}
-
-	if err := b.Conn.WritePacket(tx); err != nil {
-		return err
-	}
-
-	// Wait for server to acknowledge drop transaction before updating visuals.
-	// Bedrock needs time to process InventoryTransaction + spawn ItemActor.
-	time.Sleep(150 * time.Millisecond)
-
-	if remaining == 0 {
-		delete(b.InventoryMap, targetSlot)
-		// If we just emptied the slot the bot is holding, broadcast a
-		// MobEquipment update so the hand visual clears immediately for other
-		// clients (Bedrock won't echo this automatically when the drop is
-		// initiated by the bot itself).
-		if targetSlot == b.HeldSlot {
-			_ = b.Conn.WritePacket(&packet.MobEquipment{
-				EntityRuntimeID: b.Conn.GameData().EntityRuntimeID,
-				NewItem:         protocol.ItemInstance{},
-				InventorySlot:   byte(targetSlot),
-				HotBarSlot:      byte(targetSlot),
-				WindowID:        byte(protocol.WindowIDInventory),
-			})
-		}
-	} else {
-		updated := foundItem
-		updated.Count = remaining
-		b.InventoryMap[targetSlot] = updated
-		// Slot still has items but count changed — refresh visual.
-		if targetSlot == b.HeldSlot {
-			_ = b.Conn.WritePacket(&packet.MobEquipment{
-				EntityRuntimeID: b.Conn.GameData().EntityRuntimeID,
-				NewItem:         protocol.ItemInstance{Stack: updated},
-				InventorySlot:   byte(targetSlot),
-				HotBarSlot:      byte(targetSlot),
-				WindowID:        byte(protocol.WindowIDInventory),
-			})
-		}
+	if err := b.Conn.WritePacket(swing); err != nil {
+		return fmt.Errorf("drop transaction sent for %d %q from inventory slot %d, but send drop swing: %w", dropped, name, targetSlot, err)
 	}
 	return nil
 }

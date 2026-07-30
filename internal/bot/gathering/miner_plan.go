@@ -3,12 +3,36 @@ package gathering
 import (
 	"math"
 
+	"bedrock-ai/internal/bot/entity"
+
 	"github.com/go-gl/mathgl/mgl32"
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
 )
 
+const (
+	mineEyeHeight            float32 = 1.62
+	mineVisibilitySampleStep float32 = 0.2
+)
+
+// mineWorld is the perception boundary for mining candidates. Unknown cells
+// return false from IsLoaded and must not be mined or counted as exposure.
 type mineWorld interface {
 	IsSolid(x, y, z int32) bool
+	IsLoaded(x, y, z int32) bool
+}
+
+type botMineWorld struct {
+	bot   Bot
+	model entity.WorldModel
+}
+
+func (w botMineWorld) IsSolid(x, y, z int32) bool {
+	return w.model.IsSolid(x, y, z)
+}
+
+func (w botMineWorld) IsLoaded(x, y, z int32) bool {
+	_, loaded := w.bot.GetBlockName(x, y, z)
+	return loaded
 }
 
 type mineStep struct {
@@ -34,72 +58,62 @@ var mineFaces = []blockFace{
 }
 
 func planMineStep(world mineWorld, botPos mgl32.Vec3, target protocol.BlockPos) (mineStep, bool) {
-	if !world.IsSolid(target.X(), target.Y(), target.Z()) {
+	if !world.IsLoaded(target.X(), target.Y(), target.Z()) || !world.IsSolid(target.X(), target.Y(), target.Z()) {
 		return mineStep{}, false
 	}
 
-	if obstruction, ok := firstHorizontalObstruction(world, botPos, target); ok && obstruction != target {
-		if step, ok := visibleMineStep(world, obstruction); ok {
-			step.CountsTowardTarget = false
-			return step, true
+	for _, face := range mineFaces {
+		adjacent := protocol.BlockPos{
+			target.X() + face.offset.X(),
+			target.Y() + face.offset.Y(),
+			target.Z() + face.offset.Z(),
 		}
-		return mineStep{}, false
-	}
-
-	step, ok := visibleMineStep(world, target)
-	if !ok {
-		return mineStep{}, false
-	}
-	step.CountsTowardTarget = true
-	return step, true
-}
-
-func visibleMineStep(world mineWorld, pos protocol.BlockPos) (mineStep, bool) {
-	for _, f := range mineFaces {
-		ax := pos.X() + f.offset.X()
-		ay := pos.Y() + f.offset.Y()
-		az := pos.Z() + f.offset.Z()
-		if !world.IsSolid(ax, ay, az) {
-			return mineStep{
-				Position: pos,
-				Face:     f.face,
-				Aim: mgl32.Vec3{
-					float32(pos.X()) + f.aim.X(),
-					float32(pos.Y()) + f.aim.Y(),
-					float32(pos.Z()) + f.aim.Z(),
-				},
-			}, true
+		if !mineBlockClear(world, adjacent) {
+			continue
 		}
+		aim := mgl32.Vec3{
+			float32(target.X()) + face.aim.X(),
+			float32(target.Y()) + face.aim.Y(),
+			float32(target.Z()) + face.aim.Z(),
+		}
+		if !mineSightLineClear(world, botPos.Add(mgl32.Vec3{0, mineEyeHeight, 0}), aim, target) {
+			continue
+		}
+		return mineStep{
+			Position:           target,
+			Face:               face.face,
+			Aim:                aim,
+			CountsTowardTarget: true,
+		}, true
 	}
 	return mineStep{}, false
 }
 
-func firstHorizontalObstruction(world mineWorld, botPos mgl32.Vec3, target protocol.BlockPos) (protocol.BlockPos, bool) {
-	startX := int32(math.Floor(float64(botPos.X())))
-	startZ := int32(math.Floor(float64(botPos.Z())))
-	dx := target.X() - startX
-	dz := target.Z() - startZ
-	steps := abs32(dx)
-	if zSteps := abs32(dz); zSteps > steps {
-		steps = zSteps
-	}
-	if steps <= 1 {
-		return protocol.BlockPos{}, false
-	}
-
-	for i := int32(1); i < steps; i++ {
-		x := startX + int32(math.Round(float64(dx)*float64(i)/float64(steps)))
-		z := startZ + int32(math.Round(float64(dz)*float64(i)/float64(steps)))
-		if world.IsSolid(x, target.Y(), z) {
-			return protocol.BlockPos{x, target.Y(), z}, true
-		}
-	}
-	return protocol.BlockPos{}, false
+func mineBlockClear(world mineWorld, pos protocol.BlockPos) bool {
+	return world.IsLoaded(pos.X(), pos.Y(), pos.Z()) && !world.IsSolid(pos.X(), pos.Y(), pos.Z())
 }
 
-func abs32(v int32) int32 {
-	if v < 0 {
-		return -v
+func mineSightLineClear(world mineWorld, eye, aim mgl32.Vec3, target protocol.BlockPos) bool {
+	delta := aim.Sub(eye)
+	distance := delta.Len()
+	if distance == 0 {
+		return true
 	}
-	return v
+
+	steps := int(math.Ceil(float64(distance / mineVisibilitySampleStep)))
+	for i := 0; i < steps; i++ {
+		point := eye.Add(delta.Mul(float32(i) / float32(steps)))
+		pos := protocol.BlockPos{
+			int32(math.Floor(float64(point.X()))),
+			int32(math.Floor(float64(point.Y()))),
+			int32(math.Floor(float64(point.Z()))),
+		}
+		if pos == target {
+			continue
+		}
+		if !mineBlockClear(world, pos) {
+			return false
+		}
+	}
+	return true
 }

@@ -4,6 +4,8 @@ import (
 	"strings"
 	"time"
 
+	"bedrock-ai/internal/bot/movement/animation"
+
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
 	"github.com/sandertv/gophertunnel/minecraft/protocol/packet"
 )
@@ -43,10 +45,7 @@ func (b *Bot) BreakObstacleAt(pos protocol.BlockPos) {
 		elapsed := time.Duration(0)
 		total := time.Duration(breakMs) * time.Millisecond
 		for elapsed < total {
-			_ = b.Conn.WritePacket(&packet.Animate{
-				ActionType:      packet.AnimateActionSwingArm,
-				EntityRuntimeID: runtimeID,
-			})
+			_ = b.Conn.WritePacket(animation.MineSwing(runtimeID))
 			wait := swingInterval
 			if elapsed+wait > total {
 				wait = total - elapsed

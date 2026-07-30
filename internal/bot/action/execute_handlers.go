@@ -11,46 +11,75 @@ import (
 	"time"
 
 	"bedrock-ai/internal/bot"
+	"bedrock-ai/internal/bot/entity"
 	"bedrock-ai/internal/event"
 	"bedrock-ai/internal/safecast"
 
 	"github.com/go-gl/mathgl/mgl32"
 )
 
+const visibleTargetDistance = 32
+
+func init() {
+	actionHandlers["pvp"] = handlePVP
+}
+
 func handleAttack(b *bot.Bot, param, user string) {
+	target, ok := selectAttackTarget(b, param, user)
+	if !ok {
+		b.Logger.Warn("ExecuteAction: no visible non-item mob found to attack", "param", param)
+		return
+	}
+	b.CombatMgr.EngageTarget(target.ID)
+}
+
+func selectAttackTarget(b *bot.Bot, param, user string) (*entity.Info, bool) {
 	b.Mu.Lock()
-	targetID := uint64(0)
-	closestDist := float32(math.MaxFloat32)
-	botPos := b.Pos
-
-	for username, id := range b.PlayerEntityIDs {
-		if strings.EqualFold(username, param) || (param == "" && strings.EqualFold(username, user)) {
-			targetID = id
-			break
-		}
-	}
-
-	if targetID == 0 {
-		for id, actor := range b.Actors {
-			if param == "" || strings.Contains(strings.ToLower(actor.Name), strings.ToLower(param)) || strings.Contains(strings.ToLower(actor.Type), strings.ToLower(param)) {
-				dx := actor.Position.X() - botPos.X()
-				dy := actor.Position.Y() - botPos.Y()
-				dz := actor.Position.Z() - botPos.Z()
-				dist := float32(math.Sqrt(float64(dx*dx + dy*dy + dz*dz)))
-				if dist < closestDist {
-					closestDist = dist
-					targetID = id
-				}
-			}
-		}
-	}
+	origin := b.Pos
+	actors := copyActorsLocked(b.Actors)
+	excluded := excludedPlayerIDsLocked(b, user)
 	b.Mu.Unlock()
 
-	if targetID != 0 {
-		b.CombatMgr.EngageTarget(targetID)
-	} else {
-		b.Logger.Warn("ExecuteAction: no target found to attack", "param", param)
+	return entity.NearestVisibleMob(b.WorldModel, b, origin, actors, visibleTargetDistance, param, excluded)
+}
+
+func handlePVP(b *bot.Bot, param, user string) {
+	target := param
+	if target == "" {
+		target = user
 	}
+	if target == "" || strings.EqualFold(target, b.Name) {
+		b.Logger.Warn("ExecuteAction: no PVP target found", "param", param)
+		return
+	}
+	if !b.CombatMgr.EngagePlayer(target) {
+		b.Logger.Warn("ExecuteAction: PVP player target not found", "target", target)
+	}
+}
+
+func copyActorsLocked(actors map[uint64]*entity.Info) map[uint64]*entity.Info {
+	snapshot := make(map[uint64]*entity.Info, len(actors))
+	for id, info := range actors {
+		if info == nil {
+			continue
+		}
+		copied := *info
+		snapshot[id] = &copied
+	}
+	return snapshot
+}
+
+func excludedPlayerIDsLocked(b *bot.Bot, user string) map[uint64]struct{} {
+	excluded := make(map[uint64]struct{}, len(b.PlayerEntityIDs)+1)
+	for _, id := range b.PlayerEntityIDs {
+		excluded[id] = struct{}{}
+	}
+	if user != "" {
+		if id, _, ok := b.FindPlayer(user); ok {
+			excluded[id] = struct{}{}
+		}
+	}
+	return excluded
 }
 
 func handleCraft(b *bot.Bot, param, user string) {

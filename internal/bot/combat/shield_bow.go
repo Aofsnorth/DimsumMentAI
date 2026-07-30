@@ -154,6 +154,10 @@ func (cm *CombatManager) BowAttack(targetID uint64) bool {
 	if !ok {
 		return false
 	}
+	if !cm.hasLineOfSight(target) {
+		cm.logger.Debug("BowAttack: target not visible", "target", target.Name)
+		return false
+	}
 	cm.bot.LookAt(target.Position.Add(mgl32.Vec3{0, 1.2, 0}))
 	time.Sleep(200 * time.Millisecond)
 
@@ -214,6 +218,10 @@ func (cm *CombatManager) CrossbowAttack(targetID uint64) bool {
 	entities := cm.bot.GetEntities()
 	target, ok := entities[targetID]
 	if !ok {
+		return false
+	}
+	if !cm.hasLineOfSight(target) {
+		cm.logger.Debug("CrossbowAttack: target not visible", "target", target.Name)
 		return false
 	}
 	cm.bot.LookAt(target.Position.Add(mgl32.Vec3{0, 1.2, 0}))

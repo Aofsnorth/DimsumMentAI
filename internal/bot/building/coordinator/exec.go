@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"bedrock-ai/internal/bot/building/common"
+	"bedrock-ai/internal/bot/movement/animation"
 	"bedrock-ai/internal/event"
 	"bedrock-ai/internal/safecast"
 
@@ -134,10 +135,7 @@ func (ba *BuilderAgent) executeUndoLoop(ctx context.Context, count int) {
 		ba.bot.LookAt(mgl32.Vec3{float32(entry.X) + 0.5, float32(entry.Y) + 0.5, float32(entry.Z) + 0.5})
 		time.Sleep(100 * time.Millisecond)
 
-		_ = ba.bot.WritePacket(&packet.Animate{
-			ActionType:      packet.AnimateActionSwingArm,
-			EntityRuntimeID: ba.bot.GetEntityRuntimeID(),
-		})
+		_ = ba.bot.WritePacket(animation.MineSwing(ba.bot.GetEntityRuntimeID()))
 		_ = ba.bot.WritePacket(&packet.PlayerAction{
 			EntityRuntimeID: ba.bot.GetEntityRuntimeID(),
 			ActionType:      protocol.PlayerActionStartBreak,

@@ -162,6 +162,26 @@ func (b *Bot) WritePacket(pk packet.Packet) error {
 	return b.Conn.WritePacket(pk)
 }
 
+// SyncHeldEquipment publishes the current held-slot snapshot so the server and
+// nearby clients render the same item as InventoryMap.
+func (b *Bot) SyncHeldEquipment() error {
+	if b.Conn == nil {
+		return fmt.Errorf("sync held equipment: bot is not connected")
+	}
+	slot, item, _ := b.heldItemInstance()
+	return b.Conn.WritePacket(buildHeldEquipmentPacket(b.GetEntityRuntimeID(), slot, item))
+}
+
+func buildHeldEquipmentPacket(entityRuntimeID uint64, slot uint32, item protocol.ItemInstance) *packet.MobEquipment {
+	return &packet.MobEquipment{
+		EntityRuntimeID: entityRuntimeID,
+		NewItem:         item,
+		InventorySlot:   byte(slot),
+		HotBarSlot:      byte(slot),
+		WindowID:        byte(protocol.WindowIDInventory),
+	}
+}
+
 func (b *Bot) EquipItem(slot uint32) error {
 	b.Mu.Lock()
 	defer b.Mu.Unlock()

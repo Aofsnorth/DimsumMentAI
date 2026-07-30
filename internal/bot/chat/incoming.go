@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"bedrock-ai/internal/bot"
+	"bedrock-ai/internal/bot/entity"
 	"bedrock-ai/internal/event"
 )
 
@@ -161,6 +162,7 @@ func buildChatContext(b *bot.Bot, sourceName, msg, botName string) string {
 		playerCoordsStr = fmt.Sprintf("X:%.0f Y:%.0f Z:%.0f", pCoords.X(), pCoords.Y(), pCoords.Z())
 	}
 
+	visibleMobs := VisibleMobsSummary(b, 32, 8)
 	botStatusText := fmt.Sprintf("HP: %d/20, Hunger: %d/20", hp, hunger)
 	systemPrompt := b.AiClient.BuildSystemPrompt(
 		botName,
@@ -169,6 +171,8 @@ func buildChatContext(b *bot.Bot, sourceName, msg, botName string) string {
 		heldItem,
 		invSummary,
 	)
+
+	systemPrompt += "\n\n[GROUNDED PERCEPTION] Visible mobs (line-of-sight, non-item): " + visibleMobs + "."
 
 	// Append current plan/todo state so the LLM is always aware of any
 	// in-progress multi-step task, even when a new chat message arrives
@@ -181,4 +185,40 @@ func buildChatContext(b *bot.Bot, sourceName, msg, botName string) string {
 	}
 
 	return systemPrompt
+}
+
+// VisibleMobsSummary lists line-of-sight-visible non-item mobs nearest first,
+// or explicitly "none" when the bot cannot see any. Distances are relative to
+// the bot.
+func VisibleMobsSummary(b *bot.Bot, maxDistance float32, limit int) string {
+	b.Mu.Lock()
+	origin := b.Pos
+	actors := make(map[uint64]*entity.Info, len(b.Actors))
+	for id, info := range b.Actors {
+		if info == nil {
+			continue
+		}
+		copied := *info
+		actors[id] = &copied
+	}
+	b.Mu.Unlock()
+
+	visible := entity.VisibleMobs(b.WorldModel, b, origin, actors, maxDistance, nil)
+	if len(visible) == 0 {
+		return "none"
+	}
+	parts := make([]string, 0, min(limit, len(visible)))
+	for _, info := range visible {
+		name := entity.NormalizeName(info.Name)
+		if name == "" || name != entity.NormalizeName(info.Type) {
+			if typ := entity.NormalizeName(info.Type); typ != "" {
+				name = typ
+			}
+		}
+		parts = append(parts, fmt.Sprintf("%s (%.0fm)", name, origin.Sub(info.Position).Len()))
+		if len(parts) >= limit {
+			break
+		}
+	}
+	return strings.Join(parts, ", ")
 }

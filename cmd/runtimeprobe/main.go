@@ -73,6 +73,7 @@ func run(message string) error {
 	if err := conn.SetReadDeadline(deadline); err != nil {
 		return fmt.Errorf("set read deadline: %w", err)
 	}
+	playerNames := make(map[uint64]string)
 	for {
 		pk, err := conn.ReadPacket()
 		if err != nil {
@@ -81,8 +82,23 @@ func run(message string) error {
 			}
 			return fmt.Errorf("read packet: %w", err)
 		}
-		if text, ok := pk.(*packet.Text); ok {
-			fmt.Printf("chat: source=%q message=%q type=%d\n", text.SourceName, text.Message, text.TextType)
+		switch p := pk.(type) {
+		case *packet.AddPlayer:
+			playerNames[p.EntityRuntimeID] = p.Username
+			fmt.Printf("player: name=%q entity_runtime_id=%d\n", p.Username, p.EntityRuntimeID)
+		case *packet.MobEquipment:
+			name, ok := playerNames[p.EntityRuntimeID]
+			if ok {
+				fmt.Printf("equipment: name=%q slot=%d network_id=%d count=%d stack_network_id=%d\n",
+					name,
+					p.HotBarSlot,
+					p.NewItem.Stack.NetworkID,
+					p.NewItem.Stack.Count,
+					p.NewItem.StackNetworkID,
+				)
+			}
+		case *packet.Text:
+			fmt.Printf("chat: source=%q message=%q type=%d\n", p.SourceName, p.Message, p.TextType)
 		}
 	}
 }

@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"bedrock-ai/internal/bot/building/schematic"
+	"bedrock-ai/internal/bot/movement/animation"
 	"bedrock-ai/internal/event"
 	"bedrock-ai/internal/safecast"
 
@@ -85,10 +86,7 @@ func (s *AreaScanner) clearBlocksLoop(ctx context.Context, blocksToClear []proto
 		s.bot.LookAt(targetCenter)
 		time.Sleep(100 * time.Millisecond)
 
-		_ = s.bot.WritePacket(&packet.Animate{
-			ActionType:      packet.AnimateActionSwingArm,
-			EntityRuntimeID: s.bot.GetEntityRuntimeID(),
-		})
+		_ = s.bot.WritePacket(animation.MineSwing(s.bot.GetEntityRuntimeID()))
 		_ = s.bot.WritePacket(&packet.PlayerAction{
 			EntityRuntimeID: s.bot.GetEntityRuntimeID(),
 			ActionType:      protocol.PlayerActionStartBreak,

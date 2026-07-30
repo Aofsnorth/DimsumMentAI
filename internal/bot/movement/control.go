@@ -14,10 +14,17 @@ import (
 )
 
 const (
-	walkingGazeYawAmplitude   float32 = 2.5
-	walkingGazePitchAmplitude float32 = 0.75
-	walkingGazeMaxYawOffset   float32 = 4
-	walkingGazeMaxPitchOffset float32 = 1.25
+	walkingGazeYawPhaseFrequency   float32 = 0.030
+	walkingGazePitchPhaseFrequency float32 = 0.041
+	walkingGazePhaseBlendFrequency float32 = 0.013
+	walkingGazeYawPhaseDrift       float32 = 0.35
+	walkingGazePitchPhaseDrift     float32 = 1.20
+	walkingGazePhaseBlendBias      float32 = 0.50
+	walkingGazeYawAmplitude        float32 = 10.0
+	walkingGazePitchAmplitude      float32 = 6.0
+	walkingGazeDownwardBias        float32 = 2.0
+	walkingGazeMaxYawOffset        float32 = 12.0
+	walkingGazeMaxPitchOffset      float32 = 8.0
 )
 
 func (tc *TickContext) updateLookDirection() {
@@ -255,10 +262,21 @@ func walkingHeadTarget(tick uint64, targetYaw, targetPitch float32, enabled bool
 		return targetYaw, targetPitch
 	}
 
-	yawOffset, pitchOffset := organicLookDrift(tick, walkingGazeYawAmplitude, walkingGazePitchAmplitude)
-	yawOffset = clampFloat32(yawOffset, -walkingGazeMaxYawOffset, walkingGazeMaxYawOffset)
-	pitchOffset = clampFloat32(pitchOffset, -walkingGazeMaxPitchOffset, walkingGazeMaxPitchOffset)
+	yawOffset, pitchOffset := walkingGazeOffsets(tick)
 	return normalizeYaw(targetYaw + yawOffset), clampFloat32(targetPitch+pitchOffset, -90, 90)
+}
+
+func walkingGazeOffsets(tick uint64) (float32, float32) {
+	phase := float32(tick)
+	yawDrift, pitchDrift := organicLookDrift(tick, walkingGazeYawPhaseDrift, walkingGazePitchPhaseDrift)
+	blendDrift, _ := organicLookDrift(tick, walkingGazePhaseBlendBias, walkingGazePhaseBlendFrequency*100)
+
+	yawPhase := phase*walkingGazeYawPhaseFrequency + yawDrift
+	pitchPhase := phase*walkingGazePitchPhaseFrequency + pitchDrift
+	scanBlend := clampFloat32(walkingGazePhaseBlendBias+blendDrift, 0, 1)
+
+	return walkingGazeYawAmplitude * float32(math.Sin(float64(yawPhase))),
+		walkingGazeDownwardBias + walkingGazePitchAmplitude*scanBlend*float32(math.Sin(float64(pitchPhase)))
 }
 
 func boundWalkingGaze(targetYaw, targetPitch, headYaw, pitch float32) (float32, float32) {

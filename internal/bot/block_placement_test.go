@@ -70,3 +70,32 @@ func TestValidatePlacementRequestRejectsInvalidFaceAndOffset(t *testing.T) {
 		t.Fatal("validatePlacementRequest() accepted offset outside block bounds")
 	}
 }
+
+func TestBuildHeldEquipmentPacketSupportsEmptyAndRemainingStacks(t *testing.T) {
+	t.Parallel()
+
+	empty := buildHeldEquipmentPacket(99, 3, protocol.ItemInstance{})
+	if empty.EntityRuntimeID != 99 || empty.InventorySlot != 3 || empty.HotBarSlot != 3 {
+		t.Fatalf("empty equipment target = %+v", empty)
+	}
+	if empty.NewItem.Stack.Count != 0 || empty.NewItem.Stack.NetworkID != 0 || empty.NewItem.StackNetworkID != 0 {
+		t.Fatalf("empty equipment contains an item: %+v", empty.NewItem)
+	}
+
+	remaining := placementItemInstance(1)
+	equipped := buildHeldEquipmentPacket(99, 3, remaining)
+	if equipped.NewItem.Stack.Count != 1 || equipped.NewItem.StackNetworkID != remaining.StackNetworkID {
+		t.Fatalf("remaining equipment = %+v, want count 1 and stack ID %d", equipped.NewItem, remaining.StackNetworkID)
+	}
+}
+
+func placementItemInstance(count uint16) protocol.ItemInstance {
+	return protocol.ItemInstance{
+		StackNetworkID: 37,
+		Stack: protocol.ItemStack{
+			ItemType:       protocol.ItemType{NetworkID: 58},
+			BlockRuntimeID: 901,
+			Count:          count,
+		},
+	}
+}

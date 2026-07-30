@@ -19,6 +19,40 @@ const (
 	playerInvSlotCount = 36
 )
 
+type heldItemState struct {
+	Slot           uint32
+	NetworkID      int32
+	MetadataValue  uint32
+	BlockRuntimeID int32
+	Count          uint16
+	StackNetworkID int32
+	HasNetworkID   bool
+	Present        bool
+}
+
+// heldItemStateLocked snapshots the held stack fields that determine its
+// rendered identity and count. Caller must hold b.Mu so the selected slot and
+// its stack are observed atomically.
+func heldItemStateLocked(b *bot.Bot) heldItemState {
+	state := heldItemState{Slot: b.HeldSlot}
+	item, ok := b.InventoryMap[state.Slot]
+	if !ok || item.Count == 0 {
+		return state
+	}
+	state.NetworkID = item.NetworkID
+	state.MetadataValue = item.MetadataValue
+	state.BlockRuntimeID = item.BlockRuntimeID
+	state.Count = item.Count
+	state.StackNetworkID = b.StackNetworkIDs[state.Slot]
+	state.HasNetworkID = item.HasNetworkID
+	state.Present = true
+	return state
+}
+
+func heldItemChanged(before, after heldItemState) bool {
+	return before != after
+}
+
 // isPlayerInventoryContainer reports whether a ContainerID refers to a slot in
 // the player's own inventory family. The server may push updates via any of
 // these IDs depending on what triggered the change (pickup, /give, drop into
@@ -104,11 +138,12 @@ func containerSlotOffset(containerID byte) uint32 {
 // items. Previously this was treated as a full sync and wiped the main
 // inventory; now we fall back to the container ID so only the relevant slots
 // are cleared.
-func applyInventoryContent(b *bot.Bot, p *packet.InventoryContent) {
+func applyInventoryContent(b *bot.Bot, p *packet.InventoryContent) bool {
 	containerID := p.Container.ContainerID
 
 	b.Mu.Lock()
 	defer b.Mu.Unlock()
+	before := heldItemStateLocked(b)
 
 	var coveredSlots map[uint32]struct{}
 	var offset uint32
@@ -178,11 +213,12 @@ func applyInventoryContent(b *bot.Bot, p *packet.InventoryContent) {
 		slog.Uint64("offset", uint64(offset)),
 		slog.Int("total_tracked", len(b.InventoryMap)),
 	)
+	return heldItemChanged(before, heldItemStateLocked(b))
 }
 
 // applyInventorySlot applies a single-slot InventorySlot update with the
 // correct global slot offset for the container.
-func applyInventorySlot(b *bot.Bot, p *packet.InventorySlot) {
+func applyInventorySlot(b *bot.Bot, p *packet.InventorySlot) bool {
 	containerID := byte(0)
 	if c, ok := p.Container.Value(); ok {
 		containerID = c.ContainerID
@@ -192,11 +228,14 @@ func applyInventorySlot(b *bot.Bot, p *packet.InventorySlot) {
 
 	b.Mu.Lock()
 	defer b.Mu.Unlock()
+	before := heldItemStateLocked(b)
 
 	if p.NewItem.Stack.Count > 0 && p.NewItem.Stack.NetworkID != 0 {
 		b.InventoryMap[globalSlot] = p.NewItem.Stack
 		if p.NewItem.StackNetworkID != 0 {
 			b.StackNetworkIDs[globalSlot] = p.NewItem.StackNetworkID
+		} else {
+			delete(b.StackNetworkIDs, globalSlot)
 		}
 	} else {
 		delete(b.InventoryMap, globalSlot)
@@ -212,6 +251,7 @@ func applyInventorySlot(b *bot.Bot, p *packet.InventorySlot) {
 		slog.Int("network_id", int(p.NewItem.Stack.NetworkID)),
 		slog.Int("total_tracked", len(b.InventoryMap)),
 	)
+	return heldItemChanged(before, heldItemStateLocked(b))
 }
 
 // coveredSlotSet returns the set of global slot indices that a container
@@ -273,7 +313,7 @@ func transactionSlotToGlobal(action protocol.InventoryAction) (uint32, bool) {
 // push inventory changes that don't fit into InventorySlot/InventoryContent,
 // most importantly item pickups from the ground. Each container action tells
 // us the destination slot and the new stack after the transaction.
-func applyInventoryTransaction(b *bot.Bot, p *packet.InventoryTransaction) {
+func applyInventoryTransaction(b *bot.Bot, p *packet.InventoryTransaction) bool {
 	// We only care about NormalTransactionData (or nil, which defaults to
 	// normal). Other transaction types (UseItem, ReleaseItem, etc.) describe
 	// player interactions and don't directly update persistent inventory slots.
@@ -282,11 +322,12 @@ func applyInventoryTransaction(b *bot.Bot, p *packet.InventoryTransaction) {
 		b.Logger.Debug("ignoring non-normal inventory transaction",
 			slog.String("type", fmt.Sprintf("%T", p.TransactionData)),
 		)
-		return
+		return false
 	}
 
 	b.Mu.Lock()
 	defer b.Mu.Unlock()
+	before := heldItemStateLocked(b)
 
 	updated := 0
 	updatedSlots := make([]uint32, 0, len(p.Actions))
@@ -316,6 +357,8 @@ func applyInventoryTransaction(b *bot.Bot, p *packet.InventoryTransaction) {
 			b.InventoryMap[globalSlot] = newItem
 			if action.NewItem.StackNetworkID != 0 {
 				b.StackNetworkIDs[globalSlot] = action.NewItem.StackNetworkID
+			} else {
+				delete(b.StackNetworkIDs, globalSlot)
 			}
 		} else {
 			delete(b.InventoryMap, globalSlot)
@@ -338,14 +381,9 @@ func applyInventoryTransaction(b *bot.Bot, p *packet.InventoryTransaction) {
 			slog.Int("total_tracked", len(b.InventoryMap)),
 		)
 	}
+	return heldItemChanged(before, heldItemStateLocked(b))
 }
 
-// applyItemStackResponse processes an ItemStackResponse packet, which the
-// server sends after the client's ItemStackRequest (crafting, moving items,
-// dropping, etc.) is approved or rejected. When approved, the response
-// contains authoritative slot updates that must be applied to keep
-// InventoryMap in sync — otherwise the bot's view of its inventory drifts
-// from the server's after every transaction.
 // stackResponseSlotOffset maps ItemStackResponse container slots to the bot's
 // global inventory slots. Unlike InventoryContent, ContainerInventory already
 // uses the combined 0..35 slot numbering in StackRequest responses.
@@ -356,14 +394,17 @@ func stackResponseSlotOffset(containerID byte) uint32 {
 	return containerSlotOffset(containerID)
 }
 
-// applyItemStackResponse processes an ItemStackResponse packet, which the server sends after the client's ItemStackRequest (crafting, moving items, dropping, etc.) is approved or rejected. When approved, the response contains authoritative slot updates that must be applied to keep InventoryMap in sync — otherwise the bot's view of its inventory drifts from the server's after every transaction.
-func applyItemStackResponse(b *bot.Bot, p *packet.ItemStackResponse) {
+// applyItemStackResponse applies authoritative slot updates from the server's
+// response to an ItemStackRequest.
+func applyItemStackResponse(b *bot.Bot, p *packet.ItemStackResponse) bool {
 	b.Mu.Lock()
 	defer b.Mu.Unlock()
+	before := heldItemStateLocked(b)
 
 	for _, resp := range p.Responses {
 		processItemStackResponse(b, resp)
 	}
+	return heldItemChanged(before, heldItemStateLocked(b))
 }
 
 // processItemStackResponse applies the updates for a single response and
@@ -398,7 +439,8 @@ func processItemStackResponse(b *bot.Bot, resp protocol.ItemStackResponse) {
 				StackNetworkID: slotInfo.StackNetworkID,
 			})
 			if isPlayerInventoryContainer(containerID) {
-				applySlotUpdate(b, slotInfo, offset+uint32(slotInfo.Slot), craftOutputNetID)
+				globalSlot := offset + uint32(slotInfo.Slot)
+				applySlotUpdate(b, slotInfo, globalSlot, craftOutputNetID)
 			}
 		}
 	}

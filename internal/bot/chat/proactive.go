@@ -11,6 +11,7 @@ import (
 	"bedrock-ai/internal/ai"
 	"bedrock-ai/internal/bot"
 	"bedrock-ai/internal/bot/action"
+	"bedrock-ai/internal/bot/entity"
 	"bedrock-ai/internal/bot/rand"
 )
 
@@ -123,8 +124,8 @@ func buildProactivePrompt(b *bot.Bot, targetPlayer string) (string, string) {
 
 	b.Mu.Lock()
 	botName := b.Name
-	nearbyActorSummary := getNearbyActorSummary(b)
 	b.Mu.Unlock()
+	visibleMobs := VisibleMobsSummary(b, 32, 8)
 
 	botStatusText := fmt.Sprintf("HP: %d/20, Hunger: %d/20", hp, hunger)
 	systemPrompt := b.AiClient.BuildSystemPrompt(
@@ -143,7 +144,7 @@ func buildProactivePrompt(b *bot.Bot, targetPlayer string) (string, string) {
 	}
 
 	proactivePrompt := fmt.Sprintf(
-		`[PROACTIVE TICK] Waktu: %s. Pemain terdekat: %s. Aktor/mob terdekat: %s.
+		`[PROACTIVE TICK] Waktu: %s. Pemain terdekat: %s. Visible mobs (line-of-sight, non-item): %s. Aktor/mob lain di dekatmu (tanpa jaminan terlihat): %s.
 Kamu lagi nggak diajak ngobrol oleh siapapun. Apakah kamu mau mulai ngobrol atau ngelakuin sesuatu sendiri?
 
 Pilihan:
@@ -154,7 +155,8 @@ Pilihan:
 JANGAN paksa diri untuk ngomong kalau gak ada yang menarik. Kadang diam lebih baik.`,
 		time.Now().Format("15:04"),
 		strings.Join(getNearbyPlayers(b), ", "),
-		nearbyActorSummary,
+		visibleMobs,
+		getNearbyActorSummary(b),
 	)
 
 	return systemPrompt, proactivePrompt
@@ -236,8 +238,13 @@ func getNearbyPlayers(b *bot.Bot) []string {
 }
 
 // getNearbyActorSummary returns a brief description of nearby non-player
-// actors (mobs, item drops) for the proactive context. Caller must hold b.Mu.
+// actors (mobs, item drops) for the proactive context. This is proximity-based,
+// not visibility-grounded; prompts must use VisibleMobsSummary for the
+// grounded list.
 func getNearbyActorSummary(b *bot.Bot) string {
+	b.Mu.Lock()
+	defer b.Mu.Unlock()
+
 	botPos := b.Pos
 	var mobs []string
 	var items []string
@@ -254,11 +261,8 @@ func getNearbyActorSummary(b *bot.Bot) string {
 			continue
 		}
 		count++
-		name := act.Name
-		if strings.Contains(name, "minecraft:") {
-			name = strings.TrimPrefix(name, "minecraft:")
-		}
-		if act.Type == "minecraft:item" {
+		name := entity.NormalizeName(act.Name)
+		if entity.IsItemActor(act) {
 			items = append(items, name)
 		} else {
 			mobs = append(mobs, name)

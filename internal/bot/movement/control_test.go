@@ -9,22 +9,39 @@ func TestWalkingHeadTargetStaysBounded(t *testing.T) {
 	const targetYaw float32 = 359
 	const targetPitch float32 = 0
 
-	var scanned bool
+	var left, right, down bool
+	var lastYawOffset, lastPitchOffset float32
+	var smooth bool
 	for tick := uint64(0); tick < 2000; tick++ {
 		headYaw, pitch := walkingHeadTarget(tick, targetYaw, targetPitch, true)
 		yawOffset := angleDifference(headYaw, targetYaw)
+		pitchOffset := pitch - targetPitch
 		if float32(math.Abs(float64(yawOffset))) > walkingGazeMaxYawOffset {
 			t.Fatalf("tick %d yaw offset = %.3f, max %.3f", tick, yawOffset, walkingGazeMaxYawOffset)
 		}
-		if float32(math.Abs(float64(pitch-targetPitch))) > walkingGazeMaxPitchOffset {
-			t.Fatalf("tick %d pitch offset = %.3f, max %.3f", tick, pitch-targetPitch, walkingGazeMaxPitchOffset)
+		if float32(math.Abs(float64(pitchOffset))) > walkingGazeMaxPitchOffset {
+			t.Fatalf("tick %d pitch offset = %.3f, max %.3f", tick, pitchOffset, walkingGazeMaxPitchOffset)
 		}
-		if math.Abs(float64(yawOffset)) > 0.1 || math.Abs(float64(pitch-targetPitch)) > 0.1 {
-			scanned = true
+		if yawOffset < -walkingGazeYawAmplitude/2 {
+			left = true
 		}
+		if yawOffset > walkingGazeYawAmplitude/2 {
+			right = true
+		}
+		if pitchOffset > walkingGazeDownwardBias {
+			down = true
+		}
+		if tick > 0 && math.Abs(float64(yawOffset-lastYawOffset)) < 2 && math.Abs(float64(pitchOffset-lastPitchOffset)) < 2 {
+			smooth = true
+		}
+		lastYawOffset = yawOffset
+		lastPitchOffset = pitchOffset
 	}
-	if !scanned {
-		t.Fatal("walking gaze never moved from the route target")
+	if !left || !right || !down {
+		t.Fatalf("walking gaze phases missing: left=%t right=%t down=%t", left, right, down)
+	}
+	if !smooth {
+		t.Fatal("walking gaze phase moved abruptly")
 	}
 }
 

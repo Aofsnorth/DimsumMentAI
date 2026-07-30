@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"bedrock-ai/internal/bot/movement/animation"
 	"bedrock-ai/internal/event"
 
 	"github.com/go-gl/mathgl/mgl32"
@@ -186,10 +187,7 @@ func (tc *TreeChopper) swingUntilBreak(pos protocol.BlockPos, targetCenter mgl32
 	bot := tc.rg.bot
 	elapsed := time.Duration(0)
 	for elapsed < breakTime {
-		_ = bot.WritePacket(&packet.Animate{
-			ActionType:      packet.AnimateActionSwingArm,
-			EntityRuntimeID: bot.GetEntityRuntimeID(),
-		})
+		_ = bot.WritePacket(animation.MineSwing(bot.GetEntityRuntimeID()))
 		bot.LookAt(targetCenter)
 		time.Sleep(100 * time.Millisecond)
 		elapsed += 100 * time.Millisecond
@@ -234,10 +232,7 @@ func (tc *TreeChopper) clearObstructions(ctx context.Context, targetPos protocol
 
 	bot.LookAt(mgl32.Vec3{float32(checkPos.X()) + 0.5, float32(checkPos.Y()) + 0.5, float32(checkPos.Z()) + 0.5})
 
-	_ = bot.WritePacket(&packet.Animate{
-		ActionType:      packet.AnimateActionSwingArm,
-		EntityRuntimeID: bot.GetEntityRuntimeID(),
-	})
+	_ = bot.WritePacket(animation.MineSwing(bot.GetEntityRuntimeID()))
 	_ = bot.WritePacket(&packet.PlayerAction{
 		EntityRuntimeID: bot.GetEntityRuntimeID(),
 		ActionType:      protocol.PlayerActionStartBreak,
