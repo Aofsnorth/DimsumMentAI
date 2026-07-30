@@ -1,6 +1,11 @@
 package bot
 
-import "time"
+import (
+	"time"
+
+	"github.com/go-gl/mathgl/mgl32"
+	"github.com/sandertv/gophertunnel/minecraft/protocol"
+)
 
 // Timing constants for bot actions
 const (
@@ -15,6 +20,10 @@ const (
 
 	// AngleStabilizationDelay is the delay after setting look angles before action
 	AngleStabilizationDelay = 200 * time.Millisecond
+
+	// BlockPlacementTimeout bounds how long placement waits for an authoritative
+	// UpdateBlock packet from the server.
+	BlockPlacementTimeout = 3 * time.Second
 
 	// DefaultDropPitch is the upward pitch angle for dropping items (degrees)
 	// Negative pitch = looking up, causes item to arc forward
@@ -83,6 +92,29 @@ const (
 	// CreatedOutputSlot is the crafting result slot
 	CreatedOutputSlot = 50
 )
+
+// BlockCollidesWithBot returns true if the block at blockPos intersects the bot's AABB.
+func BlockCollidesWithBot(blockPos protocol.BlockPos, botPos mgl32.Vec3) bool {
+	botMinX := botPos.X() - 0.3
+	botMaxX := botPos.X() + 0.3
+	botMinY := botPos.Y()
+	botMaxY := botPos.Y() + 1.8
+	botMinZ := botPos.Z() - 0.3
+	botMaxZ := botPos.Z() + 0.3
+
+	bMinX := float32(blockPos.X())
+	bMaxX := float32(blockPos.X() + 1)
+	bMinY := float32(blockPos.Y())
+	bMaxY := float32(blockPos.Y() + 1)
+	bMinZ := float32(blockPos.Z())
+	bMaxZ := float32(blockPos.Z() + 1)
+
+	overlapX := botMinX < bMaxX && botMaxX > bMinX
+	overlapY := botMinY < bMaxY && botMaxY > bMinY
+	overlapZ := botMinZ < bMaxZ && botMaxZ > bMinZ
+
+	return overlapX && overlapY && overlapZ
+}
 
 // Display and capacity constants
 const (

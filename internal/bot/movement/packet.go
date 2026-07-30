@@ -26,11 +26,21 @@ func (tc *TickContext) writePlayerAuthInputPacket() bool {
 	tc.prepareMoveVector()
 	emoteJump, emoteSneak := tc.applyEmote()
 	inputData := tc.buildInputData(emoteJump, emoteSneak)
-	itemStackRequest := tc.takeItemStackRequest(inputData)
-	return tc.sendPlayerAuthInput(inputData, itemStackRequest)
+	itemInteractionData := tc.takeItemInteractionData(&inputData)
+	itemStackRequest := tc.takeItemStackRequest(&inputData)
+	return tc.sendPlayerAuthInput(inputData, itemInteractionData, itemStackRequest)
 }
 
-func (tc *TickContext) takeItemStackRequest(inputData protocol.Bitset) *protocol.ItemStackRequest {
+func (tc *TickContext) takeItemInteractionData(inputData *protocol.Bitset) *protocol.UseItemTransactionData {
+	data, ok := tc.B.TakeItemInteractionData()
+	if !ok {
+		return nil
+	}
+	inputData.Set(packet.InputFlagPerformItemInteraction)
+	return &data
+}
+
+func (tc *TickContext) takeItemStackRequest(inputData *protocol.Bitset) *protocol.ItemStackRequest {
 	request, ok := tc.B.TakeItemStackRequest()
 	if !ok {
 		return nil
@@ -232,8 +242,8 @@ func (tc *TickContext) applyMovementInputFlags(inputData protocol.Bitset) {
 	}
 }
 
-func (tc *TickContext) sendPlayerAuthInput(inputData protocol.Bitset, itemStackRequest *protocol.ItemStackRequest) bool {
-	pk := tc.buildPlayerAuthInputPacket(inputData, itemStackRequest)
+func (tc *TickContext) sendPlayerAuthInput(inputData protocol.Bitset, itemInteractionData *protocol.UseItemTransactionData, itemStackRequest *protocol.ItemStackRequest) bool {
+	pk := tc.buildPlayerAuthInputPacket(inputData, itemInteractionData, itemStackRequest)
 	tc.logPlayerAuthInputCond()
 	if err := tc.B.Conn.WritePacket(pk); err != nil {
 		tc.B.Logger.Warn("SendInputLoop: connection closed or write failed", "error", err.Error())
@@ -252,7 +262,7 @@ func (tc *TickContext) sendPlayerAuthInput(inputData protocol.Bitset, itemStackR
 	return true
 }
 
-func (tc *TickContext) buildPlayerAuthInputPacket(inputData protocol.Bitset, itemStackRequest *protocol.ItemStackRequest) *packet.PlayerAuthInput {
+func (tc *TickContext) buildPlayerAuthInputPacket(inputData protocol.Bitset, itemInteractionData *protocol.UseItemTransactionData, itemStackRequest *protocol.ItemStackRequest) *packet.PlayerAuthInput {
 	pk := &packet.PlayerAuthInput{
 		Position: tc.CurrPos.Add(mgl32.Vec3{0, 1.62, 0}),
 		Pitch:    tc.Pitch,
@@ -277,6 +287,9 @@ func (tc *TickContext) buildPlayerAuthInputPacket(inputData protocol.Bitset, ite
 		Delta:              tc.MoveDelta,
 		AnalogueMoveVector: tc.MoveVec,
 		RawMoveVector:      tc.MoveVec,
+	}
+	if itemInteractionData != nil {
+		pk.ItemInteractionData = *itemInteractionData
 	}
 	if itemStackRequest != nil {
 		pk.ItemStackRequest = *itemStackRequest

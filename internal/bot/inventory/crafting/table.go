@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"bedrock-ai/internal/bot/entity"
+	"bedrock-ai/internal/bot/placement"
 	"bedrock-ai/internal/event"
 	"bedrock-ai/internal/safecast"
 
@@ -42,6 +43,7 @@ type Bot interface {
 	FindItemSlotByName(name string) (uint32, bool)
 	CraftItem(recipeNetID uint32, count int) error
 	GetRecipes() map[string]uint32
+	PlaceBlock(ctx context.Context, request placement.Request) error
 }
 
 // Manager runs the EnsureCraftingTable / OpenCraftingTable / CloseWindow
@@ -219,6 +221,28 @@ func (m *Manager) findCraftingTableInInventory() (uint32, bool) {
 //   - place is the tile the table will occupy
 //   - support is the solid tile under it (block we click)
 //   - face is the face of `support` we click (always 1 = top)
+func blockCollidesWithBot(blockPos protocol.BlockPos, botPos mgl32.Vec3) bool {
+	botMinX := botPos.X() - 0.3
+	botMaxX := botPos.X() + 0.3
+	botMinY := botPos.Y()
+	botMaxY := botPos.Y() + 1.8
+	botMinZ := botPos.Z() - 0.3
+	botMaxZ := botPos.Z() + 0.3
+
+	bMinX := float32(blockPos.X())
+	bMaxX := float32(blockPos.X() + 1)
+	bMinY := float32(blockPos.Y())
+	bMaxY := float32(blockPos.Y() + 1)
+	bMinZ := float32(blockPos.Z())
+	bMaxZ := float32(blockPos.Z() + 1)
+
+	overlapX := botMinX < bMaxX && botMaxX > bMinX
+	overlapY := botMinY < bMaxY && botMaxY > bMinY
+	overlapZ := botMinZ < bMaxZ && botMaxZ > bMinZ
+
+	return overlapX && overlapY && overlapZ
+}
+
 func (m *Manager) findPlacementSpot() (protocol.BlockPos, protocol.BlockPos, int32, bool) {
 	world := m.bot.GetLocalWorldModel()
 	pos := m.bot.GetCoords()
@@ -226,11 +250,17 @@ func (m *Manager) findPlacementSpot() (protocol.BlockPos, protocol.BlockPos, int
 	by := int32(math.Floor(float64(pos.Y())))
 	bz := int32(math.Floor(float64(pos.Z())))
 
-	offsets := []protocol.BlockPos{{1, 0, 0}, {-1, 0, 0}, {0, 0, 1}, {0, 0, -1}}
+	offsets := []protocol.BlockPos{
+		{1, 0, 0}, {-1, 0, 0}, {0, 0, 1}, {0, 0, -1},
+		{2, 0, 0}, {-2, 0, 0}, {0, 0, 2}, {0, 0, -2},
+	}
 	for _, off := range offsets {
 		place := protocol.BlockPos{bx + off.X(), by, bz + off.Z()}
 		support := protocol.BlockPos{place.X(), place.Y() - 1, place.Z()}
 
+		if blockCollidesWithBot(place, pos) {
+			continue
+		}
 		// Tile we want to place INTO must be empty.
 		if world.IsSolid(place.X(), place.Y(), place.Z()) {
 			continue
@@ -249,39 +279,13 @@ func (m *Manager) findPlacementSpot() (protocol.BlockPos, protocol.BlockPos, int
 }
 
 func (m *Manager) placeCraftingTable(ctx context.Context, slot uint32, place, support protocol.BlockPos, face int32) error {
-	if err := m.bot.EquipItem(slot); err != nil {
-		return fmt.Errorf("equip: %w", err)
-	}
-	if !sleepCtx(ctx, 150*time.Millisecond) {
-		return errors.New("canceled")
-	}
-	m.bot.LookAt(mgl32.Vec3{float32(support.X()) + 0.5, float32(support.Y()) + 1.0, float32(support.Z()) + 0.5})
-	if !sleepCtx(ctx, 100*time.Millisecond) {
-		return errors.New("canceled")
-	}
-
-	inv := m.bot.GetInventorySlots()
-	tx := &packet.InventoryTransaction{
-		TransactionData: &protocol.UseItemTransactionData{
-			ActionType:      protocol.UseItemActionClickBlock,
-			BlockPosition:   support,
-			BlockFace:       face,
-			HotBarSlot:      safecast.To[int32](m.bot.GetHeldItemSlot()),
-			HeldItem:        protocol.ItemInstance{Stack: inv[slot]},
-			Position:        m.bot.GetCoords(),
-			ClickedPosition: mgl32.Vec3{0.5, 1.0, 0.5},
-		},
-	}
-	if err := m.bot.WritePacket(tx); err != nil {
-		return fmt.Errorf("place packet: %w", err)
-	}
-	// Optimistic world-model update so subsequent EnsureCraftingTable scans
-	// see this block even before the server's chunk diff lands.
-	m.bot.GetLocalWorldModel().SetSolid(place.X(), place.Y(), place.Z(), true)
-	if !sleepCtx(ctx, 250*time.Millisecond) {
-		return errors.New("canceled")
-	}
-	return nil
+	return m.bot.PlaceBlock(ctx, placement.Request{
+		InventorySlot: slot,
+		Destination:   place,
+		Support:       support,
+		Face:          face,
+		ClickedOffset: mgl32.Vec3{0.5, 1, 0.5},
+	})
 }
 
 // pickStandableAdjacent picks the first 4-cardinal neighbor of pos where the

@@ -1,6 +1,7 @@
 package inventory
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -10,6 +11,7 @@ import (
 	"bedrock-ai/internal/bot/inventory/chest"
 	"bedrock-ai/internal/bot/inventory/crafting"
 	"bedrock-ai/internal/bot/inventory/furnace"
+	"bedrock-ai/internal/bot/placement"
 	"bedrock-ai/internal/event"
 	"bedrock-ai/internal/safecast"
 
@@ -46,6 +48,7 @@ type Bot interface {
 	FindItemSlotByName(name string) (uint32, bool)
 	CraftItem(recipeNetID uint32, count int) error
 	GetRecipes() map[string]uint32
+	PlaceBlock(ctx context.Context, request placement.Request) error
 }
 
 type InventoryManager struct {

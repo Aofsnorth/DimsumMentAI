@@ -1,6 +1,7 @@
 package bot
 
 import (
+	"fmt"
 	"math"
 	"time"
 
@@ -163,15 +164,73 @@ func (b *Bot) WritePacket(pk packet.Packet) error {
 
 func (b *Bot) EquipItem(slot uint32) error {
 	b.Mu.Lock()
-	b.HeldSlot = slot
-	item := b.InventoryMap[slot]
-	b.Mu.Unlock()
+	defer b.Mu.Unlock()
+
+	item, ok := b.InventoryMap[slot]
+	if !ok || item.Count == 0 {
+		return fmt.Errorf("slot %d empty", slot)
+	}
+
+	targetHotbarSlot := uint32(0)
+	if b.HeldSlot < 9 {
+		targetHotbarSlot = b.HeldSlot
+	}
+
+	itemStackNetworkID := b.StackNetworkIDs[slot]
+	if slot >= 9 {
+		hotbarItem := b.InventoryMap[targetHotbarSlot]
+		hotbarStackNetworkID := b.StackNetworkIDs[targetHotbarSlot]
+		tx := &packet.InventoryTransaction{
+			Actions: []protocol.InventoryAction{
+				{
+					SourceType:    protocol.InventoryActionSourceContainer,
+					WindowID:      protocol.WindowIDInventory,
+					InventorySlot: slot,
+					OldItem:       protocol.ItemInstance{StackNetworkID: itemStackNetworkID, Stack: item},
+					NewItem:       protocol.ItemInstance{StackNetworkID: hotbarStackNetworkID, Stack: hotbarItem},
+				},
+				{
+					SourceType:    protocol.InventoryActionSourceContainer,
+					WindowID:      protocol.WindowIDInventory,
+					InventorySlot: targetHotbarSlot,
+					OldItem:       protocol.ItemInstance{StackNetworkID: hotbarStackNetworkID, Stack: hotbarItem},
+					NewItem:       protocol.ItemInstance{StackNetworkID: itemStackNetworkID, Stack: item},
+				},
+			},
+			TransactionData: &protocol.NormalTransactionData{},
+		}
+		if err := b.Conn.WritePacket(tx); err != nil {
+			return fmt.Errorf("swap item to hotbar failed: %w", err)
+		}
+
+		b.InventoryMap[targetHotbarSlot] = item
+		if itemStackNetworkID != 0 {
+			b.StackNetworkIDs[targetHotbarSlot] = itemStackNetworkID
+		} else {
+			delete(b.StackNetworkIDs, targetHotbarSlot)
+		}
+		if hotbarItem.Count > 0 {
+			b.InventoryMap[slot] = hotbarItem
+			if hotbarStackNetworkID != 0 {
+				b.StackNetworkIDs[slot] = hotbarStackNetworkID
+			} else {
+				delete(b.StackNetworkIDs, slot)
+			}
+		} else {
+			delete(b.InventoryMap, slot)
+			delete(b.StackNetworkIDs, slot)
+		}
+	} else {
+		targetHotbarSlot = slot
+	}
+
+	b.HeldSlot = targetHotbarSlot
 
 	pk := &packet.MobEquipment{
 		EntityRuntimeID: b.Conn.GameData().EntityRuntimeID,
-		NewItem:         protocol.ItemInstance{Stack: item},
-		InventorySlot:   byte(slot),
-		HotBarSlot:      byte(slot),
+		NewItem:         protocol.ItemInstance{StackNetworkID: itemStackNetworkID, Stack: item},
+		InventorySlot:   byte(targetHotbarSlot),
+		HotBarSlot:      byte(targetHotbarSlot),
 		WindowID:        0,
 	}
 	return b.Conn.WritePacket(pk)

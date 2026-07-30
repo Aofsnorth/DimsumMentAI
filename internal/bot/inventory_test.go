@@ -39,6 +39,54 @@ func TestItemNameMatches(t *testing.T) {
 	}
 }
 
+func TestReconcileCraftIngredientCounts(t *testing.T) {
+	t.Parallel()
+
+	planks := protocol.ItemStack{ItemType: protocol.ItemType{NetworkID: 5}, Count: 6}
+	picks := []ingredientPick{
+		{slot: 2, count: 1, ingredientIndex: 0},
+		{slot: 2, count: 1, ingredientIndex: 1},
+	}
+	sources := snapshotIngredientSources(map[uint32]protocol.ItemStack{2: planks}, picks)
+
+	t.Run("repairs stale source count", func(t *testing.T) {
+		inventory := map[uint32]protocol.ItemStack{2: planks}
+		reconcileCraftIngredientCounts(inventory, map[uint32]int32{2: 42}, sources)
+		if got := inventory[2].Count; got != 4 {
+			t.Fatalf("plank count = %d, want 4", got)
+		}
+	})
+
+	t.Run("preserves authoritative lower count", func(t *testing.T) {
+		inventory := map[uint32]protocol.ItemStack{2: {ItemType: planks.ItemType, Count: 3}}
+		reconcileCraftIngredientCounts(inventory, map[uint32]int32{2: 42}, sources)
+		if got := inventory[2].Count; got != 3 {
+			t.Fatalf("plank count = %d, want authoritative 3", got)
+		}
+	})
+
+	t.Run("does not alter replaced slot", func(t *testing.T) {
+		inventory := map[uint32]protocol.ItemStack{2: {ItemType: protocol.ItemType{NetworkID: 17}, Count: 6}}
+		reconcileCraftIngredientCounts(inventory, map[uint32]int32{2: 42}, sources)
+		if got := inventory[2].Count; got != 6 {
+			t.Fatalf("replacement count = %d, want 6", got)
+		}
+	})
+
+	t.Run("removes exhausted source and stack ID", func(t *testing.T) {
+		inventory := map[uint32]protocol.ItemStack{2: {ItemType: planks.ItemType, Count: 2}}
+		stackNetworkIDs := map[uint32]int32{2: 42}
+		exhaustedSources := snapshotIngredientSources(inventory, picks)
+		reconcileCraftIngredientCounts(inventory, stackNetworkIDs, exhaustedSources)
+		if _, exists := inventory[2]; exists {
+			t.Fatal("expected exhausted ingredient slot to be removed")
+		}
+		if _, exists := stackNetworkIDs[2]; exists {
+			t.Fatal("expected exhausted ingredient stack ID to be removed")
+		}
+	})
+}
+
 func TestPlanIngredientConsumptionNameMatching(t *testing.T) {
 	t.Parallel()
 	// Simulate the Bedrock situation: recipe ingredient is "oak_wood" but the

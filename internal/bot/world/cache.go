@@ -23,6 +23,7 @@ type WorldCache struct {
 	r                cube.Range        // vertical range of the world (usually [-64, 319])
 	logger           *slog.Logger
 	hashToRID        map[uint32]uint32
+	ridToHash        map[uint32]uint32
 	useHashes        bool
 	paletteDumpCount int
 }
@@ -77,6 +78,27 @@ func (wc *WorldCache) TranslateRuntimeID(rid uint32) uint32 {
 		return realRID
 	}
 	return rid
+}
+
+// NetworkRuntimeID converts a local runtime ID back to the block network ID
+// format selected by the server in StartGame.
+func (wc *WorldCache) NetworkRuntimeID(rid uint32) (uint32, bool) {
+	wc.mu.RLock()
+	defer wc.mu.RUnlock()
+	if !wc.useHashes {
+		return rid, true
+	}
+	hash, ok := wc.ridToHash[rid]
+	return hash, ok
+}
+
+// GetBlockNetworkID returns the wire-format block network ID at a position.
+func (wc *WorldCache) GetBlockNetworkID(x, y, z int32) (uint32, bool) {
+	rid, ok := wc.GetBlockRID(x, y, z)
+	if !ok {
+		return 0, false
+	}
+	return wc.NetworkRuntimeID(rid)
 }
 
 // HashLookupHit reports whether rid appears in the precomputed hash map.

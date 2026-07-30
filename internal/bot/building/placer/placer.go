@@ -106,9 +106,25 @@ func (bp *BlockPlacer) PlaceBlockAt(ctx context.Context, x, y, z int, blockName 
 	}
 
 	itemStack := inv[slot]
+	var newItem protocol.ItemInstance
+	if itemStack.Count > 1 {
+		newStack := itemStack
+		newStack.Count--
+		newItem = protocol.ItemInstance{Stack: newStack}
+	}
 	tx := &packet.InventoryTransaction{
+		Actions: []protocol.InventoryAction{
+			{
+				SourceType:    protocol.InventoryActionSourceContainer,
+				WindowID:      protocol.WindowIDInventory,
+				InventorySlot: slot,
+				OldItem:       protocol.ItemInstance{Stack: itemStack},
+				NewItem:       newItem,
+			},
+		},
 		TransactionData: &protocol.UseItemTransactionData{
 			ActionType:      protocol.UseItemActionClickBlock,
+			TriggerType:     protocol.TriggerTypePlayerInput,
 			BlockPosition:   placeTarget,
 			BlockFace:       placeFace,
 			HotBarSlot:      safecast.To[int32](bp.bot.GetHeldItemSlot()),

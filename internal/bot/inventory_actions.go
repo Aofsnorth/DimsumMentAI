@@ -219,6 +219,7 @@ func (b *Bot) CraftItem(recipeNetID uint32, count int) error {
 		return err
 	}
 	itemName := b.ItemNames[recipe.Output.NetworkID]
+	ingredientSources := snapshotIngredientSources(b.InventoryMap, picks)
 	itemNetworkIDs := make(map[uint32]int32, len(picks))
 	for _, pick := range picks {
 		itemNetworkIDs[pick.slot] = b.InventoryMap[pick.slot].NetworkID
@@ -347,7 +348,16 @@ func (b *Bot) CraftItem(recipeNetID uint32, count int) error {
 		return fmt.Errorf("craft %s: %w", itemName, err)
 	}
 
-	b.Logger.Info("CraftItem accepted", "recipeNetID", recipeNetID, "item", itemName, "count", count)
+	b.Mu.Lock()
+	reconcileCraftIngredientCounts(b.InventoryMap, b.StackNetworkIDs, ingredientSources)
+	b.Mu.Unlock()
+
+	b.Logger.Info("CraftItem accepted",
+		"recipeNetID", recipeNetID,
+		"item", itemName,
+		"count", count,
+		"inventory", b.GetInventorySummary(),
+	)
 	return nil
 }
 

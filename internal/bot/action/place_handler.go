@@ -1,128 +1,146 @@
 package action
 
 import (
+	"context"
 	"fmt"
 	"math"
+	"sort"
 	"strings"
-	"time"
 
 	"bedrock-ai/internal/bot"
-	"bedrock-ai/internal/safecast"
+	"bedrock-ai/internal/bot/placement"
 
 	"github.com/go-gl/mathgl/mgl32"
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
-	"github.com/sandertv/gophertunnel/minecraft/protocol/packet"
 )
 
 // handlePlace places a block in front of the bot.
 // param format: "item_name" or "item_name,distance" (distance defaults to 1)
 func handlePlace(b *bot.Bot, param, user string) {
 	go func() {
-		if strings.TrimSpace(param) == "" {
+		itemName, distance, ok := parsePlaceParams(param)
+		if !ok {
 			return
 		}
-		parts := strings.Split(param, ",")
-		itemName := normalizeItemName(parts[0])
-		distance := 1
-		if len(parts) >= 2 {
-			_, _ = fmt.Sscanf(parts[1], "%d", &distance)
-			if distance < 1 {
-				distance = 1
-			}
-			if distance > 5 {
-				distance = 5
-			}
-		}
-		if itemName == "" {
-			return
-		}
-
-		// Find item in inventory
-		b.Mu.Lock()
-		inv := b.InventoryMap
-		names := b.ItemNames
-		var targetSlot uint32
-		var targetStack protocol.ItemStack
-		found := false
-		for slot, stack := range inv {
-			if stack.Count <= 0 {
-				continue
-			}
-			name := names[stack.NetworkID]
-			if strings.Contains(strings.ToLower(name), strings.ToLower(itemName)) {
-				targetSlot = slot
-				targetStack = stack
-				found = true
-				break
-			}
-		}
-		b.Mu.Unlock()
-
+		targetSlot, found := b.FindItemSlotByName(itemName)
 		if !found {
 			b.Logger.Warn("handlePlace: item not found", "item", itemName)
 			return
 		}
 
-		// Equip item
-		if err := b.EquipItem(targetSlot); err != nil {
-			b.Logger.Warn("handlePlace: equip failed", "error", err)
-			return
-		}
-		time.Sleep(bot.EquipItemDelay)
-
-		// Find valid placement target spot that does not collide with bot body AABB
-		world := b.GetLocalWorldModel()
-		botPos := b.GetCoords()
-		bx := int32(math.Floor(float64(botPos.X())))
-		by := int32(math.Floor(float64(botPos.Y())))
-		bz := int32(math.Floor(float64(botPos.Z())))
-
-		offsets := []protocol.BlockPos{{1, 0, 0}, {-1, 0, 0}, {0, 0, 1}, {0, 0, -1}}
-		var placePos, supportPos protocol.BlockPos
-		foundSpot := false
-
-		for _, off := range offsets {
-			p := protocol.BlockPos{bx + off.X(), by, bz + off.Z()}
-			s := protocol.BlockPos{p.X(), p.Y() - 1, p.Z()}
-			if !world.IsSolid(p.X(), p.Y(), p.Z()) && !world.IsSolid(p.X(), p.Y()+1, p.Z()) && world.IsSolid(s.X(), s.Y(), s.Z()) {
-				placePos = p
-				supportPos = s
-				foundSpot = true
-				break
-			}
-		}
-
-		if !foundSpot {
+		placePos, supportPos, found := findPlacementTarget(b, user, distance)
+		if !found {
 			b.Logger.Warn("handlePlace: no valid adjacent solid support spot found", "item", itemName)
 			return
 		}
-
-		// Look at support top face before placing
-		targetLook := mgl32.Vec3{
-			float32(supportPos.X()) + bot.BlockCenterOffset,
-			float32(supportPos.Y()) + 1.0,
-			float32(supportPos.Z()) + bot.BlockCenterOffset,
+		request := placement.Request{
+			InventorySlot: targetSlot,
+			Destination:   placePos,
+			Support:       supportPos,
+			Face:          bot.BlockFaceTop,
+			ClickedOffset: mgl32.Vec3{bot.BlockCenterOffset, 1, bot.BlockCenterOffset},
 		}
-		b.LookAt(targetLook)
-		time.Sleep(100 * time.Millisecond)
-
-		// Send placement transaction
-		if err := b.Conn.WritePacket(&packet.InventoryTransaction{
-			TransactionData: &protocol.UseItemTransactionData{
-				ActionType:      protocol.UseItemActionClickBlock,
-				BlockPosition:   supportPos,
-				BlockFace:       bot.BlockFaceTop,
-				HotBarSlot:      safecast.To[int32](b.GetHeldItemSlot()),
-				HeldItem:        protocol.ItemInstance{Stack: targetStack},
-				Position:        b.GetCoords(),
-				ClickedPosition: mgl32.Vec3{bot.BlockCenterOffset, 1.0, bot.BlockCenterOffset},
-			},
-		}); err != nil {
-			b.Logger.Warn("handlePlace: place transaction failed", "error", err)
+		if err := b.PlaceBlock(context.Background(), request); err != nil {
+			b.Logger.Warn("handlePlace: placement failed", "item", itemName, "pos", placePos, "error", err)
 			return
 		}
-
-		b.GetLocalWorldModel().SetSolid(placePos.X(), placePos.Y(), placePos.Z(), true)
 		b.Logger.Info("handlePlace: placed block", "item", itemName, "pos", placePos)
 	}()
+}
+
+func parsePlaceParams(param string) (string, int, bool) {
+	parts := strings.Split(param, ",")
+	itemName := normalizeItemName(parts[0])
+	if itemName == "" {
+		return "", 0, false
+	}
+	distance := 1
+	if len(parts) >= 2 {
+		_, _ = fmt.Sscanf(parts[1], "%d", &distance)
+	}
+	if distance < 1 {
+		distance = 1
+	}
+	if distance > 5 {
+		distance = 5
+	}
+	return itemName, distance, true
+}
+
+type placementCandidate struct {
+	offset    protocol.BlockPos
+	alignment float32
+	distance  float32
+}
+
+func findPlacementTarget(b *bot.Bot, user string, radius int) (protocol.BlockPos, protocol.BlockPos, bool) {
+	botPos := b.GetCoords()
+	forwardX, forwardZ := placementForwardVector(b, user, botPos)
+	candidates := placementCandidates(radius, forwardX, forwardZ)
+	world := b.GetLocalWorldModel()
+	baseX := int32(math.Floor(float64(botPos.X())))
+	baseY := int32(math.Floor(float64(botPos.Y())))
+	baseZ := int32(math.Floor(float64(botPos.Z())))
+
+	for _, candidate := range candidates {
+		offset := candidate.offset
+		destination := protocol.BlockPos{baseX + offset.X(), baseY, baseZ + offset.Z()}
+		support := protocol.BlockPos{destination.X(), destination.Y() - 1, destination.Z()}
+		if bot.BlockCollidesWithBot(destination, botPos) {
+			continue
+		}
+		if world.IsSolid(destination.X(), destination.Y(), destination.Z()) || world.IsSolid(destination.X(), destination.Y()+1, destination.Z()) {
+			continue
+		}
+		if world.IsSolid(support.X(), support.Y(), support.Z()) {
+			return destination, support, true
+		}
+	}
+	return protocol.BlockPos{}, protocol.BlockPos{}, false
+}
+
+func placementForwardVector(b *bot.Bot, user string, botPos mgl32.Vec3) (float32, float32) {
+	if user != "" {
+		if playerPos, ok := b.GetPlayerCoords(user); ok {
+			dx := playerPos.X() - botPos.X()
+			dz := playerPos.Z() - botPos.Z()
+			distance := float32(math.Hypot(float64(dx), float64(dz)))
+			if distance > bot.FloatEpsilon {
+				return dx / distance, dz / distance
+			}
+		}
+	}
+	b.Mu.Lock()
+	yaw := b.Yaw
+	b.Mu.Unlock()
+	radians := float64(yaw+bot.YawOffsetDegrees) * bot.DegreesToRadians
+	return float32(math.Cos(radians)), float32(math.Sin(radians))
+}
+
+func placementCandidates(radius int, forwardX, forwardZ float32) []placementCandidate {
+	candidates := make([]placementCandidate, 0, (radius*2+1)*(radius*2+1)-1)
+	for x := -radius; x <= radius; x++ {
+		for z := -radius; z <= radius; z++ {
+			if x == 0 && z == 0 {
+				continue
+			}
+			distance := float32(math.Hypot(float64(x), float64(z)))
+			if distance > float32(radius) {
+				continue
+			}
+			alignment := (float32(x)*forwardX + float32(z)*forwardZ) / distance
+			candidates = append(candidates, placementCandidate{
+				offset:    protocol.BlockPos{int32(x), 0, int32(z)},
+				alignment: alignment,
+				distance:  distance,
+			})
+		}
+	}
+	sort.SliceStable(candidates, func(i, j int) bool {
+		if math.Abs(float64(candidates[i].alignment-candidates[j].alignment)) > 0.01 {
+			return candidates[i].alignment > candidates[j].alignment
+		}
+		return candidates[i].distance < candidates[j].distance
+	})
+	return candidates
 }

@@ -196,6 +196,11 @@ type Bot struct {
 	// craftMu serializes CraftItem so request IDs, stack-ID snapshots, and the
 	// per-request response channel cannot race planner/evaluation actions.
 	craftMu sync.Mutex
+	placeMu sync.Mutex
+
+	blockUpdateMu         sync.Mutex
+	blockUpdateWaiters    map[protocol.BlockPos]map[uint64]chan uint32
+	nextBlockUpdateWaiter uint64
 
 	// Pending craft requests: maps ItemStackRequest.RequestID to a pending
 	// craft entry. Used by CraftItem to synchronously wait for the server's
@@ -203,8 +208,9 @@ type Bot struct {
 	// the item type NetworkID of the recipe's output, used to fill in the
 	// item type when the server creates a new slot (the response only carries
 	// the stack instance ID, not the item type).
-	pendingCrafts           map[int32]pendingCraft
-	pendingItemStackRequest *protocol.ItemStackRequest
+	pendingCrafts              map[int32]pendingCraft
+	pendingItemStackRequest    *protocol.ItemStackRequest
+	pendingItemInteractionData *protocol.UseItemTransactionData
 
 	// Emotes / Animations state
 	EmoteState string
@@ -297,6 +303,32 @@ func (b *Bot) TakeItemStackRequest() (protocol.ItemStackRequest, bool) {
 	return request, true
 }
 
+// QueueItemInteractionData schedules an item interaction for the next
+// PlayerAuthInput tick. Modern Bedrock sends these interactions inline with player
+// input instead of as standalone InventoryTransaction packets.
+func (b *Bot) QueueItemInteractionData(data protocol.UseItemTransactionData) error {
+	b.Mu.Lock()
+	defer b.Mu.Unlock()
+	if b.pendingItemInteractionData != nil {
+		return fmt.Errorf("item interaction data already queued")
+	}
+	b.pendingItemInteractionData = &data
+	return nil
+}
+
+// TakeItemInteractionData removes and returns the interaction queued for the next
+// PlayerAuthInput tick.
+func (b *Bot) TakeItemInteractionData() (protocol.UseItemTransactionData, bool) {
+	b.Mu.Lock()
+	defer b.Mu.Unlock()
+	if b.pendingItemInteractionData == nil {
+		return protocol.UseItemTransactionData{}, false
+	}
+	data := *b.pendingItemInteractionData
+	b.pendingItemInteractionData = nil
+	return data, true
+}
+
 // PendingCraftLookup returns the channel and output NetworkID for a pending
 // craft request. Returns ok=false if no pending craft exists for requestID.
 // Caller MUST hold b.Mu.
@@ -335,6 +367,7 @@ func newBot(opts ...Option) (*Bot, error) {
 		RecipeCandidates:    make(map[string][]uint32),
 		RecipesByNetID:      make(map[uint32]RecipeInfo),
 		pendingCrafts:       make(map[int32]pendingCraft),
+		blockUpdateWaiters:  make(map[protocol.BlockPos]map[uint64]chan uint32),
 		StackRequestID:      0,
 		Health:              20,
 		Hunger:              20,

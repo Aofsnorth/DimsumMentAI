@@ -1,6 +1,7 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"os"
 	"time"
@@ -19,13 +20,15 @@ const (
 )
 
 func main() {
-	if err := run(); err != nil {
+	message := flag.String("message", "Buat 4 stick", "chat message sent to Luna")
+	flag.Parse()
+	if err := run(*message); err != nil {
 		fmt.Fprintln(os.Stderr, "E2E failed:", err)
 		os.Exit(1)
 	}
 }
 
-func run() error {
+func run(message string) error {
 	id := uuid.New()
 	conn, err := (&minecraft.Dialer{
 		IdentityData: login.IdentityData{
@@ -60,11 +63,11 @@ func run() error {
 	if err := conn.WritePacket(&packet.Text{
 		TextType:   packet.TextTypeChat,
 		SourceName: probeName,
-		Message:    "Buat 4 stick",
+		Message:    message,
 	}); err != nil {
 		return fmt.Errorf("send craft chat: %w", err)
 	}
-	fmt.Println("craft chat sent")
+	fmt.Printf("chat sent: %q\n", message)
 
 	deadline := time.Now().Add(testTimeout)
 	if err := conn.SetReadDeadline(deadline); err != nil {

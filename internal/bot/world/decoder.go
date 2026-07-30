@@ -20,6 +20,7 @@ type palettedResult struct {
 
 func (wc *WorldCache) precomputeBlockHashes() {
 	wc.hashToRID = make(map[uint32]uint32)
+	wc.ridToHash = make(map[uint32]uint32)
 	if chunk.RuntimeIDToState == nil {
 		return
 	}
@@ -37,6 +38,7 @@ func (wc *WorldCache) precomputeBlockHashes() {
 		hash, sc := networkBlockHash(name, properties, scratch)
 		scratch = sc
 		wc.hashToRID[hash] = count
+		wc.ridToHash[count] = hash
 		if airFound && count == airRID {
 			airHash = hash
 		}

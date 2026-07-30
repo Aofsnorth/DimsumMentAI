@@ -16,6 +16,48 @@ type ingredientPick struct {
 	ingredientIndex int
 }
 
+type ingredientSourceSnapshot struct {
+	stack    protocol.ItemStack
+	consumed int
+}
+
+func snapshotIngredientSources(inventory map[uint32]protocol.ItemStack, picks []ingredientPick) map[uint32]ingredientSourceSnapshot {
+	sources := make(map[uint32]ingredientSourceSnapshot, len(picks))
+	for _, pick := range picks {
+		source, exists := sources[pick.slot]
+		if !exists {
+			source.stack = inventory[pick.slot]
+		}
+		source.consumed += pick.count
+		sources[pick.slot] = source
+	}
+	return sources
+}
+
+// reconcileCraftIngredientCounts repairs missing client-side predictions after
+// an accepted craft. ItemStackResponse remains authoritative: counts already at
+// or below the expected value are preserved.
+func reconcileCraftIngredientCounts(inventory map[uint32]protocol.ItemStack, stackNetworkIDs map[uint32]int32, sources map[uint32]ingredientSourceSnapshot) {
+	for slot, source := range sources {
+		expected := int(source.stack.Count) - source.consumed
+		if expected < 0 {
+			continue
+		}
+
+		current, exists := inventory[slot]
+		if !exists || current.NetworkID != source.stack.NetworkID || int(current.Count) <= expected {
+			continue
+		}
+		if expected == 0 {
+			delete(inventory, slot)
+			delete(stackNetworkIDs, slot)
+			continue
+		}
+		current.Count = uint16(expected)
+		inventory[slot] = current
+	}
+}
+
 // planIngredientConsumption resolves each recipe ingredient to inventory slots
 // containing matching items and computes per-slot consume counts. Returns an
 // error if any ingredient cannot be satisfied for `times` repetitions.

@@ -115,8 +115,10 @@ func handleClientCacheMissResponse(b *bot.Bot, p *packet.ClientCacheMissResponse
 
 func handleUpdateBlock(b *bot.Bot, p *packet.UpdateBlock) {
 	b.WorldCache.SetBlockRID(p.Position.X(), p.Position.Y(), p.Position.Z(), p.NewBlockRuntimeID)
-	isSolid := b.WorldCache.IsRIDSolid(p.NewBlockRuntimeID)
+	localRID := b.WorldCache.TranslateRuntimeID(p.NewBlockRuntimeID)
+	isSolid := b.WorldCache.IsRIDSolid(localRID)
 	b.WorldModel.SetSolid(p.Position.X(), p.Position.Y(), p.Position.Z(), isSolid)
+	b.NotifyBlockUpdate(p.Position, localRID)
 }
 
 func shouldDecodeLevelChunk(b *bot.Bot, p *packet.LevelChunk) bool {

@@ -18,7 +18,7 @@ func TestItemStackRequestEmbeddedInNextPlayerAuthInput(t *testing.T) {
 
 	inputData := protocol.NewBitset(packet.PlayerAuthInputBitsetSize)
 	tc := &TickContext{B: b}
-	queuedRequest := tc.takeItemStackRequest(inputData)
+	queuedRequest := tc.takeItemStackRequest(&inputData)
 	if queuedRequest == nil {
 		t.Fatal("takeItemStackRequest() returned nil")
 	}
@@ -26,7 +26,7 @@ func TestItemStackRequestEmbeddedInNextPlayerAuthInput(t *testing.T) {
 		t.Fatal("PerformItemStackRequest input flag is not set")
 	}
 
-	inputPacket := tc.buildPlayerAuthInputPacket(inputData, queuedRequest)
+	inputPacket := tc.buildPlayerAuthInputPacket(inputData, nil, queuedRequest)
 	if !inputPacket.InputData.Load(packet.InputFlagPerformItemStackRequest) {
 		t.Fatal("PlayerAuthInput is missing PerformItemStackRequest flag")
 	}
@@ -35,5 +35,34 @@ func TestItemStackRequestEmbeddedInNextPlayerAuthInput(t *testing.T) {
 	}
 	if _, ok := b.TakeItemStackRequest(); ok {
 		t.Fatal("item stack request remained queued after take")
+	}
+}
+
+func TestItemInteractionDataEmbeddedInNextPlayerAuthInput(t *testing.T) {
+	b := &bot.Bot{}
+	data := protocol.UseItemTransactionData{ActionType: protocol.UseItemActionClickBlock}
+	if err := b.QueueItemInteractionData(data); err != nil {
+		t.Fatalf("QueueItemInteractionData() error = %v", err)
+	}
+
+	inputData := protocol.NewBitset(packet.PlayerAuthInputBitsetSize)
+	tc := &TickContext{B: b}
+	queuedData := tc.takeItemInteractionData(&inputData)
+	if queuedData == nil {
+		t.Fatal("takeItemInteractionData() returned nil")
+	}
+	if !inputData.Load(packet.InputFlagPerformItemInteraction) {
+		t.Fatal("PerformItemInteraction input flag is not set")
+	}
+
+	inputPacket := tc.buildPlayerAuthInputPacket(inputData, queuedData, nil)
+	if !inputPacket.InputData.Load(packet.InputFlagPerformItemInteraction) {
+		t.Fatal("PlayerAuthInput is missing PerformItemInteraction flag")
+	}
+	if inputPacket.ItemInteractionData.ActionType != data.ActionType {
+		t.Fatalf("embedded action type = %d, want %d", inputPacket.ItemInteractionData.ActionType, data.ActionType)
+	}
+	if _, ok := b.TakeItemInteractionData(); ok {
+		t.Fatal("item interaction data remained queued after take")
 	}
 }

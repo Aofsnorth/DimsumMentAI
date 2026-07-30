@@ -88,8 +88,16 @@ try {
         }
     }
     if (-not $crafted) { throw 'Timed out waiting for oak planks and sticks' }
+    if ($log -notmatch 'CraftItem accepted.*item=minecraft:stick.*inventory=.*Oak Planks x2') {
+        throw 'Luna inventory cache did not retain exactly 2 oak planks after crafting sticks'
+    }
+    if ($log -notmatch 'CraftItem accepted.*item=minecraft:stick.*inventory=.*Stick x4') {
+        throw 'Luna inventory cache did not record exactly 4 crafted sticks'
+    }
 
     $server.StandardInput.WriteLine('clear Luna minecraft:stick 0 64')
+    Start-Sleep -Seconds 1
+    $server.StandardInput.WriteLine('clear Luna minecraft:oak_planks 0 64')
     Start-Sleep -Seconds 2
     Write-Output 'E2E craft sequence accepted'
 }
@@ -108,4 +116,7 @@ $serverOutput = Get-Content $serverLog -Raw
 if ($serverOutput -notmatch 'Cleared the inventory of Luna,\s+removing 4 items') {
     throw 'Server did not confirm exactly 4 sticks in Luna inventory'
 }
-Write-Output 'E2E passed: 1 oak log -> 4 oak planks -> 4 sticks'
+if ($serverOutput -notmatch 'Cleared the inventory of Luna,\s+removing 2 items') {
+    throw 'Server did not confirm exactly 2 oak planks remain after crafting sticks'
+}
+Write-Output 'E2E passed: 1 oak log -> 4 oak planks -> 4 sticks + 2 remaining planks'

@@ -695,10 +695,6 @@ func handleDrop(b *bot.Bot, param, user string) {
 
 			// Pin the look target at the player's head for 3s so the movement
 			// loop continuously interpolates toward this point.
-			b.LookAt(targetHead)
-
-			// Compute the yaw the look loop will converge to and wait for the
-			// next PlayerAuthInput tick to transmit it.
 			dx := targetHead.X() - botPos.X()
 			dz := targetHead.Z() - botPos.Z()
 			yaw := float32(math.Atan2(float64(dz), float64(dx))*(180.0/math.Pi)) - bot.YawOffsetDegrees
@@ -706,15 +702,22 @@ func handleDrop(b *bot.Bot, param, user string) {
 				yaw += bot.FullCircleDegrees
 			}
 			b.Logger.Debug("handleDrop: computed target yaw", "yaw", yaw, "dx", dx, "dz", dz)
-			b.WaitForYawSync(yaw, bot.YawSyncTimeout)
 
-			// Force-set both body yaw AND head yaw to the exact target, plus
+			// Force-set both body yaw AND head yaw to the exact target FIRST, plus
 			// a slight upward pitch so the item arcs forward into the player's
 			// pickup radius. SetLookAngles pins the body Yaw (which Bedrock
 			// uses for drop direction) instead of leaving it lagging behind
 			// HeadYaw through eased interpolation.
 			b.SetLookAngles(yaw, bot.DefaultDropPitch)
-			b.Logger.Debug("handleDrop: angles set, waiting for stabilization")
+			b.WaitForYawSync(yaw, bot.YawSyncTimeout)
+			b.Logger.Debug("handleDrop: angles set and synced, waiting for stabilization")
+			time.Sleep(bot.AngleStabilizationDelay)
+		} else {
+			b.Mu.Lock()
+			currentYaw := b.Yaw
+			b.Mu.Unlock()
+			b.SetLookAngles(currentYaw, bot.DefaultDropPitch)
+			b.WaitForYawSync(currentYaw, bot.YawSyncTimeout)
 			time.Sleep(bot.AngleStabilizationDelay)
 		}
 
