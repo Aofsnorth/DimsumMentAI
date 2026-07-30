@@ -236,6 +236,14 @@ func (b *Bot) CraftItem(recipeNetID uint32, count int) error {
 		"ingredientCount", len(picks),
 	)
 
+	if err := b.Conn.WritePacket(&packet.Interact{
+		ActionType:            packet.InteractActionOpenInventory,
+		TargetEntityRuntimeID: b.Conn.GameData().EntityRuntimeID,
+	}); err != nil {
+		return fmt.Errorf("open personal inventory: %w", err)
+	}
+	time.Sleep(150 * time.Millisecond)
+
 	gridInputs := make([]craftingGridInput, 0, len(picks))
 	gridInputIndexes := make(map[byte]int, len(picks))
 	predictedSourceIDs := make(map[uint32]int32, len(picks))

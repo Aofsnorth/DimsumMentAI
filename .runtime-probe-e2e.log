@@ -1,0 +1,4 @@
+probe spawned
+craft chat sent
+chat: source="OnyxStygian§r" message="Buat 4 stick" type=1
+chat: source="Luna§r" message="Oke, bikin dulu plank dari oak log, terus craft stick-nya." type=1

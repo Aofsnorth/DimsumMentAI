@@ -20,20 +20,23 @@ Do not use for connection shutdowns unrelated to `ItemStackRequest`, world place
    - `CraftRecipeStackRequestAction` means the crafting grid is already populated.
    - `AutoCraftRecipeStackRequestAction` means recipe-book auto-crafting from inventory; include `NumberOfCrafts`, `TimesCrafted`, and `Ingredients`.
 3. Prefer a packet capture from the same BDS/protocol version over trial-and-error action changes.
-4. Reproduce the vanilla manual-grid sequence as separate awaited requests:
+4. Open the personal inventory before transfers. Send `InteractActionOpenInventory` with `TargetEntityRuntimeID` set to the bot's own runtime entity ID; BDS rejects a cursor destination when the target is left at zero.
+5. Reproduce the vanilla manual-grid sequence as separate awaited requests:
    - `Take` inventory/hotbar to `ContainerCursor`.
    - `Place` cursor to `ContainerCraftingInput`.
    - `CraftRecipe`, `CraftResultsDeprecated`, grid `Consume`, then created-output `Place`.
-5. Use authoritative stack IDs from each `ItemStackResponse`. Use a negative request ID only when the server response omits a predicted stack ID.
-6. Match personal-grid placement: slots start at `28`; captured 1x1 uses `29`; a vertical 1x2 recipe uses `29` and `31`.
-7. Treat `ContainerInventory` slots in `ItemStackResponse` as global `0..35`; do not apply the `+9` offset used by partial `InventoryContent`.
-8. For chain crafting, retain every recipe candidate per output. Score candidates using current inventory before selecting a wood variant.
-9. Normalize only generic tags such as `minecraft:planks`; never turn a specific variant like `minecraft:oak_planks` into a fallback list.
-10. Run `gofmt`, focused bot tests, then `go test ./...`.
+6. Use authoritative stack IDs from each `ItemStackResponse`. Use a negative request ID only when the server response omits a predicted stack ID.
+7. Match personal-grid placement: slots start at `28`; captured 1x1 uses `29`; a vertical 1x2 recipe uses `29` and `31`.
+8. Map player slots `0..8` to `ContainerHotBar`; map slots `9..35` to `ContainerInventory`. BDS status `49` confirms that `ContainerInventory` is invalid for hotbar slot zero.
+9. Treat response slots as global `0..35`; do not apply the `+9` offset used by partial `InventoryContent`.
+10. For chain crafting, retain every recipe candidate per output. Score candidates using current inventory before selecting a wood variant.
+11. Normalize only generic tags such as `minecraft:planks`; never turn a specific variant like `minecraft:oak_planks` into a fallback list.
+12. Run `gofmt`, focused bot tests, then `go test ./...`. Run the clean BDS harness repeatedly for protocol changes.
 
 ## Common Pitfalls
 
 - `status=7` is `ItemStackResponseStatusInvalidCraftRequest` in the pinned gophertunnel version.
+- `status=50` is `ItemStackResponseStatusFailedToValidateDstSlot`; with a valid hotbar source and cursor destination, check that inventory-open targets the player itself.
 - `ContainerCreatedOutput` source must use the current negative request ID; an empty destination must use stack network ID `0`. `-1` is not a generic prediction placeholder.
 - Replacing auto-craft with normal craft silently fails because the server expects pre-filled grid input.
 - Sending `Take`, `Place`, and `CraftRecipe` without awaiting each response uses stale stack IDs.
@@ -46,4 +49,5 @@ Do not use for connection shutdowns unrelated to `ItemStackRequest`, world place
 - Focused tests assert the standalone transfer actions, 1x1/1x2 grid slots, final manual craft action order, current request ID, empty destination ID `0`, and global `ContainerInventory` response slots.
 - `go test ./internal/bot ./internal/bot/action ./internal/bot/network/player` passes.
 - `go test ./...` passes.
-- Re-run the bot with one oak log and verify oak planks are accepted before stick crafting; rejection logs must include the recipe output and request ID.
+- Re-run the clean BDS harness with one oak log and verify exactly four sticks are removed using a limit greater than four; a clear limit of four cannot prove there were no extra sticks.
+- Run at least three clean cycles. Each must accept oak planks before sticks with no rejection, timeout, desync, disconnect, or crash.

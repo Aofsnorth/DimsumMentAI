@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/google/uuid"
@@ -11,12 +12,25 @@ import (
 	"github.com/sandertv/gophertunnel/minecraft/protocol/packet"
 )
 
+const (
+	serverAddress = "127.0.0.1:19140"
+	probeName     = "OnyxStygian"
+	testTimeout   = 2 * time.Minute
+)
+
 func main() {
+	if err := run(); err != nil {
+		fmt.Fprintln(os.Stderr, "E2E failed:", err)
+		os.Exit(1)
+	}
+}
+
+func run() error {
 	id := uuid.New()
 	conn, err := (&minecraft.Dialer{
 		IdentityData: login.IdentityData{
 			Identity:    id.String(),
-			DisplayName: "OnyxStygian",
+			DisplayName: probeName,
 		},
 		ClientData: login.ClientData{
 			DeviceOS:      protocol.DeviceWin10,
@@ -24,51 +38,48 @@ func main() {
 			SelfSignedID:  uuid.New().String(),
 			LanguageCode:  "en_US",
 			GameVersion:   protocol.CurrentVersion,
-			ServerAddress: "127.0.0.1:19140",
+			ServerAddress: serverAddress,
 			SkinID:        uuid.New().String(),
 			SkinData:      "",
 		},
-	}).Dial("raknet", "127.0.0.1:19140")
+	}).Dial("raknet", serverAddress)
 	if err != nil {
-		panic(err)
+		return fmt.Errorf("dial: %w", err)
 	}
 	defer conn.Close()
 	if err := conn.DoSpawn(); err != nil {
-		panic(err)
+		return fmt.Errorf("spawn: %w", err)
 	}
 	fmt.Println("probe spawned")
 
 	stopInput := make(chan struct{})
 	defer close(stopInput)
 	go sendInputLoop(conn, stopInput)
-	time.Sleep(time.Second)
 
+	time.Sleep(time.Second)
 	if err := conn.WritePacket(&packet.Text{
 		TextType:   packet.TextTypeChat,
-		SourceName: "OnyxStygian",
+		SourceName: probeName,
 		Message:    "Buat 4 stick",
 	}); err != nil {
-		panic(err)
+		return fmt.Errorf("send craft chat: %w", err)
 	}
 	fmt.Println("craft chat sent")
 
-	deadline := time.After(15 * time.Second)
+	deadline := time.Now().Add(testTimeout)
+	if err := conn.SetReadDeadline(deadline); err != nil {
+		return fmt.Errorf("set read deadline: %w", err)
+	}
 	for {
-		select {
-		case <-deadline:
-			return
-		default:
-			pk, err := conn.ReadPacket()
-			if err != nil {
-				fmt.Println("read:", err)
-				return
+		pk, err := conn.ReadPacket()
+		if err != nil {
+			if !time.Now().Before(deadline) {
+				return nil
 			}
-			switch p := pk.(type) {
-			case *packet.CommandOutput:
-				fmt.Printf("command output: success=%d messages=%+v\n", p.SuccessCount, p.OutputMessages)
-			case *packet.Text:
-				fmt.Printf("chat: source=%q message=%q type=%d\n", p.SourceName, p.Message, p.TextType)
-			}
+			return fmt.Errorf("read packet: %w", err)
+		}
+		if text, ok := pk.(*packet.Text); ok {
+			fmt.Printf("chat: source=%q message=%q type=%d\n", text.SourceName, text.Message, text.TextType)
 		}
 	}
 }
