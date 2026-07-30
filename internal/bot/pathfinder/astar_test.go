@@ -101,6 +101,40 @@ func TestFindPath_StraightLine(t *testing.T) {
 	}
 }
 
+func TestFindPath_LateralParkourAroundFrontWall(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		name     string
+		lateralZ int32
+	}{
+		{name: "left", lateralZ: -2},
+		{name: "right", lateralZ: 2},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			start := Node{X: 0, Y: 1, Z: 0}
+			target := Node{X: 1, Y: 1, Z: test.lateralZ}
+			world := NewLocalWorldModel()
+			world.SetSolid(start.X, start.Y-1, start.Z, true)
+			world.SetSolid(1, 1, 0, true)
+			world.SetSolid(1, 2, 0, true)
+			world.SetSolid(target.X, target.Y-1, target.Z, true)
+
+			path := FindPath(start, target, world, false)
+			if len(path) != 2 {
+				t.Fatalf("FindPath path length = %d, want 2: %+v", len(path), path)
+			}
+			landing := path[1]
+			if !landing.Equal(&target) {
+				t.Fatalf("landing = (%d,%d,%d), want (%d,%d,%d)", landing.X, landing.Y, landing.Z, target.X, target.Y, target.Z)
+			}
+			if landing.LinkType != LinkJump {
+				t.Errorf("landing LinkType = %q, want %q", landing.LinkType, LinkJump)
+			}
+		})
+	}
+}
+
 func TestFindPath_BlockedReturnsNilOrFallback(t *testing.T) {
 	t.Parallel()
 	w := newMockWorld()

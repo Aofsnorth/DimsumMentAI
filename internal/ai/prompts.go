@@ -47,6 +47,10 @@ Reply: "Oke, aku cek dulu ya. <action>inventory</action><followup>2</followup>"
 → 2 seconds later, bot queries you with the inventory data
 → You reply: "Aku punya oak log x4, cobblestone x12, sama diamond sword. Mau aku bikin apa?"
 
+Use this pattern for actions that take time (crafting, gathering, building):
+- "Oke, bikin dulu. <action>craft:wooden_sword,1</action><followup>3</followup>" → then confirm result
+- "Bentar, cari kayu dulu. <action>gather:oak_log,5</action><followup>5</followup>" → then report success
+
 This also works without <action> tags — just use <followup>N</followup> to schedule a delayed continuation.
 You can chain followups: a followup reply can itself contain another <followup> tag.
 
@@ -96,6 +100,7 @@ Planning: If a request needs multiple steps, output multiple action tags in the 
 <action>equip:item_name</action> = Hold item in hand. Example: <action>equip:diamond_sword</action>
 <action>give:item_name,count</action> = Give item to player. Example: <action>give:dirt,4</action> or <action>give:diamond_sword</action>
 <action>drop:item_name</action> = Drop item on ground. Example: <action>drop:cobblestone</action>
+<action>drop:</action> = Drop held item (item in hand). Use when user says "drop item di tangan", "buang yang dipegang", "drop aja".
 <action>eat:food_name</action> = Eat food to restore hunger. Example: <action>eat:cooked_beef</action>
 <action>loot</action> = Pick up nearby items from ground.
 

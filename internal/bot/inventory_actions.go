@@ -88,6 +88,10 @@ func (b *Bot) DropItem(name string, count int) error {
 		return err
 	}
 
+	// Wait for server to acknowledge drop transaction before updating visuals.
+	// Bedrock needs time to process InventoryTransaction + spawn ItemActor.
+	time.Sleep(150 * time.Millisecond)
+
 	if remaining == 0 {
 		delete(b.InventoryMap, targetSlot)
 		// If we just emptied the slot the bot is holding, broadcast a
@@ -147,7 +151,7 @@ func (b *Bot) InjectAIEvent(msg string) {
 			playerCoordsStr = fmt.Sprintf("X:%.0f Y:%.0f Z:%.0f", pCoords.X(), pCoords.Y(), pCoords.Z())
 		}
 
-		botStatusText := fmt.Sprintf("HP: %d/20, Hunger: %d/20", hp, hunger)
+		botStatusText := fmt.Sprintf("HP: %d/%d, Hunger: %d/%d", hp, MaxHealth, hunger, MaxHunger)
 		systemPrompt := b.AiClient.BuildSystemPrompt(
 			botName,
 			botCoords+" ("+botStatusText+")",
@@ -199,7 +203,7 @@ func (b *Bot) CraftItem(recipeNetID uint32, count int) error {
 	if count <= 0 {
 		count = 1
 	}
-	if count > 64 {
+	if count > MaxStackSize {
 		return fmt.Errorf("cannot craft %d times in one request", count)
 	}
 
@@ -225,7 +229,7 @@ func (b *Bot) CraftItem(recipeNetID uint32, count int) error {
 		return err
 	}
 	outputCount := int(recipe.Output.Count) * count
-	if outputCount <= 0 || outputCount > 64 {
+	if outputCount <= 0 || outputCount > MaxStackSize {
 		return fmt.Errorf("crafted output count %d is unsupported", outputCount)
 	}
 
@@ -242,7 +246,7 @@ func (b *Bot) CraftItem(recipeNetID uint32, count int) error {
 	}); err != nil {
 		return fmt.Errorf("open personal inventory: %w", err)
 	}
-	time.Sleep(150 * time.Millisecond)
+	time.Sleep(InventoryOpenDelay)
 
 	gridInputs := make([]craftingGridInput, 0, len(picks))
 	gridInputIndexes := make(map[byte]int, len(picks))
@@ -363,7 +367,7 @@ func craftingGridSlot(recipe RecipeInfo, ingredientIndex int) (byte, error) {
 		if ingredientIndex < 0 || ingredientIndex >= 4 {
 			return 0, fmt.Errorf("ingredient %d does not fit personal crafting grid", ingredientIndex)
 		}
-		return byte(28 + ingredientIndex), nil
+		return byte(CraftingGridBaseSlot + ingredientIndex), nil
 	}
 	if recipe.Width <= 0 || recipe.Height <= 0 || recipe.Width > 2 || recipe.Height > 2 {
 		return 0, fmt.Errorf("invalid personal crafting shape %dx%d", recipe.Width, recipe.Height)
@@ -372,14 +376,14 @@ func craftingGridSlot(recipe RecipeInfo, ingredientIndex int) (byte, error) {
 		return 0, fmt.Errorf("ingredient %d is outside recipe shape", ingredientIndex)
 	}
 	if recipe.Width == 1 && recipe.Height == 1 {
-		return 29, nil
+		return CraftingGrid1x1Slot, nil
 	}
 	row := ingredientIndex / int(recipe.Width)
 	column := ingredientIndex % int(recipe.Width)
 	if recipe.Width == 1 {
 		column = 1
 	}
-	return byte(28 + row*2 + column), nil
+	return byte(CraftingGridBaseSlot + row*2 + column), nil
 }
 
 func playerStackRequestSlot(slot uint32, stackNetworkID int32) protocol.StackRequestSlotInfo {
@@ -527,7 +531,7 @@ func buildCraftActions(requestID int32, recipeNetID uint32, recipe RecipeInfo, c
 	place.Count = byte(outputCount)
 	place.Source = protocol.StackRequestSlotInfo{
 		Container:      protocol.FullContainerName{ContainerID: protocol.ContainerCreatedOutput},
-		Slot:           50,
+		Slot:           CreatedOutputSlot,
 		StackNetworkID: requestID,
 	}
 	place.Destination = protocol.StackRequestSlotInfo{

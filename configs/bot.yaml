@@ -27,7 +27,8 @@ skin:
 #   - none                → disable AI
 ai:
   provider: "openai_compatible"
-  model: "kc/inclusionai/ling-3.0-flash:free"
+  model: "low"
+  #kc/inclusionai/ling-3.0-flash:free
   # API key is loaded from .env (NVIDIA_API_KEY). See .env.example.
   base_url: "http://localhost:20128/v1" # leave empty to use provider default (nvidia). Required for openai_compatible/anthropic_compatible/google_compatible.
   main_player: "OnyxStygian"

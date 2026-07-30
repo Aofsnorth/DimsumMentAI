@@ -85,7 +85,7 @@ func gatherHandler(defaultItem string) actionHandler {
 		if parts[0] != "" {
 			itemName = normalizeItemName(parts[0])
 		}
-		count := 10
+		count := bot.DefaultEmoteCount
 		if len(parts) > 1 {
 			_, _ = fmt.Sscanf(parts[1], "%d", &count)
 		}
@@ -254,8 +254,10 @@ var actionHandlers = map[string]actionHandler{
 			}()
 		}
 	},
-	"give": handleGive,
-	"drop": handleDrop,
+	"give":           handleGive,
+	"drop":           handleDrop,
+	"place":          handlePlace,
+	"list_craftable": handleListCraftable,
 	"eat": func(b *bot.Bot, param, _ string) {
 		go func() {
 			_ = b.InventoryMgr.Eat(strings.ToLower(strings.TrimSpace(param)))

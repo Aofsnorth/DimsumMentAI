@@ -160,6 +160,7 @@ func (w *LocalWorldModel) appendCardinalDirection(neighbors []Node, node Node, d
 
 	neighbors = w.appendStepJumpIfPossible(neighbors, dx, dz, node)
 	neighbors = w.appendStepDownJumpIfPossible(neighbors, dx, dz, node)
+	neighbors = w.appendCornerParkourIfPossible(neighbors, dx, dz, node)
 
 	return neighbors
 }
@@ -426,6 +427,62 @@ func (w *LocalWorldModel) stepJumpGapClear(cx, cy, cz, dx, dz, distance int32) b
 		}
 	}
 	return true
+}
+
+// appendCornerParkourIfPossible adds lateral/corner jump nodes around a blocking wall.
+func (w *LocalWorldModel) appendCornerParkourIfPossible(neighbors []Node, dx, dz int32, node Node) []Node {
+	cx, cy, cz := node.X, node.Y, node.Z
+	// Only check if direct front block is solid (wall blocking forward path)
+	frontX, frontZ := cx+dx, cz+dz
+	if !w.IsSolid(frontX, cy, frontZ) && !w.IsSolid(frontX, cy+1, frontZ) {
+		return neighbors
+	}
+
+	// Lateral offsets perpendicular to forward direction
+	var sides []struct{ sx, sz int32 }
+	if dx != 0 {
+		sides = []struct{ sx, sz int32 }{{0, 1}, {0, -1}, {0, 2}, {0, -2}}
+	} else {
+		sides = []struct{ sx, sz int32 }{{1, 0}, {-1, 0}, {2, 0}, {-2, 0}}
+	}
+
+	for _, side := range sides {
+		// Check diagonal landing spot around corner (dx, side)
+		lx := cx + dx
+		lz := cz + dz
+		if side.sx != 0 {
+			lx += side.sx
+		}
+		if side.sz != 0 {
+			lz += side.sz
+		}
+
+		if w.canStandAt(lx, cy, lz) && !w.IsSolid(lx, cy+2, lz) {
+			// Air clearance along diagonal arc
+			midX := cx
+			midZ := cz
+			if side.sx > 0 {
+				midX += 1
+			} else if side.sx < 0 {
+				midX -= 1
+			}
+			if side.sz > 0 {
+				midZ += 1
+			} else if side.sz < 0 {
+				midZ -= 1
+			}
+			if w.isAirAt(midX, cy, midZ) {
+				neighbors = append(neighbors, Node{
+					X:        lx,
+					Y:        cy,
+					Z:        lz,
+					G:        node.G + 3.2,
+					LinkType: LinkJump,
+				})
+			}
+		}
+	}
+	return neighbors
 }
 
 // canStepDownJumpTo checks if a step-down jump (Y-1) over a gap is valid.

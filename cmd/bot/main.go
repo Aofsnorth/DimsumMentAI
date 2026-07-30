@@ -18,7 +18,6 @@ import (
 	"bedrock-ai/internal/bot/movement"
 	"bedrock-ai/internal/bot/network"
 	"bedrock-ai/internal/bot/planner"
-	"bedrock-ai/internal/bot/visualizer"
 	"bedrock-ai/internal/config"
 	"bedrock-ai/internal/connection"
 	"bedrock-ai/internal/debuglog"
@@ -184,8 +183,6 @@ func main() {
 		slog.String("name", cfg.Bot.Name),
 		slog.String("address", cfg.Server.Address()),
 	)
-
-	visualizer.StartServer(b)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()

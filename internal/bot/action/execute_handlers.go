@@ -113,6 +113,27 @@ func runCraftAction(b *bot.Bot, param, user string, report bool) event.ActionSta
 // stick is depth 2) so a malformed recipe graph can never loop forever.
 const maxCraftDepth = 4
 
+type materialGatherFunc func(context.Context, *bot.Bot, string, int) error
+type craftItemFunc func(*bot.Bot, uint32, int) error
+
+type craftChainState struct {
+	activeItems    map[string]struct{}
+	gatherAttempts map[string]struct{}
+	gather         materialGatherFunc
+	craft          craftItemFunc
+}
+
+func newCraftChainState() *craftChainState {
+	return &craftChainState{
+		activeItems:    make(map[string]struct{}),
+		gatherAttempts: make(map[string]struct{}),
+		gather:         gatherMaterialSynchronously,
+		craft: func(b *bot.Bot, recipeID uint32, crafts int) error {
+			return b.CraftItem(recipeID, crafts)
+		},
+	}
+}
+
 // ingredientFallbacks maps a generic/tag ingredient keyword to concrete
 // craftable items, tried in order, so chain-crafting can satisfy e.g.
 // a "planks" requirement by making oak_planks from oak_log.
@@ -127,9 +148,23 @@ var ingredientFallbacks = map[string][]string{
 // ingredients that themselves have known recipes. It returns the number of
 // output items actually produced.
 func craftChain(ctx context.Context, b *bot.Bot, user, itemName string, count, depth int) (int, error) {
+	return craftChainWithState(ctx, b, user, itemName, count, depth, newCraftChainState(), true)
+}
+
+func craftChainWithState(ctx context.Context, b *bot.Bot, user, itemName string, count, depth int, state *craftChainState, allowGather bool) (int, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, fmt.Errorf("craft %s dibatalkan: %w", itemName, err)
+	}
 	if depth > maxCraftDepth {
 		return 0, fmt.Errorf("rantai craft terlalu dalam untuk %s", itemName)
 	}
+
+	itemKey := canonicalMaterialName(itemName)
+	if _, active := state.activeItems[itemKey]; active {
+		return 0, fmt.Errorf("siklus resep terdeteksi saat craft %s", itemName)
+	}
+	state.activeItems[itemKey] = struct{}{}
+	defer delete(state.activeItems, itemKey)
 
 	recipeID, recipe, ok := pickBestRecipe(b, itemName)
 	if !ok {
@@ -142,7 +177,7 @@ func craftChain(ctx context.Context, b *bot.Bot, user, itemName string, count, d
 	// crafting-table window.
 	outputPerCraft := int(recipe.Output.Count)
 	crafts := computeCrafts(count, outputPerCraft)
-	if err := ensureCraftIngredients(ctx, b, user, recipe, crafts, depth); err != nil {
+	if err := ensureCraftIngredients(ctx, b, user, recipe, crafts, depth, state, allowGather); err != nil {
 		return 0, err
 	}
 	b.Logger.Info("chain craft step",
@@ -151,12 +186,12 @@ func craftChain(ctx context.Context, b *bot.Bot, user, itemName string, count, d
 		"crafts", crafts,
 		"depth", depth,
 	)
-	if err := b.CraftItem(recipeID, crafts); err != nil {
+	if err := state.craft(b, recipeID, crafts); err != nil {
 		return 0, err
 	}
 	actual := outputPerCraft * crafts
-	if actual > 64 {
-		actual = 64
+	if actual > bot.MaxStackSize {
+		actual = bot.MaxStackSize
 	}
 	return actual, nil
 }
@@ -238,63 +273,163 @@ func recipeSatisfactionScore(b *bot.Bot, recipe bot.RecipeInfo) int {
 	}
 }
 
-// ensureCraftIngredients chain-crafts any recipe ingredient the bot does not
-// already have enough of, so multi-tier items (stick <- planks <- log) craft
-// from raw materials in one request.
-func ensureCraftIngredients(ctx context.Context, b *bot.Bot, user string, recipe bot.RecipeInfo, crafts, depth int) error {
-	for _, ing := range recipe.Ingredients {
-		name := b.IngredientName(ing)
-		if name == "" {
+type ingredientRequirement struct {
+	name  string
+	count int
+}
+
+// ensureCraftIngredients tries every chain-craft alternative before gathering.
+// Only leaf ingredients with no known recipe are gathered, and inventory is
+// re-counted after each synchronous operation.
+func ensureCraftIngredients(ctx context.Context, b *bot.Bot, user string, recipe bot.RecipeInfo, crafts, depth int, state *craftChainState, allowGather bool) error {
+	for _, requirement := range recipeIngredientRequirements(b, recipe, crafts) {
+		available := b.CountItemLike(requirement.name)
+		if available >= requirement.count {
 			continue
 		}
-		need := int(ing.Count) * crafts
-		if need <= 0 || b.CountItemLike(name) >= need {
+
+		missing := requirement.count - available
+		b.Logger.Debug("chain craft: ingredient missing, trying craft alternatives", "ingredient", requirement.name, "missing", missing)
+		craftErr := craftIngredient(ctx, b, user, requirement.name, missing, depth, state, allowGather)
+
+		available = b.CountItemLike(requirement.name)
+		if available >= requirement.count {
 			continue
 		}
-		b.Logger.Debug("chain craft: ingredient missing, crafting it", "ingredient", name, "need", need)
-		if err := craftIngredient(ctx, b, user, name, need, depth); err != nil {
+		if hasCraftAlternative(b, requirement.name) {
+			if craftErr == nil {
+				craftErr = fmt.Errorf("inventory tidak bertambah")
+			}
+			return fmt.Errorf(
+				"bahan %s masih kurang setelah alternatif craft dicoba (punya %d, perlu %d): %w",
+				requirement.name,
+				available,
+				requirement.count,
+				craftErr,
+			)
+		}
+		if !allowGather {
+			return fmt.Errorf("bahan mentah %s kurang: punya %d, perlu %d", requirement.name, available, requirement.count)
+		}
+		if err := autoGatherRawMaterial(ctx, b, state, requirement.name, requirement.count); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
+func recipeIngredientRequirements(b *bot.Bot, recipe bot.RecipeInfo, crafts int) []ingredientRequirement {
+	requirements := make([]ingredientRequirement, 0, len(recipe.Ingredients))
+	indexes := make(map[string]int, len(recipe.Ingredients))
+	for _, ingredient := range recipe.Ingredients {
+		name := b.IngredientName(ingredient)
+		count := int(ingredient.Count) * crafts
+		if name == "" || count <= 0 {
+			continue
+		}
+		key := canonicalMaterialName(name)
+		if index, exists := indexes[key]; exists {
+			requirements[index].count += count
+			continue
+		}
+		indexes[key] = len(requirements)
+		requirements = append(requirements, ingredientRequirement{name: name, count: count})
+	}
+	return requirements
+}
+
 // craftIngredient crafts `need` of an ingredient, resolving generic/tag
 // ingredients (e.g. "planks") to a concrete craftable variant the bot can
 // actually make.
-func craftIngredient(ctx context.Context, b *bot.Bot, user, name string, need, depth int) error {
-	candidates := resolveIngredientCandidates(name)
-
-	// Sort candidates by availability: prioritize those we can actually craft
-	// based on what materials we have in inventory
-	sortedCandidates := make([]string, len(candidates))
-	copy(sortedCandidates, candidates)
-
-	if len(sortedCandidates) > 1 {
-		// For planks, prioritize based on available logs
-		sortCandidatesByAvailability(b, sortedCandidates)
+func craftIngredient(ctx context.Context, b *bot.Bot, user, name string, need, depth int, state *craftChainState, allowGather bool) error {
+	candidates := append([]string(nil), resolveIngredientCandidates(name)...)
+	if len(candidates) > 1 {
+		sortCandidatesByAvailability(b, candidates)
 	}
 
+	lastErr := tryCraftIngredientCandidates(ctx, b, user, need, depth, state, candidates, false)
+	if lastErr == nil || !allowGather {
+		return lastErr
+	}
+	return tryCraftIngredientCandidates(ctx, b, user, need, depth, state, candidates, true)
+}
+
+func tryCraftIngredientCandidates(ctx context.Context, b *bot.Bot, user string, need, depth int, state *craftChainState, candidates []string, allowGather bool) error {
 	var lastErr error
-	for _, c := range sortedCandidates {
-		if len(sortedCandidates) > 1 && !candidateMaterialAvailable(b, c) {
+	for _, candidate := range candidates {
+		if _, ok := lookupRecipe(b, candidate); !ok {
 			continue
 		}
-		if _, ok := lookupRecipe(b, c); !ok {
-			continue
-		}
-		if _, err := craftChain(ctx, b, user, c, need, depth+1); err != nil {
-			if lastErr == nil {
-				lastErr = err
-			}
+		if _, err := craftChainWithState(ctx, b, user, candidate, need, depth+1, state, allowGather); err != nil {
+			lastErr = err
 			continue
 		}
 		return nil
 	}
 	if lastErr == nil {
-		lastErr = fmt.Errorf("tidak punya bahan untuk %s", name)
+		lastErr = fmt.Errorf("tidak ada alternatif craft")
 	}
 	return lastErr
+}
+
+func hasCraftAlternative(b *bot.Bot, name string) bool {
+	for _, candidate := range resolveIngredientCandidates(name) {
+		if _, ok := lookupRecipe(b, candidate); ok {
+			return true
+		}
+	}
+	return false
+}
+
+func autoGatherRawMaterial(ctx context.Context, b *bot.Bot, state *craftChainState, name string, required int) error {
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("auto-gather %s dibatalkan: %w", name, err)
+	}
+
+	available := b.CountItemLike(name)
+	missing := required - available
+	if missing <= 0 {
+		return nil
+	}
+
+	key := canonicalMaterialName(name)
+	if _, attempted := state.gatherAttempts[key]; attempted {
+		return fmt.Errorf("auto-gather %s tidak diulang; percobaan sebelumnya belum memenuhi kebutuhan %d", name, required)
+	}
+	state.gatherAttempts[key] = struct{}{}
+
+	b.Logger.Info("chain craft: gathering raw ingredient", "ingredient", name, "missing", missing)
+	if err := state.gather(ctx, b, name, missing); err != nil {
+		return fmt.Errorf("auto-gather %s gagal: %w", name, err)
+	}
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("auto-gather %s dibatalkan: %w", name, err)
+	}
+
+	available = b.CountItemLike(name)
+	if available < required {
+		return fmt.Errorf("auto-gather %s belum cukup: punya %d, perlu %d", name, available, required)
+	}
+	return nil
+}
+
+func gatherMaterialSynchronously(ctx context.Context, b *bot.Bot, name string, missing int) error {
+	if b.Gatherer == nil {
+		return fmt.Errorf("pengumpul resource belum siap")
+	}
+	if b.Gatherer.IsGathering() {
+		return fmt.Errorf("pengumpulan resource lain sedang berjalan")
+	}
+	if isWoodLike(name) {
+		b.Gatherer.GatherWoodType(ctx, name, missing)
+	} else {
+		b.Gatherer.GatherBlock(ctx, name, missing)
+	}
+	return nil
+}
+
+func canonicalMaterialName(name string) string {
+	return strings.ToLower(strings.TrimPrefix(strings.TrimSpace(name), "minecraft:"))
 }
 
 // lookupRecipe resolves a recipe network ID by item name.
@@ -473,16 +608,33 @@ func handleGive(b *bot.Bot, param, user string) {
 
 func handleDrop(b *bot.Bot, param, user string) {
 	go func() {
-		if strings.TrimSpace(param) == "" {
-			return
-		}
-		parts := strings.Split(param, ",")
+		parts := strings.Split(strings.TrimSpace(param), ",")
 		itemName := normalizeItemName(parts[0])
 		count := 0
 		if len(parts) >= 2 {
 			_, _ = fmt.Sscanf(parts[1], "%d", &count)
 		}
-		if itemName == "" {
+
+		// If param empty OR contains "hand"/"held"/"tangan"/"dipegang", drop held item
+		if itemName == "" ||
+			strings.Contains(strings.ToLower(itemName), "hand") ||
+			strings.Contains(strings.ToLower(itemName), "held") ||
+			strings.Contains(strings.ToLower(itemName), "tangan") ||
+			strings.Contains(strings.ToLower(itemName), "dipegang") {
+			b.Mu.Lock()
+			heldSlot := b.HeldSlot
+			heldItem := b.InventoryMap[heldSlot]
+			heldItemName := b.ItemNames[heldItem.NetworkID]
+			b.Mu.Unlock()
+
+			if heldItem.Count == 0 || heldItemName == "" {
+				b.Logger.Warn("handleDrop: no item in hand")
+				return
+			}
+			itemName = heldItemName
+			b.Logger.Info("handleDrop: dropping held item", "item", heldItemName, "slot", heldSlot)
+		} else if itemName == "" {
+			// Neither specific item nor held item — nothing to drop
 			return
 		}
 
@@ -539,7 +691,7 @@ func handleDrop(b *bot.Bot, param, user string) {
 
 			// Re-fetch position after stop.
 			botPos = b.GetCoords()
-			targetHead := playerPos.Add(mgl32.Vec3{0, 1.62, 0})
+			targetHead := playerPos.Add(mgl32.Vec3{0, bot.PlayerEyeHeight, 0})
 
 			// Pin the look target at the player's head for 3s so the movement
 			// loop continuously interpolates toward this point.
@@ -549,22 +701,25 @@ func handleDrop(b *bot.Bot, param, user string) {
 			// next PlayerAuthInput tick to transmit it.
 			dx := targetHead.X() - botPos.X()
 			dz := targetHead.Z() - botPos.Z()
-			yaw := float32(math.Atan2(float64(dz), float64(dx))*180/math.Pi) - 90
+			yaw := float32(math.Atan2(float64(dz), float64(dx))*(180.0/math.Pi)) - bot.YawOffsetDegrees
 			for yaw < 0 {
-				yaw += 360
+				yaw += bot.FullCircleDegrees
 			}
-			b.WaitForYawSync(yaw, 800*time.Millisecond)
+			b.Logger.Debug("handleDrop: computed target yaw", "yaw", yaw, "dx", dx, "dz", dz)
+			b.WaitForYawSync(yaw, bot.YawSyncTimeout)
 
 			// Force-set both body yaw AND head yaw to the exact target, plus
 			// a slight upward pitch so the item arcs forward into the player's
 			// pickup radius. SetLookAngles pins the body Yaw (which Bedrock
 			// uses for drop direction) instead of leaving it lagging behind
 			// HeadYaw through eased interpolation.
-			b.SetLookAngles(yaw, -28)
-			time.Sleep(120 * time.Millisecond)
+			b.SetLookAngles(yaw, bot.DefaultDropPitch)
+			b.Logger.Debug("handleDrop: angles set, waiting for stabilization")
+			time.Sleep(bot.AngleStabilizationDelay)
 		}
 
 		// --- Drop the item --------------------------------------------------
+		b.Logger.Debug("handleDrop: executing drop", "item", itemName, "count", count)
 		if err := b.InventoryMgr.DropItem(itemName, count); err != nil {
 			b.Logger.Warn("handleDrop: DropItem failed", "item", itemName, "error", err)
 			return
@@ -586,9 +741,9 @@ func handleDrop(b *bot.Bot, param, user string) {
 			hLen := float32(math.Sqrt(float64(dx*dx + dz*dz)))
 			if hLen > 0.001 {
 				backPos := mgl32.Vec3{
-					botPos.X() - (dx/hLen)*1.2,
+					botPos.X() - (dx/hLen)*bot.BackStepDistance,
 					botPos.Y(),
-					botPos.Z() - (dz/hLen)*1.2,
+					botPos.Z() - (dz/hLen)*bot.BackStepDistance,
 				}
 				b.NavigateTo(backPos)
 				time.Sleep(500 * time.Millisecond)

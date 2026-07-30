@@ -13,6 +13,13 @@ import (
 	"github.com/go-gl/mathgl/mgl32"
 )
 
+const (
+	walkingGazeYawAmplitude   float32 = 2.5
+	walkingGazePitchAmplitude float32 = 0.75
+	walkingGazeMaxYawOffset   float32 = 4
+	walkingGazeMaxPitchOffset float32 = 1.25
+)
+
 func (tc *TickContext) updateLookDirection() {
 	tc.updateActivelyClimbing()
 	wantsToMove := tc.resolveTargetLook()
@@ -147,9 +154,10 @@ func (tc *TickContext) selectYawSpeed(absYawDiff float64) float32 {
 //
 // Natural-motion model:
 //  1. The HEAD eases toward the target first (lead) — a real player turns
-//     their eyes/head before their torso follows.
-//  2. The BODY (tc.Yaw) eases toward the head yaw (lag) — the torso catches
-//     up, producing a brief, organic strafe component while turning.
+//     their eyes/head before their torso follows. During ordinary walking, a
+//     low-frequency bounded offset lets the gaze scan around the route.
+//  2. The BODY (tc.Yaw) follows the movement target while walking so gaze
+//     offsets never alter steering. Outside walking it follows the head.
 //  3. A continuous organic drift (sum of incommensurate sines) is added to
 //     the head yaw and pitch every tick. This replaces the old deterministic
 //     tick-parity jitter and mimics breathing, micro-saccades and postural
@@ -194,8 +202,15 @@ func (tc *TickContext) applyEasedLook(wantsToMove bool, yawMax, pitchMax float32
 	headPitchSpd := smoothSpeedMultiplier(tc.Tick, speedAmp, 2.1)
 
 	// Smoothly ease head toward target (with smooth speed variation).
-	tc.HeadYaw = EaseAngle(tc.HeadYaw, tc.TargetYaw, headMin*headYawSpd, yawMax*headYawSpd, headEase*headYawSpd)
-	tc.Pitch = EasePitch(tc.Pitch, tc.TargetPitch, pitchMin*headPitchSpd, pitchMax*headPitchSpd, pitchEase*headPitchSpd)
+	walkingScanEnabled := wantsToMove && tc.HasHorizontalMove && !tc.IsLadderActive
+	headTargetYaw, headTargetPitch := walkingHeadTarget(
+		tc.Tick,
+		tc.TargetYaw,
+		tc.TargetPitch,
+		walkingScanEnabled,
+	)
+	tc.HeadYaw = EaseAngle(tc.HeadYaw, headTargetYaw, headMin*headYawSpd, yawMax*headYawSpd, headEase*headYawSpd)
+	tc.Pitch = EasePitch(tc.Pitch, headTargetPitch, pitchMin*headPitchSpd, pitchMax*headPitchSpd, pitchEase*headPitchSpd)
 
 	// --- Organic drift ------------------------------------------------------
 	// Continuous, non-repeating micro-motion via incommensurate sine
@@ -210,10 +225,13 @@ func (tc *TickContext) applyEasedLook(wantsToMove bool, yawMax, pitchMax float32
 	dYaw, dPitch := organicLookDrift(tc.Tick, ampYaw, ampPitch)
 	tc.HeadYaw = normalizeYaw(tc.HeadYaw + dYaw)
 	tc.Pitch = clampFloat32(tc.Pitch+dPitch, -90, 90)
+	if walkingScanEnabled {
+		tc.HeadYaw, tc.Pitch = boundWalkingGaze(tc.TargetYaw, tc.TargetPitch, tc.HeadYaw, tc.Pitch)
+	}
 
-	// --- Body (lags, follows head) -----------------------------------------
-	// Body yaw eases toward the head yaw with a softer rate, so the torso
-	// trails the head by a few degrees during a turn and settles after it.
+	// --- Body (lags) -------------------------------------------------------
+	// Walking body yaw follows the route target rather than the scanned head
+	// target, keeping gaze independent from movement direction and pathing.
 	bodyEase := float32(0.20)
 	bodyMin := float32(0.25)
 	bodyCap := float32(16.0)
@@ -224,8 +242,30 @@ func (tc *TickContext) applyEasedLook(wantsToMove bool, yawMax, pitchMax float32
 		bodyEase = 0.30
 		bodyMin = 0.50
 	}
+	bodyTargetYaw := tc.HeadYaw
+	if wantsToMove {
+		bodyTargetYaw = tc.TargetYaw
+	}
 	bodySpd := smoothSpeedMultiplier(tc.Tick, speedAmp, 4.3)
-	tc.Yaw = EaseAngle(tc.Yaw, tc.HeadYaw, bodyMin*bodySpd, bodyCap*bodySpd, bodyEase*bodySpd)
+	tc.Yaw = EaseAngle(tc.Yaw, bodyTargetYaw, bodyMin*bodySpd, bodyCap*bodySpd, bodyEase*bodySpd)
+}
+
+func walkingHeadTarget(tick uint64, targetYaw, targetPitch float32, enabled bool) (float32, float32) {
+	if !enabled {
+		return targetYaw, targetPitch
+	}
+
+	yawOffset, pitchOffset := organicLookDrift(tick, walkingGazeYawAmplitude, walkingGazePitchAmplitude)
+	yawOffset = clampFloat32(yawOffset, -walkingGazeMaxYawOffset, walkingGazeMaxYawOffset)
+	pitchOffset = clampFloat32(pitchOffset, -walkingGazeMaxPitchOffset, walkingGazeMaxPitchOffset)
+	return normalizeYaw(targetYaw + yawOffset), clampFloat32(targetPitch+pitchOffset, -90, 90)
+}
+
+func boundWalkingGaze(targetYaw, targetPitch, headYaw, pitch float32) (float32, float32) {
+	yawOffset := clampFloat32(angleDifference(headYaw, targetYaw), -walkingGazeMaxYawOffset, walkingGazeMaxYawOffset)
+	minPitch := clampFloat32(targetPitch-walkingGazeMaxPitchOffset, -90, 90)
+	maxPitch := clampFloat32(targetPitch+walkingGazeMaxPitchOffset, -90, 90)
+	return normalizeYaw(targetYaw + yawOffset), clampFloat32(pitch, minPitch, maxPitch)
 }
 
 func (tc *TickContext) applyTrackedLookTarget() bool {

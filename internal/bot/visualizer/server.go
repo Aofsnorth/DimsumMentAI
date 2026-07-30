@@ -56,7 +56,6 @@ func StartServer(b *bot.Bot) {
 	go s.broadcastLoop()
 
 	go func() {
-		b.Logger.Info("Starting Visualizer server on :8080")
 		srv := &http.Server{
 			Addr:         ":8080",
 			Handler:      http.HandlerFunc(handler),
