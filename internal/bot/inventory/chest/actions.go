@@ -1,6 +1,8 @@
 package chest
 
 import (
+	"bedrock-ai/internal/bot/entity"
+	"bedrock-ai/internal/bot/rand"
 	"context"
 	"math"
 	"strings"
@@ -22,18 +24,30 @@ func (ic *Container) GiveItem(ctx context.Context, itemName string, playerName s
 		return false
 	}
 
+	// Roll the natural variation ONCE so the navigation standoff and the toss
+	// aim agree on whether this is a point-blank approach or a normal standoff.
+	approachRoll := float32(rand.Float64())
+	distanceRoll := float32(rand.Float64())
+	pitchRoll := float32(rand.Float64()*2 - 1) // [-1,1)
+
 	dist := ic.distance(botPos, playerPos)
-	if dist > 3.0 {
-		// Only walk closer when the player is genuinely far. The upward-pitch
-		// throw below reliably lands within ~4 blocks, so nearby players need
-		// no navigation at all. (The old 1.3-block tolerance frequently failed
-		// its path check and aborted the give even when the bot stood right
-		// next to the player.)
+	if dist > entity.DropStandoffDistance+0.5 {
+		// Walk to a standoff point a short distance from the recipient along the
+		// bot->player line, rather than to the player's own cell. A Bedrock item
+		// toss has a small initial velocity and short reach, so ending at a
+		// consistent close distance is what makes the arc land in the pickup
+		// radius. The distance carries a little human-like variation, and the
+		// bot sometimes walks right up for a point-blank drop.
+		standoff := entity.DropStandoffTargetNatural(
+			[3]float32{botPos.X(), botPos.Y(), botPos.Z()},
+			[3]float32{playerPos.X(), playerPos.Y(), playerPos.Z()},
+			approachRoll, distanceRoll,
+		)
 		ic.bot.NavigateToBlock(
-			int32(math.Floor(float64(playerPos.X()))),
-			int32(math.Floor(float64(playerPos.Y()))),
-			int32(math.Floor(float64(playerPos.Z()))),
-			2.0,
+			int32(math.Floor(float64(standoff[0]))),
+			int32(math.Floor(float64(standoff[1]))),
+			int32(math.Floor(float64(standoff[2]))),
+			1.0,
 		)
 		// Proceed as long as we're within throw range, regardless of whether
 		// navigation reported an exact "reached"; only abort if still too far.
@@ -48,34 +62,40 @@ func (ic *Container) GiveItem(ctx context.Context, itemName string, playerName s
 	// from the player.
 	ic.bot.StopMovement()
 
-	// Re-fetch position after stop (we may have stepped during nav).
+	// Re-fetch BOTH positions after navigation/stop. The recipient may have
+	// moved while we walked, and our own position certainly did — aiming with
+	// the pre-navigation snapshot is what made drops fly off to the side or
+	// land at the wrong distance. FindPlayer returns the latest tracked feet
+	// position.
 	botPos = ic.bot.GetCoords()
+	if _, refreshed, ok := ic.bot.FindPlayer(playerName); ok {
+		playerPos = refreshed
+	}
 	targetHead := playerPos.Add(mgl32.Vec3{0, 1.62, 0})
 
-	// LookAt pins IdleLookTargetType="block" with target=targetHead for 3s, so
-	// the movement loop will continuously interpolate yaw/pitch toward this
-	// point (eye-corrected via setLookTarget in control.go) until the drop
-	// transaction lands.
+	// LookAt pins IdleLookTargetType="block" with target=targetHead, so the
+	// movement loop keeps interpolating yaw/pitch toward this point until the
+	// drop transaction lands.
 	ic.bot.LookAt(targetHead)
 
-	// Compute the same yaw the look loop will converge to, then wait for the
-	// next PlayerAuthInput tick to actually transmit it. Bedrock drop direction
-	// comes from the last sent PlayerAuthInput.Yaw.
-	dx := targetHead.X() - botPos.X()
-	dz := targetHead.Z() - botPos.Z()
-	yaw := float32(math.Atan2(float64(dz), float64(dx))*180/math.Pi) - 90
-	for yaw < 0 {
-		yaw += 360
-	}
-	// Force-set both body yaw AND head yaw to the exact target FIRST, plus a slight
-	// upward pitch so the item arcs forward into the player's pickup radius.
-	// Using SetLookAngles pins the body Yaw (which Bedrock uses for drop direction)
-	// to the target instead of leaving it lagging behind HeadYaw.
-	ic.bot.SetLookAngles(yaw, -28)
+	// Compute yaw + distance/terrain-aware pitch from the refreshed positions.
+	// A cliff or gap beyond the recipient yields a gentle, short toss so the
+	// item can't sail into the void; nearer recipients get a flatter throw and
+	// farther ones a higher arc. Bedrock drop direction comes from the last
+	// sent PlayerAuthInput.Yaw, so we force-set and sync before dropping.
+	aim := entity.ComputeDropAimWithJitter(
+		ic.bot.GetLocalWorldModel(),
+		[3]float32{botPos.X(), botPos.Y(), botPos.Z()},
+		[3]float32{playerPos.X(), playerPos.Y(), playerPos.Z()},
+		pitchRoll,
+	)
+	yaw := aim.Yaw
+	ic.bot.SetLookAngles(yaw, aim.Pitch)
 	synced := ic.bot.WaitForYawSync(yaw, 800*time.Millisecond)
 	time.Sleep(120 * time.Millisecond)
 	ic.logger.Info("dropping item",
 		"target_yaw", yaw,
+		"target_pitch", aim.Pitch,
 		"target_player", playerName,
 		"yaw_synced", synced,
 		"bot_pos", botPos,
@@ -112,31 +132,12 @@ func (ic *Container) GiveItem(ctx context.Context, itemName string, playerName s
 		return false
 	}
 
-	// Give the server time to actually process the drop transaction and spawn
-	// the item entity BEFORE we start walking. If we navigate immediately,
-	// applyMoveLookTarget rotates the body yaw toward backPos within one tick
-	// and the server applies THAT yaw when spawning the drop — the item flies
-	// backward instead of toward the player.
-	time.Sleep(450 * time.Millisecond)
-
 	ic.logger.Info("Gave item successfully", "item", itemName, "count", count, "to", playerName)
 
-	// Step back a short distance so the dropped item ends up outside the
-	// bot's pickup radius. The look loop will swing yaw toward the new walk
-	// direction, but by now the drop transaction has already left.
-	yawWorldRad := float64(yaw+90) * math.Pi / 180
-	forwardX := float32(math.Cos(yawWorldRad))
-	forwardZ := float32(math.Sin(yawWorldRad))
-	backPos := mgl32.Vec3{
-		botPos.X() - forwardX*1.2,
-		botPos.Y(),
-		botPos.Z() - forwardZ*1.2,
-	}
-	ic.bot.NavigateTo(backPos)
-	time.Sleep(500 * time.Millisecond)
-	ic.bot.StopMovement()
-	// Release the forced upward look so the head returns to a neutral gaze
-	// instead of staying stuck pointing up after the toss.
+	// No backstep: the bot already stands one block farther than the recipient
+	// (see the standoff navigation above), so the tossed item lands in the
+	// recipient's pickup radius without the bot re-collecting it. Just release
+	// the forced upward look so the head returns to a neutral gaze.
 	ic.bot.ResetLook()
 	return true
 }

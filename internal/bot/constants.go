@@ -68,9 +68,6 @@ const (
 	// FloatEpsilon is the minimum distance threshold for movement calculations
 	FloatEpsilon = 0.001
 
-	// BackStepDistance is the distance to step back after dropping items
-	BackStepDistance = 1.2
-
 	// MinPlayerInteractDistance is the minimum distance before approaching player
 	MinPlayerInteractDistance = 2.0
 

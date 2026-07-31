@@ -7,71 +7,68 @@ import (
 	"github.com/sandertv/gophertunnel/minecraft/protocol/packet"
 )
 
-func TestBuildDropPacketsUsesAuthoritativeStackNetworkID(t *testing.T) {
+func TestBuildDropStackActionUsesAuthoritativeStackNetworkID(t *testing.T) {
 	t.Parallel()
 
 	item := dropTestItem(8, 73)
-	transaction, swing, dropped, err := buildDropPackets(99, 4, item, 3)
+	action, dropped, err := buildDropStackAction(4, item, 3)
 	if err != nil {
-		t.Fatalf("buildDropPackets() error = %v", err)
+		t.Fatalf("buildDropStackAction() error = %v", err)
 	}
 	if dropped != 3 {
 		t.Fatalf("dropped count = %d, want 3", dropped)
 	}
-	if len(transaction.Actions) != 2 {
-		t.Fatalf("action count = %d, want 2", len(transaction.Actions))
+	if action.Count != 3 {
+		t.Fatalf("action count = %d, want 3", action.Count)
 	}
-	if _, ok := transaction.TransactionData.(*protocol.NormalTransactionData); !ok {
-		t.Fatalf("transaction data = %T, want *protocol.NormalTransactionData", transaction.TransactionData)
+	if action.Source.StackNetworkID != 73 {
+		t.Fatalf("source stack network ID = %d, want 73", action.Source.StackNetworkID)
 	}
-
-	inventory := transaction.Actions[0]
-	if inventory.SourceType != protocol.InventoryActionSourceContainer || inventory.WindowID != protocol.WindowIDInventory || inventory.InventorySlot != 4 {
-		t.Fatalf("inventory action target = %+v", inventory)
+	if action.Source.Slot != 4 {
+		t.Fatalf("source slot = %d, want 4", action.Source.Slot)
 	}
-	if inventory.OldItem.StackNetworkID != 73 || inventory.OldItem.Stack.Count != 8 {
-		t.Fatalf("old item = %+v, want count 8 and stack ID 73", inventory.OldItem)
-	}
-	if inventory.NewItem.StackNetworkID != 73 || inventory.NewItem.Stack.Count != 5 {
-		t.Fatalf("new item = %+v, want count 5 and stack ID 73", inventory.NewItem)
-	}
-
-	world := transaction.Actions[1]
-	if world.SourceType != protocol.InventoryActionSourceWorld || world.SourceFlags != 1 {
-		t.Fatalf("world action source = %+v", world)
-	}
-	if world.NewItem.StackNetworkID != 73 || world.NewItem.Stack.Count != 3 {
-		t.Fatalf("dropped item = %+v, want count 3 and stack ID 73", world.NewItem)
-	}
-	if swing.ActionType != packet.AnimateActionSwingArm || swing.EntityRuntimeID != 99 || swing.SwingSource != packet.AnimateSwingSourceDropItem {
-		t.Fatalf("drop swing = %+v", swing)
+	if action.Randomly {
+		t.Fatal("drop action should not be marked Randomly")
 	}
 }
 
-func TestBuildDropPacketsClearsRemainderOnlyForFullDrop(t *testing.T) {
+func TestBuildDropStackActionDropsWholeStackForNonPositiveCount(t *testing.T) {
 	t.Parallel()
 
-	transaction, _, dropped, err := buildDropPackets(99, 4, dropTestItem(8, 73), 0)
+	action, dropped, err := buildDropStackAction(4, dropTestItem(8, 73), 0)
 	if err != nil {
-		t.Fatalf("buildDropPackets() error = %v", err)
+		t.Fatalf("buildDropStackAction() error = %v", err)
 	}
 	if dropped != 8 {
 		t.Fatalf("dropped count = %d, want 8", dropped)
 	}
-	remaining := transaction.Actions[0].NewItem
-	if remaining.Stack.Count != 0 || remaining.Stack.NetworkID != 0 || remaining.StackNetworkID != 0 {
-		t.Fatalf("full drop remainder = %+v, want empty item", remaining)
-	}
-	if droppedItem := transaction.Actions[1].NewItem; droppedItem.StackNetworkID != 73 || droppedItem.Stack.Count != 8 {
-		t.Fatalf("dropped item = %+v, want count 8 and stack ID 73", droppedItem)
+	if action.Count != 8 {
+		t.Fatalf("action count = %d, want 8", action.Count)
 	}
 }
 
-func TestBuildDropPacketsRejectsMissingAuthoritativeStackNetworkID(t *testing.T) {
+func TestBuildDropStackActionRejectsMissingAuthoritativeStackNetworkID(t *testing.T) {
 	t.Parallel()
 
-	if _, _, _, err := buildDropPackets(99, 4, dropTestItem(8, 0), 3); err == nil {
-		t.Fatal("buildDropPackets() accepted a missing stack network ID")
+	if _, _, err := buildDropStackAction(4, dropTestItem(8, 0), 3); err == nil {
+		t.Fatal("buildDropStackAction() accepted a missing stack network ID")
+	}
+}
+
+func TestBuildDropStackActionRejectsEmptyStack(t *testing.T) {
+	t.Parallel()
+
+	if _, _, err := buildDropStackAction(4, dropTestItem(0, 73), 3); err == nil {
+		t.Fatal("buildDropStackAction() accepted an empty stack")
+	}
+}
+
+func TestBuildDropSwingUsesDropItemSource(t *testing.T) {
+	t.Parallel()
+
+	swing := buildDropSwing(99)
+	if swing.ActionType != packet.AnimateActionSwingArm || swing.EntityRuntimeID != 99 || swing.SwingSource != packet.AnimateSwingSourceDropItem {
+		t.Fatalf("drop swing = %+v", swing)
 	}
 }
 

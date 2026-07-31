@@ -215,10 +215,17 @@ func NavigateToBlock(b *bot.Bot, x, y, z int32, tolerance float32) bool {
 	}
 	b.WalkTo(target)
 
-	// Tight wait loop: 15 × 100ms = 1.5s max. Anything longer means the bot
-	// isn't actually making progress; let the caller move on.
-	for i := 0; i < 15; i++ {
-		time.Sleep(100 * time.Millisecond)
+	// Wait while the bot is actually making progress toward the block. A blind
+	// time cap made long walks (e.g. crossing to a distant player) report
+	// failure while the bot was still legitimately pathing, which aborted the
+	// caller mid-journey. Instead, keep waiting as long as the distance keeps
+	// shrinking (progress) or the path is still alive, and only give up when
+	// the bot genuinely stalls (no measurable progress for several polls) or
+	// the path finishes without reaching tolerance.
+	lastDist := float32(math.MaxFloat32)
+	stalledPolls := 0
+	for i := 0; i < navMaxPolls; i++ {
+		time.Sleep(navPollInterval)
 		b.Mu.Lock()
 		curPos := b.Pos
 		mState := b.MovementState
@@ -229,14 +236,61 @@ func NavigateToBlock(b *bot.Bot, x, y, z int32, tolerance float32) bool {
 		dy := curPos.Y() - block.Y()
 		dz := curPos.Z() - block.Z()
 		dist := float32(math.Sqrt(float64(dx*dx + dy*dy + dz*dz)))
-		if dist <= tolerance {
-			return true
-		}
-		if mState == "idle" || (mState == "walk_to" && !hasPath) {
-			break
+
+		decision := evaluateNavProgress(dist, lastDist, tolerance, stalledPolls, mState, hasPath)
+		stalledPolls = decision.stalledPolls
+		lastDist = dist
+		if decision.done {
+			return decision.reached
 		}
 	}
 	return false
+}
+
+const (
+	navPollInterval    = 100 * time.Millisecond
+	navMaxPolls        = 200 // hard ceiling (~20s) so we never hang forever
+	navStallPollsLimit = 15  // ~1.5s with no measurable progress = stuck
+	navProgressEpsilon = 0.05
+)
+
+// navProgressDecision is the outcome of a single navigation poll.
+type navProgressDecision struct {
+	done         bool
+	reached      bool
+	stalledPolls int
+}
+
+// evaluateNavProgress decides whether a navigation wait loop should stop, based
+// on the current distance to the target, the previous distance, the caller's
+// tolerance, the running stall counter, and the movement state. It is pure so
+// the progress/stall policy can be unit tested without a live bot.
+//
+//   - Reaches tolerance -> done, reached.
+//   - Path finished or bot idle while still outside tolerance -> done, not reached.
+//   - No measurable progress for navStallPollsLimit polls -> done, not reached.
+//   - Otherwise -> keep waiting, with an updated stall counter.
+func evaluateNavProgress(dist, lastDist, tolerance float32, stalledPolls int, mState string, hasPath bool) navProgressDecision {
+	if dist <= tolerance {
+		return navProgressDecision{done: true, reached: true, stalledPolls: stalledPolls}
+	}
+
+	if lastDist-dist > navProgressEpsilon {
+		stalledPolls = 0
+	} else {
+		stalledPolls++
+	}
+
+	// Path finished (arrived at path end) but we're still outside the caller's
+	// tolerance, or the bot went idle: nothing more to wait for.
+	if mState == "idle" || (mState == "walk_to" && !hasPath) {
+		return navProgressDecision{done: true, reached: false, stalledPolls: stalledPolls}
+	}
+	// Genuinely stuck: making no progress despite an active path.
+	if stalledPolls >= navStallPollsLimit {
+		return navProgressDecision{done: true, reached: false, stalledPolls: stalledPolls}
+	}
+	return navProgressDecision{done: false, reached: false, stalledPolls: stalledPolls}
 }
 
 func nearestStandableNode(b *bot.Bot, start, target pathfinder.Node, radius int32) (pathfinder.Node, bool) {

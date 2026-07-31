@@ -40,16 +40,28 @@ func (b *Bot) DropItem(name string, count int) error {
 	item := protocol.ItemInstance{StackNetworkID: b.StackNetworkIDs[targetSlot], Stack: foundItem}
 	b.Mu.Unlock()
 
-	transaction, swing, dropped, err := buildDropPackets(b.Conn.GameData().EntityRuntimeID, targetSlot, item, count)
+	action, dropped, err := buildDropStackAction(targetSlot, item, count)
 	if err != nil {
 		return fmt.Errorf("drop %q from inventory slot %d: %w", name, targetSlot, err)
 	}
-	if err := b.Conn.WritePacket(transaction); err != nil {
-		return fmt.Errorf("drop %d %q from inventory slot %d: send transaction: %w", dropped, name, targetSlot, err)
+
+	// Face-direction swing for viewers, then the authoritative drop request.
+	if err := b.Conn.WritePacket(buildDropSwing(b.Conn.GameData().EntityRuntimeID)); err != nil {
+		return fmt.Errorf("drop %d %q: send drop swing: %w", dropped, name, err)
 	}
-	if err := b.Conn.WritePacket(swing); err != nil {
-		return fmt.Errorf("drop transaction sent for %d %q from inventory slot %d, but send drop swing: %w", dropped, name, targetSlot, err)
+
+	// Use the same request/response machinery as crafting so the server spawns
+	// the item along the player's look direction and returns an authoritative
+	// inventory update. This keeps drop direction/strength consistent and
+	// avoids optimistic local mutation.
+	requestID, resultCh := b.beginStackRequest(0)
+	if _, err := b.sendStackRequest(requestID, resultCh, []protocol.StackRequestAction{action}, name); err != nil {
+		return fmt.Errorf("drop %d %q from inventory slot %d: %w", dropped, name, targetSlot, err)
 	}
+
+	// The authoritative ItemStackResponse updates InventoryMap/StackNetworkIDs
+	// via applyItemStackResponse and drives syncHeldEquipmentIfUpdated, so the
+	// held-item visual clears without any local guessing.
 	return nil
 }
 

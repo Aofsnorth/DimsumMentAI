@@ -104,10 +104,29 @@ func handleMoveActorDelta(b *bot.Bot, pk packet.Packet) bool {
 	p := pk.(*packet.MoveActorDelta)
 	b.Mu.Lock()
 	if act, ok := b.Actors[p.EntityRuntimeID]; ok {
-		mergeActorDeltaPosition(act, p)
+		act.Position = mergeMoveActorDeltaPosition(act.Position, p.Position, p.Flags)
 	}
 	b.Mu.Unlock()
 	return true
+}
+
+// mergeMoveActorDeltaPosition applies only the axes flagged as present in a
+// MoveActorDelta packet. As of Bedrock 1.16.100 the packet zeroes any axis it
+// does not carry, so blindly assigning the whole vector teleports entities to a
+// zeroed coordinate and breaks position-dependent logic such as combat target
+// selection and grounded visibility.
+func mergeMoveActorDeltaPosition(current, incoming mgl32.Vec3, flags uint16) mgl32.Vec3 {
+	merged := current
+	if flags&packet.MoveActorDeltaFlagHasX != 0 {
+		merged[0] = incoming[0]
+	}
+	if flags&packet.MoveActorDeltaFlagHasY != 0 {
+		merged[1] = incoming[1]
+	}
+	if flags&packet.MoveActorDeltaFlagHasZ != 0 {
+		merged[2] = incoming[2]
+	}
+	return merged
 }
 
 // mergeActorDeltaPosition applies only axes flagged present in the delta
