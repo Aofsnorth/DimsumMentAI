@@ -34,6 +34,41 @@ func snapshotIngredientSources(inventory map[uint32]protocol.ItemStack, picks []
 	return sources
 }
 
+// snapshotIngredientSourcesFromRecipe builds ingredient source snapshots from
+// the recipe's ingredient descriptors rather than from pick plans, for use with
+// AutoCraft where we don't plan individual grid placements.
+func snapshotIngredientSourcesFromRecipe(inv map[uint32]protocol.ItemStack, names map[int32]string, ingredients []protocol.ItemDescriptorCount, crafts int) map[uint32]ingredientSourceSnapshot {
+	sources := make(map[uint32]ingredientSourceSnapshot)
+	for _, ing := range ingredients {
+		targetName, networkID := resolveIngredientIdentity(ing.Descriptor, names)
+		if targetName == "" && networkID == 0 {
+			continue
+		}
+		needed := int(ing.Count) * crafts
+		for slot, item := range inv {
+			if item.Count <= 0 {
+				continue
+			}
+			itemName := names[item.NetworkID]
+			matched := false
+			if targetName != "" {
+				matched = itemName != "" && itemNameMatches(itemName, targetName)
+			} else {
+				matched = item.NetworkID == safecast.To[int32](networkID)
+			}
+			if !matched {
+				continue
+			}
+			if _, exists := sources[slot]; exists {
+				continue
+			}
+			sources[slot] = ingredientSourceSnapshot{stack: item, consumed: needed}
+			break
+		}
+	}
+	return sources
+}
+
 // reconcileCraftIngredientCounts repairs missing client-side predictions after
 // an accepted craft. ItemStackResponse remains authoritative: counts already at
 // or below the expected value are preserved.

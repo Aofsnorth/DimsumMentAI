@@ -216,8 +216,23 @@ func craftChainWithState(ctx context.Context, b *bot.Bot, user, itemName string,
 		"crafts", crafts,
 		"depth", depth,
 	)
-	if err := state.craft(b, recipeID, crafts); err != nil {
-		return 0, err
+	if recipeNeedsCraftingBench(recipe) {
+		mgr := b.InventoryMgr.Crafting()
+		pos, ok := mgr.EnsureCraftingTable(ctx)
+		if !ok {
+			return 0, fmt.Errorf("tidak bisa menemukan atau menaruh crafting table untuk craft %s", itemName)
+		}
+		if err := mgr.OpenCraftingTable(ctx, pos); err != nil {
+			return 0, fmt.Errorf("gagal membuka crafting table: %w", err)
+		}
+		defer mgr.CloseWindow()
+		if err := b.CraftItemOnTable(recipeID, crafts); err != nil {
+			return 0, err
+		}
+	} else {
+		if err := state.craft(b, recipeID, crafts); err != nil {
+			return 0, err
+		}
 	}
 	actual := outputPerCraft * crafts
 	if actual > bot.MaxStackSize {

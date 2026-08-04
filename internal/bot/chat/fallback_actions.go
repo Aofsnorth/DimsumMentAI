@@ -135,7 +135,9 @@ func inferActionIntent(msg, reply string) []action.Step {
 	}
 
 	count := 1
-	if m := countRegex.FindString(lower); m != "" {
+	if containsAny(lower, "semua", "semuanya", "all") {
+		count = 0
+	} else if m := countRegex.FindString(lower); m != "" {
 		_, _ = fmt.Sscanf(m, "%d", &count)
 	}
 

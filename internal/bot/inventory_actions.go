@@ -301,6 +301,98 @@ func (b *Bot) CraftItem(recipeNetID uint32, count int) error {
 	return nil
 }
 
+// CraftItemOnTable crafts a 3×3 (or any crafting_table-requiring) recipe using
+// the AutoCraft protocol action. The crafting_table window must already be open
+// (via crafting.Manager.OpenCraftingTable). Unlike CraftItem, this does NOT
+// manually fill the grid — the server pulls ingredients from inventory and
+// crafting input automatically.
+func (b *Bot) CraftItemOnTable(recipeNetID uint32, count int) error {
+	b.craftMu.Lock()
+	defer b.craftMu.Unlock()
+
+	if count <= 0 {
+		count = 1
+	}
+	if count > MaxStackSize {
+		return fmt.Errorf("cannot craft %d times in one request", count)
+	}
+
+	b.Mu.Lock()
+	recipe, ok := b.RecipesByNetID[recipeNetID]
+	if !ok {
+		b.Mu.Unlock()
+		return fmt.Errorf("recipe %d not in cache (waiting for CraftingData)", recipeNetID)
+	}
+	itemName := b.ItemNames[recipe.Output.NetworkID]
+	ingredientSources := snapshotIngredientSourcesFromRecipe(b.InventoryMap, b.ItemNames, recipe.Ingredients, count)
+	b.Mu.Unlock()
+
+	outputCount := int(recipe.Output.Count) * count
+	if outputCount <= 0 || outputCount > MaxStackSize {
+		return fmt.Errorf("crafted output count %d is unsupported", outputCount)
+	}
+
+	b.Logger.Info("CraftItemOnTable auto-craft",
+		"recipeNetID", recipeNetID,
+		"item", itemName,
+		"count", count,
+		"ingredientCount", len(recipe.Ingredients),
+	)
+
+	b.Mu.Lock()
+	outputSlot, hasOutputSlot := findFirstEmptyPlayerSlot(b.InventoryMap)
+	b.Mu.Unlock()
+	if !hasOutputSlot {
+		return fmt.Errorf("inventory full, cannot place crafted output")
+	}
+
+	resultItem := recipe.Output
+	resultItem.Count = safecast.To[uint16](outputCount)
+
+	actions := []protocol.StackRequestAction{
+		&protocol.AutoCraftRecipeStackRequestAction{
+			RecipeNetworkID: recipeNetID,
+			NumberOfCrafts:  byte(count),
+			TimesCrafted:    byte(count),
+			Ingredients:     recipe.Ingredients,
+		},
+		&protocol.CraftResultsDeprecatedStackRequestAction{
+			ResultItems:  []protocol.ItemStack{resultItem},
+			TimesCrafted: byte(count),
+		},
+	}
+
+	requestID, resultCh := b.beginStackRequest(recipe.Output.NetworkID)
+	placeAction := &protocol.PlaceStackRequestAction{}
+	placeAction.Count = byte(outputCount)
+	placeAction.Source = protocol.StackRequestSlotInfo{
+		Container:      protocol.FullContainerName{ContainerID: protocol.ContainerCreatedOutput},
+		Slot:           CreatedOutputSlot,
+		StackNetworkID: requestID,
+	}
+	placeAction.Destination = protocol.StackRequestSlotInfo{
+		Container: protocol.FullContainerName{ContainerID: protocol.ContainerCombinedHotBarAndInventory},
+		Slot:      byte(outputSlot),
+	}
+	actions = append(actions, placeAction)
+
+	if _, err := b.sendStackRequest(requestID, resultCh, actions, itemName); err != nil {
+		return fmt.Errorf("auto-craft %s: %w", itemName, err)
+	}
+
+	b.Mu.Lock()
+	reconcileCraftIngredientCounts(b.InventoryMap, b.StackNetworkIDs, ingredientSources)
+	b.Mu.Unlock()
+
+	b.Logger.Info("CraftItemOnTable accepted",
+		"recipeNetID", recipeNetID,
+		"item", itemName,
+		"count", count,
+		"inventory", b.GetInventorySummary(),
+	)
+	return nil
+}
+
 func validatePersonalCraftRecipe(recipe RecipeInfo) error {
 	if recipe.Block != "" && recipe.Block != "crafting_table" {
 		return fmt.Errorf("recipe requires unsupported crafting block %s", recipe.Block)
