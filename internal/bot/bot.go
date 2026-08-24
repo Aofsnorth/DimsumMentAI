@@ -110,12 +110,7 @@ type Bot struct {
 	Planner   PlannerInterface
 
 	// Player Tracking
-	PlayerEntityIDs map[string]uint64
-	PlayerUsernames map[uint64]string
-	PlayerPositions map[uint64]mgl32.Vec3
-	PlayerYaws      map[uint64]float32
-	PlayerPitches   map[uint64]float32
-	PlayerUUIDs     map[uuid.UUID]string
+	PlayerTracker
 
 	// Actor Tracking
 	Actors              map[uint64]*entity.Info
@@ -228,6 +223,33 @@ type Bot struct {
 	LastSentInputPitch  float32
 	MovementSyncPending bool // send ClientMovementPredictionSync after next correction
 	ScaffoldingActive   bool
+}
+
+// PlayerTracker holds the player position, orientation, name, and UUID maps
+// the bot maintains from AddPlayer/MovePlayer/RemoveActor/PlayerList packets.
+// It is embedded in Bot so the existing b.PlayerEntityIDs / b.PlayerPositions
+// (etc.) accesses keep working via field promotion; grouping the six maps here
+// is the first step of breaking up the Bot god-object by cohesive state.
+type PlayerTracker struct {
+	PlayerEntityIDs map[string]uint64
+	PlayerUsernames map[uint64]string
+	PlayerPositions map[uint64]mgl32.Vec3
+	PlayerYaws      map[uint64]float32
+	PlayerPitches   map[uint64]float32
+	PlayerUUIDs     map[uuid.UUID]string
+}
+
+// NewPlayerTracker returns a PlayerTracker with all six maps initialized to
+// empty, ready for population by the network handlers.
+func NewPlayerTracker() PlayerTracker {
+	return PlayerTracker{
+		PlayerEntityIDs: make(map[string]uint64),
+		PlayerUsernames: make(map[uint64]string),
+		PlayerPositions: make(map[uint64]mgl32.Vec3),
+		PlayerYaws:      make(map[uint64]float32),
+		PlayerPitches:   make(map[uint64]float32),
+		PlayerUUIDs:     make(map[uuid.UUID]string),
+	}
 }
 
 // pendingCraft tracks a single in-flight item stack request. The response
@@ -349,12 +371,7 @@ type DialerFunc func() (*minecraft.Conn, error)
 
 func newBot(opts ...Option) (*Bot, error) {
 	b := &Bot{
-		PlayerEntityIDs:     make(map[string]uint64),
-		PlayerUsernames:     make(map[uint64]string),
-		PlayerPositions:     make(map[uint64]mgl32.Vec3),
-		PlayerYaws:          make(map[uint64]float32),
-		PlayerPitches:       make(map[uint64]float32),
-		PlayerUUIDs:         make(map[uuid.UUID]string),
+		PlayerTracker:       NewPlayerTracker(),
 		RecentBotMessages:   make(map[string]time.Time),
 		MovementState:       "idle",
 		TargetTolerance:     2.0,
