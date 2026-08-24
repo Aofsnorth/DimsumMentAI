@@ -228,17 +228,27 @@ type craftStaging struct {
 	itemName           string
 }
 
-// stageCraftIngredient moves one ingredient from its inventory slot into the
-// crafting grid (inventory -> cursor -> crafting input), updating staging so a
-// later rejection can roll the partially-filled grid back. This is the body of
-// the former CraftItem staging loop, extracted verbatim to lower its cyclomatic
-// complexity without changing behavior.
+// stageCraftIngredient stages one ingredient (inventory -> cursor -> crafting
+// input). It delegates the take and place phases to dedicated methods so each
+// stays under the maintainability complexity gate; on rejection either phase
+// rolls the partially-filled grid back via restoreCraftingGrid.
 func (b *Bot) stageCraftIngredient(recipe RecipeInfo, pick ingredientPick, s *craftStaging) error {
 	gridSlot, err := craftingGridSlot(recipe, pick.ingredientIndex)
 	if err != nil {
 		return err
 	}
+	cursorStackID, err := b.takeIngredientToCursor(pick, s)
+	if err != nil {
+		return err
+	}
+	return b.placeIngredientOnGrid(pick, s, gridSlot, cursorStackID)
+}
 
+// takeIngredientToCursor moves pick.count items from the ingredient's inventory
+// slot onto the cursor and records the authoritative stack ID for later place
+// requests. Returns the cursor stack ID, falling back to the take request ID
+// when the server does not assign one.
+func (b *Bot) takeIngredientToCursor(pick ingredientPick, s *craftStaging) (int32, error) {
 	stackNetworkID := s.predictedSourceIDs[pick.slot]
 	if stackNetworkID == 0 {
 		b.Mu.Lock()
@@ -246,7 +256,7 @@ func (b *Bot) stageCraftIngredient(recipe RecipeInfo, pick ingredientPick, s *cr
 		b.Mu.Unlock()
 	}
 	if stackNetworkID == 0 {
-		return fmt.Errorf("cannot craft: slot %d has invalid StackNetworkID (0)", pick.slot)
+		return 0, fmt.Errorf("cannot craft: slot %d has invalid StackNetworkID (0)", pick.slot)
 	}
 
 	source := playerStackRequestSlot(pick.slot, stackNetworkID)
@@ -256,10 +266,10 @@ func (b *Bot) stageCraftIngredient(recipe RecipeInfo, pick ingredientPick, s *cr
 	if err != nil {
 		if errors.Is(err, errStackRequestRejected) && len(s.stagedIngredients) > 0 {
 			if restoreErr := b.restoreCraftingGrid(s.stagedIngredients, s.gridInputs, s.gridInputIndexes, s.itemName); restoreErr != nil {
-				return fmt.Errorf("take ingredient from slot %d: %w; restore crafting grid: %v", pick.slot, err, restoreErr)
+				return 0, fmt.Errorf("take ingredient from slot %d: %w; restore crafting grid: %v", pick.slot, err, restoreErr)
 			}
 		}
-		return fmt.Errorf("take ingredient from slot %d: %w", pick.slot, err)
+		return 0, fmt.Errorf("take ingredient from slot %d: %w", pick.slot, err)
 	}
 	s.predictedSourceIDs[pick.slot] = takeResult.stackNetworkID(source.Container.ContainerID, source.Slot)
 	if s.predictedSourceIDs[pick.slot] == 0 {
@@ -270,6 +280,13 @@ func (b *Bot) stageCraftIngredient(recipe RecipeInfo, pick ingredientPick, s *cr
 	if cursorStackID == 0 {
 		cursorStackID = takeID
 	}
+	return cursorStackID, nil
+}
+
+// placeIngredientOnGrid moves the cursor stack into the crafting input slot,
+// merging with an existing grid stack when present, and records the staged
+// ingredient so a later rejection can roll it back.
+func (b *Bot) placeIngredientOnGrid(pick ingredientPick, s *craftStaging, gridSlot byte, cursorStackID int32) error {
 	destinationStackID := int32(0)
 	if index, exists := s.gridInputIndexes[gridSlot]; exists {
 		destinationStackID = s.gridInputs[index].stackNetworkID
