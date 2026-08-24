@@ -1,32 +1,10 @@
 package coordinator
 
-import (
-	"bedrock-ai/internal/bot/entity"
-	"bedrock-ai/internal/event"
+import "bedrock-ai/internal/bot/building/common"
 
-	"github.com/go-gl/mathgl/mgl32"
-	"github.com/sandertv/gophertunnel/minecraft/protocol"
-	"github.com/sandertv/gophertunnel/minecraft/protocol/packet"
-)
-
-// BotInterface defines the methods required by the building subsystem from the main Bot struct.
-type BotInterface interface {
-	GetCoords() mgl32.Vec3
-	GetInventorySlots() map[uint32]protocol.ItemStack
-	GetItemNames() map[int32]string
-	GetEntities() map[uint64]*entity.Info
-	GetLocalWorldModel() entity.WorldModel
-	SendSafeChat(msg string)
-	ReportActionStatus(user string, status event.ActionStatus)
-	WritePacket(pk packet.Packet) error
-	GetHeldItemSlot() uint32
-	EquipItem(slot uint32) error
-	LookAt(pos mgl32.Vec3)
-	GetPlayerCoords(username string) (mgl32.Vec3, bool)
-	NavigateToBlock(x, y, z int32, tolerance float32) bool
-	CraftItem(recipeNetID uint32, count int) error
-	GetRecipes() map[string]uint32
-	GetEntityRuntimeID() uint64
-	DropItem(name string, count int) error
-	StopMovement()
-}
+// BotInterface is the contract the building coordinator needs from the main
+// Bot struct. It is the canonical definition shared across the building
+// subsystem in building/common — defining it again here would duplicate the
+// contract and let the two copies drift, so this alias re-exports the single
+// source of truth.
+type BotInterface = common.BotInterface
