@@ -2,6 +2,7 @@ package bot
 
 import (
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
@@ -71,33 +72,44 @@ func (b *Bot) ListCraftableItems(hasCraftingTable bool) []CraftableItem {
 	return result
 }
 
-// canCraftRecipe checks if bot has enough ingredients for a recipe.
+// canCraftRecipe reports whether the bot's inventory satisfies every ingredient
+// of recipe. It reuses the same identity resolution and name matching as the
+// authoritative crafting path (resolveIngredientIdentity + itemNameMatches, as
+// used by planIngredientConsumption) so the "craftable" list stays consistent
+// with what CraftItem will actually consume.
 func (b *Bot) canCraftRecipe(recipe RecipeInfo, inv map[uint32]protocol.ItemStack, names map[int32]string) (bool, string) {
 	needed := make(map[string]int)
 
 	for _, ing := range recipe.Ingredients {
-		// Count how many of this ingredient we need
 		count := int(ing.Count)
 		if count == 0 {
 			count = 1
 		}
 
-		// Find all items that match this descriptor
+		targetName, networkID := resolveIngredientIdentity(ing.Descriptor, names)
+		// Descriptors the bot cannot resolve (MoLang, complex alias) are left
+		// for the server to validate; treat them as satisfied here.
+		if targetName == "" && networkID == 0 {
+			continue
+		}
+
 		matched := false
 		for _, stack := range inv {
 			itemName := names[stack.NetworkID]
-			if matchesDescriptor(ing, itemName) {
-				if int(stack.Count) >= count {
-					matched = true
-					break
-				}
+			var ok bool
+			if targetName != "" {
+				ok = itemName != "" && itemNameMatches(itemName, targetName)
+			} else {
+				ok = stack.NetworkID == networkID
+			}
+			if ok && int(stack.Count) >= count {
+				matched = true
+				break
 			}
 		}
 
 		if !matched {
-			// Track missing ingredient
-			ingName := descriptorToName(ing, names)
-			needed[ingName] += count
+			needed[missingIngredientName(targetName, networkID, names)] += count
 		}
 	}
 
@@ -105,32 +117,24 @@ func (b *Bot) canCraftRecipe(recipe RecipeInfo, inv map[uint32]protocol.ItemStac
 		return true, ""
 	}
 
-	// Build missing string
+	// Build missing string. Use decimal formatting (strconv.Itoa) so counts
+	// of 10+ render correctly — the old string(rune('0'+count)) only worked
+	// for single digits.
 	var parts []string
 	for name, count := range needed {
-		parts = append(parts, name+" x"+string(rune('0'+count)))
+		parts = append(parts, name+" x"+strconv.Itoa(count))
 	}
 	return false, strings.Join(parts, ", ")
 }
 
-// matchesDescriptor checks if an item matches a recipe descriptor.
-// Uses ItemDescriptor type to match against actual inventory items.
-func matchesDescriptor(desc protocol.ItemDescriptorCount, itemName string) bool {
-	// TODO: Implement proper descriptor matching using desc.Type
-	// For now, use generic name matching until descriptor types are handled
-	// This should check desc.ItemID, desc.Metadata, desc.Tag based on desc.Type
-
-	// Fallback: always return false for now to avoid false positives
-	// Proper implementation needs:
-	// - ItemDescriptor.Type check (Default, MoLang, ItemTag, Deferred)
-	// - Match against NetworkID or Tag string
-	return false
-}
-
-// descriptorToName converts a descriptor to a readable name.
-// TODO: Implement proper descriptor→name mapping using desc fields
-func descriptorToName(desc protocol.ItemDescriptorCount, names map[int32]string) string {
-	// Proper implementation needs desc.Type check and field extraction
-	// For now return generic placeholder
+// missingIngredientName renders a human-readable name for an unmet ingredient
+// from the identity resolved by resolveIngredientIdentity.
+func missingIngredientName(targetName string, networkID int32, names map[int32]string) string {
+	if targetName != "" {
+		return FormatItemName(targetName)
+	}
+	if name := names[networkID]; name != "" {
+		return FormatItemName(name)
+	}
 	return "bahan_tidak_diketahui"
 }
