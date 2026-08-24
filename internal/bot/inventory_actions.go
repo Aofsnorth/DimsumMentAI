@@ -189,103 +189,140 @@ func (b *Bot) CraftItem(recipeNetID uint32, count int) error {
 	}
 	time.Sleep(InventoryOpenDelay)
 
-	gridInputs := make([]craftingGridInput, 0, len(picks))
-	gridInputIndexes := make(map[byte]int, len(picks))
-	predictedSourceIDs := make(map[uint32]int32, len(picks))
-	stagedIngredients := make([]stagedCraftIngredient, 0, len(picks))
+	staging := &craftStaging{
+		gridInputs:         make([]craftingGridInput, 0, len(picks)),
+		gridInputIndexes:   make(map[byte]int, len(picks)),
+		predictedSourceIDs: make(map[uint32]int32, len(picks)),
+		stagedIngredients:  make([]stagedCraftIngredient, 0, len(picks)),
+		itemNetworkIDs:     itemNetworkIDs,
+		itemName:           itemName,
+	}
 	for _, pick := range picks {
-		gridSlot, err := craftingGridSlot(recipe, pick.ingredientIndex)
-		if err != nil {
+		if err := b.stageCraftIngredient(recipe, pick, staging); err != nil {
 			return err
 		}
-
-		stackNetworkID := predictedSourceIDs[pick.slot]
-		if stackNetworkID == 0 {
-			b.Mu.Lock()
-			stackNetworkID = b.StackNetworkIDs[pick.slot]
-			b.Mu.Unlock()
-		}
-		if stackNetworkID == 0 {
-			return fmt.Errorf("cannot craft: slot %d has invalid StackNetworkID (0)", pick.slot)
-		}
-
-		source := playerStackRequestSlot(pick.slot, stackNetworkID)
-		take := buildTakeToCursorAction(source, pick.count)
-		takeID, takeCh := b.beginStackRequest(0)
-		takeResult, err := b.sendStackRequest(takeID, takeCh, []protocol.StackRequestAction{take}, itemName)
-		if err != nil {
-			if errors.Is(err, errStackRequestRejected) && len(stagedIngredients) > 0 {
-				if restoreErr := b.restoreCraftingGrid(stagedIngredients, gridInputs, gridInputIndexes, itemName); restoreErr != nil {
-					return fmt.Errorf("take ingredient from slot %d: %w; restore crafting grid: %v", pick.slot, err, restoreErr)
-				}
-			}
-			return fmt.Errorf("take ingredient from slot %d: %w", pick.slot, err)
-		}
-		predictedSourceIDs[pick.slot] = takeResult.stackNetworkID(source.Container.ContainerID, source.Slot)
-		if predictedSourceIDs[pick.slot] == 0 {
-			predictedSourceIDs[pick.slot] = takeID
-		}
-
-		cursorStackID := takeResult.stackNetworkID(protocol.ContainerCursor, 0)
-		if cursorStackID == 0 {
-			cursorStackID = takeID
-		}
-		destinationStackID := int32(0)
-		if index, exists := gridInputIndexes[gridSlot]; exists {
-			destinationStackID = gridInputs[index].stackNetworkID
-		}
-		place := buildPlaceCursorToCraftingAction(cursorStackID, gridSlot, destinationStackID, pick.count)
-		placeID, placeCh := b.beginStackRequest(0)
-		placeResult, err := b.sendStackRequest(placeID, placeCh, []protocol.StackRequestAction{place}, itemName)
-		if err != nil {
-			if errors.Is(err, errStackRequestRejected) {
-				if restoreErr := b.returnCursorToInventory(cursorStackID, pick.slot, pick.count, itemNetworkIDs[pick.slot], itemName); restoreErr != nil {
-					return fmt.Errorf("place ingredient in crafting slot %d: %w; restore cursor: %v", gridSlot, err, restoreErr)
-				}
-				if restoreErr := b.restoreCraftingGrid(stagedIngredients, gridInputs, gridInputIndexes, itemName); restoreErr != nil {
-					return fmt.Errorf("place ingredient in crafting slot %d: %w; restore crafting grid: %v", gridSlot, err, restoreErr)
-				}
-			}
-			return fmt.Errorf("place ingredient in crafting slot %d: %w", gridSlot, err)
-		}
-
-		gridStackID := placeResult.stackNetworkID(protocol.ContainerCraftingInput, gridSlot)
-		if gridStackID == 0 {
-			gridStackID = placeID
-		}
-		if index, exists := gridInputIndexes[gridSlot]; exists {
-			gridInputs[index].count += pick.count
-			gridInputs[index].stackNetworkID = gridStackID
-		} else {
-			gridInputIndexes[gridSlot] = len(gridInputs)
-			gridInputs = append(gridInputs, craftingGridInput{slot: gridSlot, count: pick.count, stackNetworkID: gridStackID})
-		}
-		stagedIngredients = append(stagedIngredients, stagedCraftIngredient{
-			sourceSlot:    pick.slot,
-			gridSlot:      gridSlot,
-			count:         pick.count,
-			itemNetworkID: itemNetworkIDs[pick.slot],
-		})
 	}
 
 	b.Mu.Lock()
 	outputSlot, hasOutputSlot := findFirstEmptyPlayerSlot(b.InventoryMap)
 	b.Mu.Unlock()
 	if !hasOutputSlot {
-		if restoreErr := b.restoreCraftingGrid(stagedIngredients, gridInputs, gridInputIndexes, itemName); restoreErr != nil {
+		if restoreErr := b.restoreCraftingGrid(staging.stagedIngredients, staging.gridInputs, staging.gridInputIndexes, staging.itemName); restoreErr != nil {
 			return fmt.Errorf("inventory full; restore crafting grid: %v", restoreErr)
 		}
 		return fmt.Errorf("inventory full, cannot place crafted output")
 	}
-	requestID, resultCh := b.beginStackRequest(recipe.Output.NetworkID)
-	actions := buildCraftActions(requestID, recipeNetID, recipe, count, gridInputs, outputSlot)
-	if _, err := b.sendStackRequest(requestID, resultCh, actions, itemName); err != nil {
-		if errors.Is(err, errStackRequestRejected) {
-			if restoreErr := b.restoreCraftingGrid(stagedIngredients, gridInputs, gridInputIndexes, itemName); restoreErr != nil {
-				return fmt.Errorf("craft %s: %w; restore crafting grid: %v", itemName, err, restoreErr)
+	return b.finalizeCraft(recipe, recipeNetID, count, outputSlot, ingredientSources, staging)
+}
+
+// craftStaging accumulates per-ingredient grid state while CraftItem fills the
+// crafting input. Extracting the staging loop body into stageCraftIngredient
+// keeps CraftItem a thin orchestrator and lets a later rejection roll the
+// partially-filled grid back via restoreCraftingGrid.
+type craftStaging struct {
+	gridInputs         []craftingGridInput
+	gridInputIndexes   map[byte]int
+	predictedSourceIDs map[uint32]int32
+	stagedIngredients  []stagedCraftIngredient
+	itemNetworkIDs     map[uint32]int32
+	itemName           string
+}
+
+// stageCraftIngredient moves one ingredient from its inventory slot into the
+// crafting grid (inventory -> cursor -> crafting input), updating staging so a
+// later rejection can roll the partially-filled grid back. This is the body of
+// the former CraftItem staging loop, extracted verbatim to lower its cyclomatic
+// complexity without changing behavior.
+func (b *Bot) stageCraftIngredient(recipe RecipeInfo, pick ingredientPick, s *craftStaging) error {
+	gridSlot, err := craftingGridSlot(recipe, pick.ingredientIndex)
+	if err != nil {
+		return err
+	}
+
+	stackNetworkID := s.predictedSourceIDs[pick.slot]
+	if stackNetworkID == 0 {
+		b.Mu.Lock()
+		stackNetworkID = b.StackNetworkIDs[pick.slot]
+		b.Mu.Unlock()
+	}
+	if stackNetworkID == 0 {
+		return fmt.Errorf("cannot craft: slot %d has invalid StackNetworkID (0)", pick.slot)
+	}
+
+	source := playerStackRequestSlot(pick.slot, stackNetworkID)
+	take := buildTakeToCursorAction(source, pick.count)
+	takeID, takeCh := b.beginStackRequest(0)
+	takeResult, err := b.sendStackRequest(takeID, takeCh, []protocol.StackRequestAction{take}, s.itemName)
+	if err != nil {
+		if errors.Is(err, errStackRequestRejected) && len(s.stagedIngredients) > 0 {
+			if restoreErr := b.restoreCraftingGrid(s.stagedIngredients, s.gridInputs, s.gridInputIndexes, s.itemName); restoreErr != nil {
+				return fmt.Errorf("take ingredient from slot %d: %w; restore crafting grid: %v", pick.slot, err, restoreErr)
 			}
 		}
-		return fmt.Errorf("craft %s: %w", itemName, err)
+		return fmt.Errorf("take ingredient from slot %d: %w", pick.slot, err)
+	}
+	s.predictedSourceIDs[pick.slot] = takeResult.stackNetworkID(source.Container.ContainerID, source.Slot)
+	if s.predictedSourceIDs[pick.slot] == 0 {
+		s.predictedSourceIDs[pick.slot] = takeID
+	}
+
+	cursorStackID := takeResult.stackNetworkID(protocol.ContainerCursor, 0)
+	if cursorStackID == 0 {
+		cursorStackID = takeID
+	}
+	destinationStackID := int32(0)
+	if index, exists := s.gridInputIndexes[gridSlot]; exists {
+		destinationStackID = s.gridInputs[index].stackNetworkID
+	}
+	place := buildPlaceCursorToCraftingAction(cursorStackID, gridSlot, destinationStackID, pick.count)
+	placeID, placeCh := b.beginStackRequest(0)
+	placeResult, err := b.sendStackRequest(placeID, placeCh, []protocol.StackRequestAction{place}, s.itemName)
+	if err != nil {
+		if errors.Is(err, errStackRequestRejected) {
+			if restoreErr := b.returnCursorToInventory(cursorStackID, pick.slot, pick.count, s.itemNetworkIDs[pick.slot], s.itemName); restoreErr != nil {
+				return fmt.Errorf("place ingredient in crafting slot %d: %w; restore cursor: %v", gridSlot, err, restoreErr)
+			}
+			if restoreErr := b.restoreCraftingGrid(s.stagedIngredients, s.gridInputs, s.gridInputIndexes, s.itemName); restoreErr != nil {
+				return fmt.Errorf("place ingredient in crafting slot %d: %w; restore crafting grid: %v", gridSlot, err, restoreErr)
+			}
+		}
+		return fmt.Errorf("place ingredient in crafting slot %d: %w", gridSlot, err)
+	}
+
+	gridStackID := placeResult.stackNetworkID(protocol.ContainerCraftingInput, gridSlot)
+	if gridStackID == 0 {
+		gridStackID = placeID
+	}
+	if index, exists := s.gridInputIndexes[gridSlot]; exists {
+		s.gridInputs[index].count += pick.count
+		s.gridInputs[index].stackNetworkID = gridStackID
+	} else {
+		s.gridInputIndexes[gridSlot] = len(s.gridInputs)
+		s.gridInputs = append(s.gridInputs, craftingGridInput{slot: gridSlot, count: pick.count, stackNetworkID: gridStackID})
+	}
+	s.stagedIngredients = append(s.stagedIngredients, stagedCraftIngredient{
+		sourceSlot:    pick.slot,
+		gridSlot:      gridSlot,
+		count:         pick.count,
+		itemNetworkID: s.itemNetworkIDs[pick.slot],
+	})
+	return nil
+}
+
+// finalizeCraft submits the craft request for the staged grid, reconciles the
+// inventory snapshot on success, and restores the partially-filled grid on
+// rejection. Extracted from CraftItem so the main function stays a thin
+// validate → stage → finalize orchestrator.
+func (b *Bot) finalizeCraft(recipe RecipeInfo, recipeNetID uint32, count int, outputSlot uint32, ingredientSources map[uint32]ingredientSourceSnapshot, s *craftStaging) error {
+	requestID, resultCh := b.beginStackRequest(recipe.Output.NetworkID)
+	actions := buildCraftActions(requestID, recipeNetID, recipe, count, s.gridInputs, outputSlot)
+	if _, err := b.sendStackRequest(requestID, resultCh, actions, s.itemName); err != nil {
+		if errors.Is(err, errStackRequestRejected) {
+			if restoreErr := b.restoreCraftingGrid(s.stagedIngredients, s.gridInputs, s.gridInputIndexes, s.itemName); restoreErr != nil {
+				return fmt.Errorf("craft %s: %w; restore crafting grid: %v", s.itemName, err, restoreErr)
+			}
+		}
+		return fmt.Errorf("craft %s: %w", s.itemName, err)
 	}
 
 	b.Mu.Lock()
@@ -294,7 +331,7 @@ func (b *Bot) CraftItem(recipeNetID uint32, count int) error {
 
 	b.Logger.Info("CraftItem accepted",
 		"recipeNetID", recipeNetID,
-		"item", itemName,
+		"item", s.itemName,
 		"count", count,
 		"inventory", b.GetInventorySummary(),
 	)
