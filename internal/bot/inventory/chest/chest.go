@@ -38,6 +38,7 @@ type Bot interface {
 	FindPlayer(username string) (uint64, mgl32.Vec3, bool)
 	SetLookAngles(yaw, pitch float32)
 	WaitForYawSync(targetYaw float32, timeout time.Duration) bool
+	AimAtPlayerForDrop(target string, pitch float32) (float32, bool)
 	OverrideLookPitch(pitch float32)
 	ResetLook()
 }

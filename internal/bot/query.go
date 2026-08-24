@@ -346,6 +346,71 @@ func (b *Bot) WaitForYawSync(targetYaw float32, timeout time.Duration) bool {
 	return false
 }
 
+// AimAtPlayerForDrop turns the bot to face a player and holds that bearing,
+// re-reading the player's LIVE position on every iteration so a player who is
+// walking around the bot is tracked right up to the instant of the drop.
+//
+// Why this exists: Bedrock derives a dropped item's direction from the yaw/pitch
+// of the bot's LAST PlayerAuthInput. The old drop flow computed the bearing once
+// and then pinned it through several hundred ms of fixed sleeps before dropping —
+// so if the player moved during that window (which they do constantly while
+// testing) the item flew toward where they used to be, scattering to the
+// back/left/right. This method instead loops: aim → confirm the server received
+// the yaw → re-check the player; it returns the moment the bot is genuinely
+// facing the player AND the player has stopped drifting. The caller MUST invoke
+// DropItem immediately after this returns — any extra delay reintroduces the
+// same staleness.
+//
+// pitch is the downward look angle to use (positive = looking down, which
+// shortens the toss so it lands at the player's feet). Returns the final aim yaw
+// and ok=false only if the player cannot be found at all.
+func (b *Bot) AimAtPlayerForDrop(target string, pitch float32) (float32, bool) {
+	var lastYaw float32
+	for i := 0; i < 12; i++ {
+		_, playerPos, ok := b.FindPlayer(target)
+		if !ok {
+			return lastYaw, i > 0
+		}
+
+		botPos := b.GetCoords()
+		dx := playerPos.X() - botPos.X()
+		dz := playerPos.Z() - botPos.Z()
+		if dx*dx+dz*dz < 0.0004 {
+			// Player is essentially on top of us — any horizontal yaw is fine.
+			b.Mu.Lock()
+			cur := b.Yaw
+			b.Mu.Unlock()
+			b.SetLookAngles(cur, pitch)
+			b.WaitForYawSync(cur, 200*time.Millisecond)
+			return cur, true
+		}
+
+		yaw := float32(math.Atan2(float64(dz), float64(dx))*180/math.Pi) - 90
+		for yaw < 0 {
+			yaw += 360
+		}
+		lastYaw = yaw
+
+		// Force the body yaw directly and wait for the next PlayerAuthInput to
+		// carry it to the server.
+		b.SetLookAngles(yaw, pitch)
+		b.WaitForYawSync(yaw, 300*time.Millisecond)
+
+		// Re-read the player. If they barely moved while we were turning, we are
+		// locked on — commit. Otherwise loop and re-aim at their new position.
+		_, newPos, ok2 := b.FindPlayer(target)
+		if !ok2 {
+			return yaw, true
+		}
+		movedSq := (newPos.X()-playerPos.X())*(newPos.X()-playerPos.X()) +
+			(newPos.Z()-playerPos.Z())*(newPos.Z()-playerPos.Z())
+		if movedSq < 0.25 { // < 0.5 block of horizontal drift since we aimed
+			return yaw, true
+		}
+	}
+	return lastYaw, true
+}
+
 func (b *Bot) playerApproachPosition(username string) (mgl32.Vec3, bool) {
 	_, pos, yaw, _, ok := b.FindPlayerView(username)
 	if !ok {
