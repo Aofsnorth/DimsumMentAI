@@ -14,6 +14,7 @@ func SupportedLabels() map[string]struct{} {
 		"equip", "give", "drop", "eat", "loot",
 		"gather", "mine", "automine", "clear", "scan",
 		"craft", "smelt", "store", "storeall", "take", "retrieve",
+		"readsign", "read_sign", "scan_chests",
 		"status", "inventory", "lookat", "look", "emote", "analyze",
 		// === MINEPAL PARITY: curated memory + named places ===
 		"remember", "recall", "memories", "forget",

@@ -537,6 +537,25 @@ func (i *Interactor) resolveNamedEntity(name string, botPos mgl32.Vec3) (Target,
 	return best, found
 }
 
+// ClickBlockAt clicks the block at an exact position. It is the entry point
+// for higher-level actions (open chest, read sign) that already know which
+// block they mean and must not be bitten by "in front" fallbacks: a named
+// wrong target would click the wrong thing entirely.
+func (i *Interactor) ClickBlockAt(ctx context.Context, pos protocol.BlockPos) (bool, string) {
+	name, ok := i.bot.GetBlockName(pos.X(), pos.Y(), pos.Z())
+	if !ok {
+		return false, "blok tidak termuat di cache dunia"
+	}
+	target := Target{
+		Kind:  KindBlock,
+		Name:  name,
+		Block: pos,
+		Pos:   blockAim(Target{Block: pos}),
+		Face:  BlockFaceToward(pos, i.bot.GetCoords()),
+	}
+	return i.interactBlock(ctx, target)
+}
+
 // resolveInFront picks whatever the bot is facing: an entity first (server
 // buttons and figures are entities far more often than blocks), then a block.
 func (i *Interactor) resolveInFront(botPos mgl32.Vec3, blocks []Target) (Target, bool) {

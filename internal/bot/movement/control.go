@@ -368,54 +368,90 @@ func (tc *TickContext) applyIdleLook() {
 	tc.B.Mu.Unlock()
 
 	if !nextChange.IsZero() && now.Before(nextChange) {
+		// Mid-fixation: a tracked target keeps being followed, because a person
+		// watches what they decided to look at rather than staring at where it
+		// used to be.
 		if targetType == "player" {
 			if pos, ok := tc.playerPositionByID(targetID); ok {
 				tc.setNaturalLookTarget(pos.Add(mgl32.Vec3{0, 1.62, 0}))
+				tc.applyMicroSaccade()
 				return
 			}
 		} else if targetType == "actor" {
 			if pos, ok := tc.actorPositionByID(targetID); ok {
 				tc.setNaturalLookTarget(pos.Add(mgl32.Vec3{0, 0.9, 0}))
+				tc.applyMicroSaccade()
 				return
 			}
 		} else if targetType == "block" {
 			tc.setLookTarget(targetPos)
+			tc.applyMicroSaccade()
 			return
 		} else {
 			tc.TargetYaw = targetYaw
-			tc.TargetPitch = targetPitch
+			tc.TargetPitch = gazePitchFloor(targetPitch)
+			tc.applyMicroSaccade()
 			return
 		}
 	}
 
-	roll := rand.Intn(100)
-	if roll < 45 {
+	// Start of a new fixation. A tracked target still wins when there is one:
+	// a person who notices another player looks at them, and looking at
+	// nothing else while someone walks past is the giveaway.
+	if roll := rand.Intn(100); roll < 45 {
 		if id, pos, ok := tc.nearestIdlePlayer(14); ok {
 			tc.setNaturalLookTarget(pos.Add(mgl32.Vec3{0, 1.62, 0}))
-			tc.storeIdleLook("player", id, mgl32.Vec3{}, now.Add(time.Duration(3+rand.Intn(5))*time.Second))
+			tc.storeIdleLook("player", id, mgl32.Vec3{}, now.Add(idleLookHold(float32(rand.Float64()))))
 			return
 		}
 	}
-	if roll < 75 {
+	if roll := rand.Intn(100); roll < 75 {
 		if id, pos, ok := tc.nearestIdleActor(12); ok {
 			tc.setNaturalLookTarget(pos.Add(mgl32.Vec3{0, 0.9, 0}))
-			tc.storeIdleLook("actor", id, mgl32.Vec3{}, now.Add(time.Duration(2+rand.Intn(4))*time.Second))
+			tc.storeIdleLook("actor", id, mgl32.Vec3{}, now.Add(idleLookHold(float32(rand.Float64()))))
 			return
 		}
 	}
-	if roll < 90 {
+	if roll := rand.Intn(100); roll < 88 {
 		if pos, ok := tc.randomIdleBlock(8); ok {
-			tc.setNaturalLookTarget(pos)
-			tc.storeIdleLook("block", 0, pos, now.Add(time.Duration(2+rand.Intn(4))*time.Second))
+			tc.setLookTarget(pos)
+			tc.storeIdleLook("block", 0, pos, now.Add(idleLookHold(float32(rand.Float64()))))
 			return
 		}
 	}
 
-	targetYaw = normalizeYaw(tc.Yaw + float32(rand.Intn(91)-45))
-	targetPitch = float32(rand.Intn(15) - 7)
-	tc.TargetYaw = targetYaw
-	tc.TargetPitch = targetPitch
-	tc.storeIdleLook("wander", 0, mgl32.Vec3{}, now.Add(time.Duration(2+rand.Intn(4))*time.Second))
+	// No target worth looking at: let the saccade model take the head. This is
+	// the path a bot takes when it is genuinely on its own, which is exactly
+	// when a human's idle eye movement is most visible.
+	sample := nextGazeSample(targetYaw, targetPitch)
+	tc.TargetYaw = normalizeYaw(targetYaw + sample.dYaw)
+	tc.TargetPitch = gazePitchFloor(targetPitch + sample.dPitch)
+	tc.storeIdleLook("wander", 0, mgl32.Vec3{}, now.Add(time.Duration(sample.sec*float32(time.Second))))
+}
+
+// applyMicroSaccade adds a small corrective offset to the current target. It
+// is what keeps a held gaze alive: without it the head holds a mathematically
+// exact angle for the whole fixation, which is the one thing a camera does and
+// a person does not.
+func (tc *TickContext) applyMicroSaccade() {
+	dYaw, dPitch := microSaccade()
+	if dYaw == 0 && dPitch == 0 {
+		return
+	}
+	tc.TargetYaw = normalizeYaw(tc.TargetYaw + dYaw)
+	tc.TargetPitch = gazePitchFloor(tc.TargetPitch + dPitch)
+}
+
+// idleLookHold converts a sampled fixation into a duration. Tracking a real
+// target (a person, a mob) holds attention longer than scanning empty air, so
+// the same skewed draw is used but scaled up a little.
+func idleLookHold(t float32) time.Duration {
+	sec := sampleFixation() * 1.4
+	if t < 0.2 {
+		// The occasional long look at a person who is actually interesting.
+		sec += 1.2
+	}
+	return time.Duration(sec * float32(time.Second))
 }
 
 func (tc *TickContext) setLookTarget(pos mgl32.Vec3) {

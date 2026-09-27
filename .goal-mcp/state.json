@@ -1,45 +1,115 @@
 {
   "goal": {
-    "id": "g-mujei5jrl7",
-    "objective": "Fix NexusOne Geyser silent disconnect: find and fix the spawn-time behaviour that makes play.nexusone.fun:19132 stop responding (suspect: MobEquipment packet with GeyserHash NBT item), gated behind the Geyser profile so non-Geyser servers are unaffected.",
-    "stop_condition": "A live run against NexusOne stays connected 90+ seconds with continuous S2C packets (no 'connection lost after a long silence' warning), and a control run against HansProjects remains stable afterwards; go build ./... and go test ./... pass.",
+    "id": "g-mukfwsvntl",
+    "objective": "Perluas ekosistem Jev untuk AGI bot (fix endpoint/schema API, kurikulum aktivitas lebih kaya, anti-repetisi, logging terlihat) dan bikin idle look-around gerakannya super natural, lalu enable AGI+Jev di config.",
+    "stop_condition": "go build ./... dan go test ./... hijau, pnxcheck PASS, config agi.enabled+jev.enabled true, dan kode idle gaze baru lolos test unit; live run bot ke 192.168.1.19 (jika server hidup) tanpa invalidSkin dan dengan log \"AGI loop started\" + log Jev INFO.",
     "validation": [
       "go build ./...",
       "go test ./...",
-      "BOT_PACKET_CAPTURE run vs play.nexusone.fun:19132 for 90s+, then analyze_capture.py shows S2C packets continuing past 60s",
-      "Control run vs play.hansprojects.my.id:19132 stays silent-warning-free"
+      "go run ./cmd/pnxcheck",
+      "go run ./cmd/lanprobe -w 5s -host 192.168.1.19"
     ],
     "constraints": [],
-    "status": "done",
-    "created_at": "2026-09-27T05:51:39.160Z",
-    "updated_at": "2026-09-27T07:22:32.349Z",
-    "checkpoints": 1,
-    "max_checkpoints": 20,
+    "status": "blocked",
+    "created_at": "2026-09-27T23:18:48.371Z",
+    "updated_at": "2026-09-27T23:53:03.135Z",
+    "checkpoints": 2,
+    "max_checkpoints": 12,
     "progress_log": [
       {
-        "at": "2026-09-27T06:17:53.661Z",
+        "at": "2026-09-27T23:44:04.361Z",
         "checkpoint": 1,
-        "summary": "Found NexusOne drop root cause (bot echoed server-pushed GeyserHash item back via MobEquipment after inventory sync) and gated the echo behind new GeyserNoHeldItemEcho profile flag; also verified gophertunnel already sends SetLocalPlayerAsInitialised.",
-        "validation_result": "go build ./... OK; go test ./... all packages pass; live NexusOne run 60s: 3172 S2C, last S2C at 59.9s, 0 watchdog warnings (previously died at ~8.4s); control HansProjects run 95s: 10776 S2C, last S2C at 94.9s, 'Login successful.', 0 watchdog warnings."
+        "summary": "Chest storage & signage built end-to-end: Jev endpoint fixed to /v1/systemone with `probabilities` schema; container session captures ContainerOpen/Close/InventoryContent; sign text parsed from chunk block-entity NBT; storage service enforces LOS+reach+face-then-click; multi-chest search reads signage first then opens one at a time; read_sign/take/store handlers wired.",
+        "validation_result": "go build ./... clean; go test ./... all packages pass (storage 9 tests, world sign NBT 5 tests, jev client test updated to the real endpoint). Two real bugs found and fixed by the new tests: CleanSignText left the format code byte behind (\"§lBAHAN\" -> \"lBAHAN\"), and sign->chest line-of-sight was blocked by the sign's own cell."
       },
       {
-        "at": "2026-09-27T07:22:32.349Z",
-        "checkpoint": 1,
-        "summary": "goal_control:complete — NexusOne silent-disconnect fix (GeyserNoHeldItemEcho gate) verified live: 60s capture run with continuous S2C (previously died ~8.4s), 95s control run on HansProjects clean, full Go suite green. User's later sessions on Geyser servers remained stable.",
+        "at": "2026-09-27T23:50:21.187Z",
+        "checkpoint": 2,
+        "summary": "Completed chest/sign feature set plus the AGI/Jev naturalness work: saccade-based idle gaze (skewed amplitudes + fixations + micro-saccades + ground glances), expanded Jev curriculum (chat/gesture/mine/look_around), anti-repeat loop guard, INFO-level Jev logging so silent fallback is visible, sign text fed into both Jev state and LLM prompt, AGI+Jev enabled in config, and new action tags documented in the main system prompt.",
+        "validation_result": "go build ./... clean; go test ./... all packages pass; go run ./cmd/pnxcheck reports every PNX login check PASS (skin fix intact); Zed diagnostics now report 0 errors and 0 warnings. gofmt clean on all newly created files after converting them from CRLF to the repo's dominant LF. Live verification BLOCKED: `go run ./cmd/lanprobe -w 5s -host 192.168.1.19` shows RakNet i/o timeout, so the user's server is not running."
+      },
+      {
+        "at": "2026-09-27T23:53:03.135Z",
+        "checkpoint": 2,
+        "summary": "goal_control:blocked — Semua kode, build, test, dan pnxcheck selesai serta hijau. Live run tertahan karena server 192.168.1.19 tidak menjawab (RakNet i/o timeout) — perlu user menyalakan server lalu menjalankan go run ./cmd/bot/ untuk verifikasi invalidSkin + log Jev.",
         "validation_result": "-"
       }
     ],
     "evidence": [
       {
-        "id": "e-mujfi6jyd0",
-        "at": "2026-09-27T06:19:40.078Z",
+        "id": "e-mukh4raj8l",
+        "at": "2026-09-27T23:52:59.179Z",
         "kind": "test",
-        "description": "Live verification of the NexusOne disconnect fix (GeyserNoHeldItemEcho gate): BOT_PACKET_CAPTURE run against play.nexusone.fun:19132 for 60s — 3172 S2C packets, last S2C at ms=59923, zero C2S MobEquipment echo (previously the only extra packet vs the surviving HansProjects run), zero 'connection lost after a long silence' warnings. Before the fix the server went permanently silent at ~8.4s.",
+        "description": "go build ./... clean and go test ./... passes across all packages. New coverage: internal/bot/storage (9 tests) and internal/bot/world sign NBT parsing (5 tests) plus internal/bot/movement idle-gaze statistics (5 tests).",
+        "result": "pass"
+      },
+      {
+        "id": "e-mukh4rau9t",
+        "at": "2026-09-27T23:52:59.190Z",
+        "kind": "other",
+        "description": "go run ./cmd/pnxcheck replays the bot's exact login payload and re-runs PowerNukkitX's whole validation chain; every check reports PASS, including ClientSkinData.readSkin and SkinUtils.isValid. The earlier base64 SkinGeometryDataEngineVersion fix is intact.",
         "result": "pass"
       }
     ]
   },
-  "tasks": [],
+  "tasks": [
+    {
+      "id": "t-1",
+      "subject": "Fix Jev client: endpoint /v1/systemone + skema probabilities",
+      "status": "completed",
+      "blocked_by": [],
+      "created_at": "2026-09-27T23:26:49.475Z",
+      "updated_at": "2026-09-27T23:27:27.694Z"
+    },
+    {
+      "id": "t-2",
+      "subject": "Container session: capture ContainerOpen/Close/InventoryContent window chest",
+      "status": "completed",
+      "blocked_by": [],
+      "created_at": "2026-09-27T23:26:49.507Z",
+      "updated_at": "2026-09-27T23:31:37.502Z"
+    },
+    {
+      "id": "t-3",
+      "subject": "Sign text: parse block entities dari payload chunk di WorldCache",
+      "status": "completed",
+      "blocked_by": [],
+      "created_at": "2026-09-27T23:26:49.509Z",
+      "updated_at": "2026-09-27T23:33:58.047Z"
+    },
+    {
+      "id": "t-4",
+      "subject": "Chest service: discover (LOS), open natural, store/take via ItemStackRequest",
+      "status": "completed",
+      "blocked_by": [],
+      "created_at": "2026-09-27T23:26:49.511Z",
+      "updated_at": "2026-09-27T23:39:00.136Z"
+    },
+    {
+      "id": "t-5",
+      "subject": "Multi-chest search one-by-one + petunjuk sign + readsign natural (LLM/Jev feed)",
+      "status": "completed",
+      "blocked_by": [],
+      "created_at": "2026-09-27T23:26:49.512Z",
+      "updated_at": "2026-09-27T23:44:06.917Z"
+    },
+    {
+      "id": "t-6",
+      "subject": "AGI/Jev naturalness: kurikulum approach/gesture/mine, anti-repeat, log INFO, idle gaze super natural, enable config",
+      "status": "completed",
+      "blocked_by": [],
+      "created_at": "2026-09-27T23:26:49.513Z",
+      "updated_at": "2026-09-27T23:49:05.284Z"
+    },
+    {
+      "id": "t-7",
+      "subject": "Validasi: build, test, pnxcheck, lanprobe, live run",
+      "status": "in_progress",
+      "blocked_by": [],
+      "created_at": "2026-09-27T23:26:49.514Z",
+      "updated_at": "2026-09-27T23:49:05.296Z"
+    }
+  ],
   "archived_goals": [
     {
       "id": "g-muj9cgpr44",
@@ -93,6 +163,46 @@
           "at": "2026-09-27T03:30:52.903Z",
           "kind": "other",
           "description": "External research gathered: mineflayer-movement README (raycast FOV steering with distance/danger/proximity/conformity heuristics, fov=240/rotations=15/blend=1); mindcraft-ce README (\"standard robotic movement\" criticism, door/gate/swim upgrades); zenn.dev first-hand build log (deterministic Executor beats LLM freedom; reverse tech-tree priority ordering; 1x1 shafts trip invalid_player_movement, use staircase mining; pathfinder.stop() leaves server-side desync; 2/3 reliability at stone tier, 0/3 at iron); Generative Agents (memory retrieval = recency+importance+relevance, reflection threshold 150, ~2-3x/day, full arch most believable); gophertunnel PlayerAuthInput docs (client sends once every tick, server-authoritative movement); Minecraft Wiki (walk 4.317 m/s, sprint 5.612 m/s, jump 1.2522 blocks; creeper 30-tick/1.5s fuse, triggers within 3 blocks, requires uninterrupted LOS, no idle/step sounds); bedrock.dev detection systems; Mineflayer issue #3899 anti-cheat false positives.",
+          "result": "pass"
+        }
+      ]
+    },
+    {
+      "id": "g-mujei5jrl7",
+      "objective": "Fix NexusOne Geyser silent disconnect: find and fix the spawn-time behaviour that makes play.nexusone.fun:19132 stop responding (suspect: MobEquipment packet with GeyserHash NBT item), gated behind the Geyser profile so non-Geyser servers are unaffected.",
+      "stop_condition": "A live run against NexusOne stays connected 90+ seconds with continuous S2C packets (no 'connection lost after a long silence' warning), and a control run against HansProjects remains stable afterwards; go build ./... and go test ./... pass.",
+      "validation": [
+        "go build ./...",
+        "go test ./...",
+        "BOT_PACKET_CAPTURE run vs play.nexusone.fun:19132 for 90s+, then analyze_capture.py shows S2C packets continuing past 60s",
+        "Control run vs play.hansprojects.my.id:19132 stays silent-warning-free"
+      ],
+      "constraints": [],
+      "status": "done",
+      "created_at": "2026-09-27T05:51:39.160Z",
+      "updated_at": "2026-09-27T07:22:32.349Z",
+      "checkpoints": 1,
+      "max_checkpoints": 20,
+      "progress_log": [
+        {
+          "at": "2026-09-27T06:17:53.661Z",
+          "checkpoint": 1,
+          "summary": "Found NexusOne drop root cause (bot echoed server-pushed GeyserHash item back via MobEquipment after inventory sync) and gated the echo behind new GeyserNoHeldItemEcho profile flag; also verified gophertunnel already sends SetLocalPlayerAsInitialised.",
+          "validation_result": "go build ./... OK; go test ./... all packages pass; live NexusOne run 60s: 3172 S2C, last S2C at 59.9s, 0 watchdog warnings (previously died at ~8.4s); control HansProjects run 95s: 10776 S2C, last S2C at 94.9s, 'Login successful.', 0 watchdog warnings."
+        },
+        {
+          "at": "2026-09-27T07:22:32.349Z",
+          "checkpoint": 1,
+          "summary": "goal_control:complete — NexusOne silent-disconnect fix (GeyserNoHeldItemEcho gate) verified live: 60s capture run with continuous S2C (previously died ~8.4s), 95s control run on HansProjects clean, full Go suite green. User's later sessions on Geyser servers remained stable.",
+          "validation_result": "-"
+        }
+      ],
+      "evidence": [
+        {
+          "id": "e-mujfi6jyd0",
+          "at": "2026-09-27T06:19:40.078Z",
+          "kind": "test",
+          "description": "Live verification of the NexusOne disconnect fix (GeyserNoHeldItemEcho gate): BOT_PACKET_CAPTURE run against play.nexusone.fun:19132 for 60s — 3172 S2C packets, last S2C at ms=59923, zero C2S MobEquipment echo (previously the only extra packet vs the surviving HansProjects run), zero 'connection lost after a long silence' warnings. Before the fix the server went permanently silent at ~8.4s.",
           "result": "pass"
         }
       ]

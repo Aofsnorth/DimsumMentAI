@@ -353,10 +353,11 @@ var actionHandlers = map[string]actionHandler{
 			b.Logger.Debug("smelt action complete", "success", success, "item", itemName)
 		}()
 	},
-	"store":    func(b *bot.Bot, param, _ string) { storeItem(b, param) },
-	"storeall": func(b *bot.Bot, param, _ string) { storeItem(b, param) },
-	"take":     handleTake,
-	"retrieve": handleTake,
+	// store/storeall/take/retrieve are registered in init() (storage_handlers.go
+	// via memory_handlers.go) so they share the labelled chest search. The old
+	// single-chest versions lived here and are gone: they opened an arbitrary
+	// chest from wherever the bot happened to be and reported success without
+	// the item ever moving.
 
 	// Low-level world interaction: click entities (players, NPCs, server
 	// buttons/figures) and block entities (doors, levers, chests, signs).

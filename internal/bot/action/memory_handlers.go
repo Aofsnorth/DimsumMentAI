@@ -18,6 +18,17 @@ import (
 )
 
 func init() {
+	// Storage and signage. take/store go through the labelled search so the
+	// bot opens chests one at a time, in the order the signage implies, and
+	// only from where it can actually see them.
+	actionHandlers["readsign"] = handleReadSign
+	actionHandlers["read_sign"] = handleReadSign
+	actionHandlers["take"] = handleTakeFromChest
+	actionHandlers["retrieve"] = handleTakeFromChest
+	actionHandlers["store"] = handleStoreInChest
+	actionHandlers["storeall"] = handleStoreInChest
+	actionHandlers["scan_chests"] = handleScanChests
+
 	actionHandlers["remember"] = handleRemember
 	actionHandlers["recall"] = handleRecall
 	actionHandlers["memories"] = handleRecall

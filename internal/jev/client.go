@@ -47,8 +47,11 @@ const DefaultEndpoint = "https://api.typesafe.ai"
 const DefaultModel = "jev-latest"
 
 // evaluatePath is where the request goes. Appended to a configured base URL
-// when it is not already there.
-const evaluatePath = "/evaluate"
+// when it is not already there. This is the native TypeSafe path; gateways
+// (Vercel AI Gateway, OpenRouter) mount the same body shape under their own
+// prefixes, so a configured base_url that already ends in a path is left alone
+// by New.
+const evaluatePath = "/v1/systemone"
 
 // defaultTimeout is the fallback when no timeout is configured.
 const defaultTimeout = 5 * time.Second
@@ -118,16 +121,21 @@ type Answer struct {
 	Score  *ScoreAnswer  `json:"score,omitempty"`
 }
 
-// ChoiceAnswer carries the winning option and the full distribution.
+// ChoiceAnswer carries the winning option and the full probability
+// distribution. The wire field is "probabilities" — the first client sent
+// "distribution", which decoded fine into an always-empty map and silently hid
+// every per-option probability.
 type ChoiceAnswer struct {
-	Choice       string             `json:"choice"`
-	Confidence   *float64           `json:"confidence,omitempty"`
-	Distribution map[string]float64 `json:"distribution,omitempty"`
+	Choice        string             `json:"choice"`
+	Confidence    *float64           `json:"confidence,omitempty"`
+	Probabilities map[string]float64 `json:"probabilities,omitempty"`
 }
 
 // ScoreAnswer is a position on the question's rubric.
 type ScoreAnswer struct {
-	Score float64 `json:"score"`
+	Score         float64            `json:"score"`
+	Confidence    *float64           `json:"confidence,omitempty"`
+	Probabilities map[string]float64 `json:"probabilities,omitempty"`
 }
 
 // Usage is what the call cost. Only input tokens are billed; output is free.
@@ -182,6 +190,22 @@ func New(endpoint, model, apiKey string) *Client {
 		httpClient: &http.Client{Timeout: defaultTimeout},
 		Available:  strings.TrimSpace(apiKey) != "",
 	}
+}
+
+// Endpoint reports the resolved base URL, for startup logging.
+func (c *Client) Endpoint() string {
+	if c == nil {
+		return ""
+	}
+	return c.endpoint
+}
+
+// ModelName reports the resolved model alias, for startup logging.
+func (c *Client) ModelName() string {
+	if c == nil {
+		return ""
+	}
+	return c.model
 }
 
 // SetTimeout bounds one evaluate call. Jev answers in tens to hundreds of

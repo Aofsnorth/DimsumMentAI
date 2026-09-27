@@ -34,3 +34,6 @@ data\bot_state.json
 .codex
 
 archive/
+
+# Bot runtime state (last position per session, changes every run)
+data/bot_state.json

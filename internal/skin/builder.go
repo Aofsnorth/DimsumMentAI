@@ -54,13 +54,16 @@ func BuildAssets(img *ImageData, geometryName string, armSize string, geometryDa
 
 	// --- login.ClientData (base64 encoded fields) ---
 	clientData := login.ClientData{
-		SkinID:              skinID,
-		SkinData:            b64(img.RGBA),
-		SkinImageHeight:     img.Height,
-		SkinImageWidth:      img.Width,
-		SkinResourcePatch:   b64(patchJSON),
-		SkinGeometry:        b64(geometryData),
-		SkinGeometryVersion: "1.12.0",
+		SkinID:            skinID,
+		SkinData:          b64(img.RGBA),
+		SkinImageHeight:   img.Height,
+		SkinImageWidth:    img.Width,
+		SkinResourcePatch: b64(patchJSON),
+		SkinGeometry:      b64(geometryData),
+		// PNX-family servers base64-decode this claim; the plain version
+		// string makes readSkin throw and the login is rejected with
+		// disconnectionScreen.invalidSkin.
+		SkinGeometryVersion: b64([]byte("1.12.0")),
 		SkinColour:          "#b37b62",
 		ArmSize:             armSize,
 		TrustedSkin:         true,

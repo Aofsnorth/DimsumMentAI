@@ -12,8 +12,13 @@ import (
 
 // TestEvaluateSendsTheDocumentedRequestShape pins the wire format. Jev is not
 // OpenAI-compatible, so the usual /chat/completions habit is wrong here: the
-// body is {state, model, questions} against /evaluate, and a bearer key in the
-// Authorization header.
+// body is {state, model, questions} against /v1/systemone, and a bearer key in
+// the Authorization header.
+//
+// The path matters more than it looks. The client used to post to "/evaluate",
+// which the real API answers with 404 — and because every failure path in the
+// AGI layer degrades quietly, that 404 made Jev look enabled while it was
+// never consulted at all. Pin the documented path so it cannot regress.
 func TestEvaluateSendsTheDocumentedRequestShape(t *testing.T) {
 	t.Parallel()
 
@@ -34,8 +39,8 @@ func TestEvaluateSendsTheDocumentedRequestShape(t *testing.T) {
 		t.Fatalf("Evaluate() error = %v", err)
 	}
 
-	if gotPath != "/evaluate" {
-		t.Errorf("posted to %q, want /evaluate", gotPath)
+	if gotPath != "/v1/systemone" {
+		t.Errorf("posted to %q, want /v1/systemone", gotPath)
 	}
 	if gotAuth != "Bearer sk-test" {
 		t.Errorf("Authorization = %q, want %q", gotAuth, "Bearer sk-test")

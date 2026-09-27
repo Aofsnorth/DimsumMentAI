@@ -148,6 +148,11 @@ type JevConfig struct {
 	// SpeakThreshold is the same for unprompted speech. Kept high because a
 	// companion that talks too easily is worse than one that stays quiet.
 	SpeakThreshold float64 `yaml:"speak_threshold"`
+	// EngageThreshold is where Jev's "should the bot be doing something" answer
+	// is read as engaged. It sits low by default: a bot that only bothers when
+	// it is certain to be busy ends up standing still, and stillness on its own
+	// is as robotic as constant motion.
+	EngageThreshold float64 `yaml:"engage_threshold"`
 	// TimeoutSec bounds one evaluate call. Short on purpose — Jev answers in tens
 	// to hundreds of milliseconds, so anything beyond a few seconds means
 	// something is wrong and the reflex layer should carry on without it.

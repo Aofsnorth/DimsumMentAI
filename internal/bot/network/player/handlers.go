@@ -2,6 +2,7 @@
 package player
 
 import (
+	"fmt"
 	"log/slog"
 
 	"bedrock-ai/internal/bot"
@@ -215,6 +216,12 @@ func handleInventoryContent(b *bot.Bot, pk packet.Packet) bool {
 	)
 	if isPlayerInv {
 		syncHeldEquipmentIfUpdated(b, applyInventoryContent(b, p))
+		return true
+	}
+	// A container the bot opened: feed the chest session so the action layer
+	// can read real contents instead of guessing.
+	if b.ContainerMatchesWindow(p.WindowID) {
+		b.ContainerContent(p.WindowID, p.Content)
 	}
 	return true
 }
@@ -235,7 +242,32 @@ func handleInventorySlot(b *bot.Bot, pk packet.Packet) bool {
 	)
 	if isPlayerInv {
 		syncHeldEquipmentIfUpdated(b, applyInventorySlot(b, p))
+		return true
 	}
+	if b.ContainerMatchesWindow(p.WindowID) {
+		b.ContainerSlot(p.WindowID, p.Slot, p.NewItem)
+	}
+	return true
+}
+
+// handleContainerOpen records the window the server assigned to the container
+// the bot just clicked. The chest session waits on this before reading items.
+func handleContainerOpen(b *bot.Bot, pk packet.Packet) bool {
+	p := pk.(*packet.ContainerOpen)
+	b.Logger.Info("container opened",
+		slog.Uint64("window_id", uint64(p.WindowID)),
+		slog.Uint64("container_type", uint64(p.ContainerType)),
+		slog.String("pos", fmt.Sprintf("%d,%d,%d", p.ContainerPosition.X(), p.ContainerPosition.Y(), p.ContainerPosition.Z())),
+	)
+	b.ContainerOpened(p.WindowID, p.ContainerType, p.ContainerPosition)
+	return true
+}
+
+// handleContainerClose clears the chest session when the server closes the
+// window (or echoes the bot's own close).
+func handleContainerClose(b *bot.Bot, pk packet.Packet) bool {
+	p := pk.(*packet.ContainerClose)
+	b.MarkContainerClosed(p.WindowID)
 	return true
 }
 

@@ -168,6 +168,13 @@ Planning: If a request needs multiple steps, output multiple action tags in the 
 === GATHERING ===
 <action>gather:item_name,count</action> = Collect resources. Example: <action>gather:dirt,4</action> or <action>gather:oak_log,10</action>
 
+=== STORAGE & SIGNS ===
+<action>readsign</action> = Walk up to the nearest readable sign, look at it, and read what it says. Use this when you want to know what an area is for, and ALWAYS before searching chests in a labelled room.
+<action>readsign:word</action> = Read the sign whose text mentions that word. Example: <action>readsign:bahan</action>
+<action>take:item_name,count</action> = Search the visible chests for an item and bring it out. The bot opens chests ONE AT A TIME, reading any nearby sign first so it opens the labelled one. Example: <action>take:oak_log,6</action>
+<action>store:item_name</action> = Put an item away in the best visible chest. Example: <action>store:dirt</action>
+<action>scan_chests</action> = Report what is in the visible chests without moving anything.
+
 === MINING ===
 <action>mine:block_name</action> = Break 1 specific block nearby. Example: <action>mine:dirt</action> or <action>mine:stone</action>
 

@@ -34,7 +34,11 @@ func (wc *WorldCache) HandleLevelChunk(pk *packet.LevelChunk) {
 		return
 	}
 
-	c, err := chunk.NetworkDecode(wc.airRID, pk.RawPayload, count, wc.r)
+	// NetworkDecodeBuffer is used instead of NetworkDecode so the unread
+	// remainder of the payload survives: that tail is the block-entity NBT
+	// run, and the signs in it are the only way the bot can read signage.
+	buf := bytes.NewBuffer(pk.RawPayload)
+	c, err := chunk.NetworkDecodeBuffer(wc.airRID, buf, count, wc.r)
 	if err != nil {
 		if wc.logger != nil {
 			wc.logger.Error("WorldCache: failed to decode LevelChunk",
@@ -42,6 +46,7 @@ func (wc *WorldCache) HandleLevelChunk(pk *packet.LevelChunk) {
 		}
 		return
 	}
+	wc.scanSignBlockEntities(buf.Bytes())
 
 	wc.mu.Lock()
 	wc.chunks[pos] = c
@@ -82,11 +87,13 @@ func (wc *WorldCache) applySubChunkEntry(entry protocol.SubChunkEntry, pos proto
 		return
 	}
 
-	storages, ok := wc.decodeSubChunkPayload(rawPayload)
+	storages, leftover, ok := wc.decodeSubChunkPayload(rawPayload)
 	if !ok {
 		return
 	}
 	applyStorageToChunk(c, wc.airRID, wc.r, subY, storages)
+	// Block entities for this section ride along after the storage data.
+	wc.scanSignBlockEntities(leftover)
 
 	wc.mu.Lock()
 	wc.subChunksApplied++
@@ -116,20 +123,22 @@ func (wc *WorldCache) getOrCreateChunk(cPos chunkPos) *chunk.Chunk {
 	return c
 }
 
-func (wc *WorldCache) decodeSubChunkPayload(raw []byte) ([]*palettedResult, bool) {
+func (wc *WorldCache) decodeSubChunkPayload(raw []byte) ([]*palettedResult, []byte, bool) {
 	buf := bytes.NewBuffer(raw)
 	ver, err := buf.ReadByte()
 	if err != nil {
-		return nil, false
+		return nil, nil, false
 	}
 
 	switch ver {
 	case 1:
-		return wc.decodeVersion1Payload(buf)
+		storages, ok := wc.decodeVersion1Payload(buf)
+		return storages, buf.Bytes(), ok
 	case 8, 9:
-		return wc.decodeVersion89Payload(buf, ver)
+		storages, ok := wc.decodeVersion89Payload(buf, ver)
+		return storages, buf.Bytes(), ok
 	default:
-		return nil, false
+		return nil, nil, false
 	}
 }
 

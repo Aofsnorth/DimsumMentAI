@@ -39,9 +39,13 @@ type Snapshot struct {
 	Inventory  string
 	VisibleMob string
 	NearBlocks string
-	Nearby     []Person
-	Busy       bool
-	Exploring  bool
+	// VisibleSigns is the text of signage the bot can read right now. It is
+	// part of the state Jev reasons over because a labelled storage room is a
+	// plan, and a bot that cannot see the labels will search it blindly.
+	VisibleSigns []string
+	Nearby       []Person
+	Busy         bool
+	Exploring    bool
 	// IsNight drives the day/night behaviour. A bot that wanders off at
 	// midnight and gets eaten is doing something no player would do, and the
 	// failure is invisible in a log — it just looks like bad luck.
@@ -49,6 +53,18 @@ type Snapshot struct {
 	// HasBed records whether the bot could actually sleep it off. Without one,
 	// the night reflex has to shelter rather than lie down.
 	HasBed bool
+	// FreeSlots is how many empty inventory slots the bot has. The curriculum
+	// uses it to stop offering work it cannot bank: a bot that mines wood with
+	// a full inventory swings at a tree and then has nowhere to put it, which
+	// looks worse than never offering the activity.
+	FreeSlots int
+}
+
+// InventoryFree reports whether the bot has room to collect more. One free
+// slot is enough for the decision, because a full inventory is the failure
+// this guards against, not a nearly-full one.
+func (s Snapshot) InventoryFree() bool {
+	return s.FreeSlots > 0
 }
 
 // Person is another player the bot is aware of.

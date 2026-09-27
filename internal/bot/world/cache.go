@@ -37,6 +37,10 @@ type WorldCache struct {
 	paletteMu sync.RWMutex
 	ridNames  map[uint32]string
 	ridSolid  map[uint32]bool
+
+	// signTexts maps "x,y,z" to the text written on the sign there, parsed out
+	// of the block entities that ride along with chunk payloads.
+	signTexts map[string]string
 }
 
 // Reset drops everything that belongs to a single world session: the decoded
@@ -54,6 +58,8 @@ func (wc *WorldCache) Reset() {
 	wc.blobs = make(map[uint64][]byte)
 	wc.paletteDumpCount = 0
 	wc.subChunksApplied = 0
+	// Signs belong to the world: a rejoin has new ones.
+	wc.signTexts = make(map[string]string)
 }
 
 // NewWorldCache creates a WorldCache.

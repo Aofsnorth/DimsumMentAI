@@ -53,7 +53,17 @@ type Runner struct {
 	lastSpoke time.Time
 	lastGaze  time.Time
 	seed      int
+	// activityLog is a short history of the activities the brain has already
+	// chosen. It exists so the loop can notice it is repeating itself: a model
+	// that keeps picking the same activity is not deciding, and the caller
+	// turns that into a different choice rather than into another lap.
+	activityLog []string
 }
+
+// activityMemory is how many recent choices the loop check remembers. Three is
+// enough to catch an immediate repeat without penalising a natural rhythm of
+// "mine, wander, mine".
+const activityMemory = 3
 
 // Config is the subset of the AGI settings the runner needs. Declared here
 // rather than importing the config package so agi can be tested with a plain
@@ -83,6 +93,11 @@ type Config struct {
 	// decides what likely means.
 	DangerThreshold float64
 	SpeakThreshold  float64
+	// EngageThreshold is where Jev's "should I be busy" answer is read as
+	// engaged. It sits low by default: a bot that only bothers when it is
+	// certain to be busy ends up standing still, and stillness on its own is
+	// just as robotic as constant motion.
+	EngageThreshold float64
 
 	// Perception bounds what the bot notices. Config rather than constants
 	// because these are taste knobs: a mob range that is right in a plain is
@@ -123,6 +138,7 @@ func ConfigFrom(c config.AGIConfig) Config {
 		VisionCooldownSec: c.VisionCooldownSec,
 		DangerThreshold:   c.Jev.DangerThreshold,
 		SpeakThreshold:    c.Jev.SpeakThreshold,
+		EngageThreshold:   c.Jev.EngageThreshold,
 
 		MobScanDistance:   c.Perception.MobScanDistance,
 		BlockScanDistance: c.Perception.BlockScanDistance,
@@ -173,6 +189,21 @@ func (r *Runner) Run(ctx context.Context) {
 
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
+
+	// Say plainly, at startup, whether the System One layer is actually wired
+	// in. A bot that logs "AGI enabled" and then silently runs on hardcoded
+	// thresholds is the exact failure this line exists to make obvious.
+	if r.cfg.Jev != nil {
+		r.b.Logger.Info("AGI: Jev System One active",
+			slog.String("endpoint", r.cfg.Jev.Endpoint()),
+			slog.String("model", r.cfg.Jev.ModelName()),
+			slog.Float64("danger_threshold", r.cfg.DangerThreshold),
+			slog.Float64("speak_threshold", r.cfg.SpeakThreshold),
+			slog.Float64("engage_threshold", r.cfg.EngageThreshold),
+		)
+	} else {
+		r.b.Logger.Info("AGI: running on local thresholds (Jev not configured)")
+	}
 
 	for {
 		// Jitter the first tick so a reconnecting bot does not wake up in
@@ -227,7 +258,15 @@ func (r *Runner) Tick(ctx context.Context) {
 	// to the LLM here would throw away a decision that already cost a round
 	// trip and replace it with a slower, vaguer one.
 	if judgement.Known && judgement.Activity != "" {
-		r.doActivity(judgement.Activity)
+		// A model that keeps picking the same thing is not deciding. Rather than
+		// doing it again, the bot steps aside: this is what stops the visible
+		// failure where the bot walks in a small circle forever because every
+		// tick it "decides" to wander.
+		activity := judgement.Activity
+		if r.recentActivity(activity) {
+			activity = alternativeActivity(activity)
+		}
+		r.doActivity(activity)
 		return
 	}
 
@@ -250,7 +289,7 @@ func (r *Runner) Tick(ctx context.Context) {
 // impossible options produces confident nonsense, and confident nonsense is what
 // makes an agent look broken rather than busy.
 func Curriculum(s Snapshot) []string {
-	curriculum := make([]string, 0, 6)
+	curriculum := make([]string, 0, 8)
 	// Rest leads the list and is always present. It is the answer that makes
 	// this an agent rather than a loop, so it must never be a fallback that
 	// only appears when the world looks empty.
@@ -275,12 +314,26 @@ func Curriculum(s Snapshot) []string {
 	// a bug from the outside.
 	if s.NearBlocks != "" && s.NearBlocks != "none" {
 		curriculum = append(curriculum, jev.ActivityGather)
+		// Mining is only offered when there is a resource AND the bot is not
+		// already carrying too much. Offering "go mine" with a full inventory
+		// produces a bot that swings at a tree and then has nowhere to put the
+		// wood, which is a worse failure than never offering it.
+		if s.InventoryFree() {
+			curriculum = append(curriculum, jev.ActivityMine)
+		}
 	}
 	// Only offer to walk over to someone who is actually visible.
-	if person, ok := nearestVisible(s); ok {
-		_ = person
+	if _, ok := nearestVisible(s); ok {
 		curriculum = append(curriculum, jev.ActivityApproach)
+		curriculum = append(curriculum, jev.ActivityChat)
 	}
+	// Gesturing is always available. Emoting at nothing in particular is one of
+	// the most human things a player standing idle does, and it costs nothing.
+	// It is offered in daylight only: a bot that emotes around at 3am reads as
+	// scripted, not as spontaneous.
+	curriculum = append(curriculum, jev.ActivityGesture)
+	// Reading the surroundings is offered whenever there is something to read.
+	curriculum = append(curriculum, jev.ActivityLook)
 	return curriculum
 }
 
@@ -298,8 +351,13 @@ func nearestVisible(s Snapshot) (string, bool) {
 // doActivity carries out the activity Jev chose.
 func (r *Runner) doActivity(activity string) {
 	who := r.audience()
+	r.recordActivity(activity)
 	switch activity {
 	case jev.ActivityRest:
+		// Resting is a real behaviour, not a log line: the bot settles where it
+		// is and lets the idle gaze take over. That stillness is the point —
+		// an agent that always finds something to do is more obviously a bot
+		// than one that sometimes just stands there.
 		r.b.Logger.Debug("AGI: jev chose to rest", slog.String("who", who))
 	case jev.ActivityWander:
 		r.Wander()
@@ -307,12 +365,26 @@ func (r *Runner) doActivity(activity string) {
 		action.Execute(r.b, "explore", "25", who)
 	case jev.ActivityGather:
 		action.Execute(r.b, "gather", "", who)
+	case jev.ActivityMine:
+		// Mining is delegated to the gather path with a longer window, because
+		// that is the action that actually walks to a resource, swings at it and
+		// collects the drops.
+		action.Execute(r.b, "automine", "wood", who)
 	case jev.ActivityApproach:
-		r.Wander()
+		// Walk to the player and stop there. Approaching is not the same as
+		// talking, and conflating them is what produced a bot that stood next to
+		// someone in silence.
+		r.approachNearest(who)
+	case jev.ActivityChat:
+		r.approachNearest(who)
 	case jev.ActivityShelter:
 		action.Execute(r.b, "shelter", "", who)
 	case jev.ActivitySleep:
 		action.Execute(r.b, "sleep", "", who)
+	case jev.ActivityGesture:
+		r.gesture()
+	case jev.ActivityLook:
+		action.Execute(r.b, "readsign", "", who)
 	}
 }
 
@@ -325,6 +397,82 @@ func (r *Runner) maybeWander() {
 	r.Wander()
 }
 
+// approachNearest walks over to the closest visible player and stops there.
+//
+// This replaces the old "approach is really wander" behaviour, which sent the
+// bot off in a random direction when the model asked it to approach someone.
+// The result was a bot that looked like it was ignoring the person it had just
+// decided to go see.
+func (r *Runner) approachNearest(who string) {
+	name, ok := r.nearestVisiblePerson()
+	if !ok {
+		// Nobody in sight: wandering is the honest fallback, and pretending
+		// otherwise would log a success for an approach that never happened.
+		r.Wander()
+		return
+	}
+	action.Execute(r.b, "come", name, who)
+}
+
+func (r *Runner) nearestVisiblePerson() (string, bool) {
+	for _, p := range r.nearbyPeople(r.b.GetCoords(), r.b.LookTargetName) {
+		if p.HasLineOf {
+			return p.Name, true
+		}
+	}
+	return "", false
+}
+
+// gesture plays a short emote.
+//
+// Emoting for no reason is one of the most human things a player does while
+// waiting, and it is the cheapest way for a bot to read as "idle but present"
+// rather than as a frozen client. The choice is random because picking the
+// same one every time is its own tell.
+func (r *Runner) gesture() {
+	emotes := []string{"nod", "shake", "lookaround", "jump"}
+	emote := emotes[rand.Intn(len(emotes))]
+	action.Execute(r.b, "emote", emote, r.audience())
+}
+
+// recentActivity reports whether the bot just did this, which is what keeps the
+// brain from looping. Without it a model that keeps choosing "wander" sends the
+// bot walking in a circle forever, which is the single most obvious sign that
+// the "decision" is not a decision at all.
+func (r *Runner) recentActivity(activity string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for i, prev := range r.activityLog {
+		if prev == activity {
+			return true
+		}
+		_ = i
+	}
+	return false
+}
+
+// recordActivity pushes a choice onto the short history the loop check reads.
+func (r *Runner) recordActivity(activity string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.activityLog = append(r.activityLog, activity)
+	if len(r.activityLog) > activityMemory {
+		r.activityLog = r.activityLog[len(r.activityLog)-activityMemory:]
+	}
+}
+
+// alternativeActivity picks a substitute when the model repeats itself. It
+// steps down to rest rather than sideways into another action: a bot that
+// alternates between two activities on a fixed beat is as mechanical as one
+// that repeats a single action, and resting is the honest answer to "I have
+// nothing better to do".
+func alternativeActivity(activity string) string {
+	if activity == jev.ActivityRest {
+		return jev.ActivityExplore
+	}
+	return jev.ActivityRest
+}
+
 // Judgement is what the System One layer concluded about one tick.
 type Judgement struct {
 	// Danger and WorthSpeak come from Jev. When Jev is absent they are false
@@ -333,6 +481,19 @@ type Judgement struct {
 	WorthSpeak bool
 	// Activity is Jev's pick for what to do, empty when Jev is absent.
 	Activity string
+	// Engaged is Jev's read on whether the bot should be visibly busy. A calm
+	// answer here is what lets the bot choose to stand still, which is the
+	// behaviour that separates a companion from a task runner.
+	Engaged bool
+	// The raw scores are kept alongside the thresholded booleans. Logging the
+	// model's own number rather than only the verdict is what makes a decision
+	// auditable after the fact — a bot that acted on a 0.51 and a bot that acted
+	// on a 0.99 look identical in the logs otherwise.
+	DangerScore float64
+	SpeakScore  float64
+	// ActivityConfidence is Jev's confidence in the activity it chose, straight
+	// from the choice answer.
+	ActivityConfidence float64
 	// Known is true when a Jev answer actually arrived. A missing answer must
 	// never be read as a confident "no" — that would silently turn the brain
 	// off whenever the API hiccups.
@@ -350,20 +511,44 @@ func (r *Runner) consult(ctx context.Context, snap Snapshot) Judgement {
 
 	resp, err := r.cfg.Jev.Evaluate(ctx, state, r.questions(snap))
 	if err != nil {
-		r.b.Logger.Debug("AGI: jev unavailable, using local rules", slog.String("error", err.Error()))
+		// WARN, not DEBUG. This path means the configured System One model is
+		// not being consulted at all, and the bot silently carries on with its
+		// hardcoded thresholds — which looks identical to "Jev is working" from
+		// the outside. A 404 from a wrong endpoint, a dead key, or a network
+		// hiccup are all completely invisible at DEBUG, which is how an enabled
+		// but non-functional feature can sit in a config for weeks.
+		r.b.Logger.Warn("AGI: jev unavailable, using local rules", slog.String("error", err.Error()))
 		return Judgement{}
 	}
 
 	j := Judgement{Known: true}
 	if p, ok := resp.Noul(jev.QDanger); ok {
 		j.Danger = p >= r.cfg.DangerThreshold
+		j.DangerScore = p
 	}
 	if p, ok := resp.Noul(jev.QWorthSay); ok {
 		j.WorthSpeak = p >= r.cfg.SpeakThreshold
+		j.SpeakScore = p
 	}
-	if choice, _, ok := resp.Choice(jev.QActivity); ok {
+	if p, ok := resp.Noul(jev.QEngagement); ok {
+		j.Engaged = p >= r.cfg.EngageThreshold
+	}
+	if choice, confidence, ok := resp.Choice(jev.QActivity); ok {
 		j.Activity = choice
+		j.ActivityConfidence = confidence
 	}
+	// One INFO line per consultation. It is the only way to tell a live System
+	// One loop from a fallback: the numbers are the model speaking, and seeing
+	// them is what makes a "the bot is thinking" claim checkable.
+	r.b.Logger.Info("AGI: jev decided",
+		slog.String("model", resp.Model),
+		slog.Float64("danger", j.DangerScore),
+		slog.Float64("speak", j.SpeakScore),
+		slog.Bool("engaged", j.Engaged),
+		slog.String("activity", j.Activity),
+		slog.Float64("confidence", j.ActivityConfidence),
+		slog.Int("input_tokens", resp.Usage.InputTokens),
+	)
 	return j
 }
 
@@ -388,14 +573,45 @@ func (r *Runner) questions(s Snapshot) map[string]json.RawMessage {
 func describeState(s Snapshot) string {
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "Health %d/20. Hunger %d/20. Position %s.\n", s.HP, s.Hunger, s.Coords)
+	fmt.Fprintf(&sb, "Time: %s. Free inventory slots: %d.\n", timeOfDay(s), s.FreeSlots)
 	fmt.Fprintf(&sb, "Holding: %s.\n", s.HeldItem)
 	fmt.Fprintf(&sb, "Visible mobs: %s.\n", s.VisibleMob)
 	fmt.Fprintf(&sb, "Nearby blocks: %s.\n", s.NearBlocks)
+	fmt.Fprintf(&sb, "Visible signs: %s.\n", describeSigns(s))
 	fmt.Fprintf(&sb, "Players nearby: %s.\n", DescribePeople(s.Nearby))
 	if s.Busy {
 		sb.WriteString("The bot is already doing something.\n")
 	}
 	return sb.String()
+}
+
+// timeOfDay names the world clock in words. Jev decides from this text, and a
+// bare tick count means nothing to it — "it is getting dark" is a fact a model
+// can weigh, "18000" is not.
+func timeOfDay(s Snapshot) string {
+	switch {
+	case s.IsNight:
+		return "night"
+	case s.Nearby == nil && s.HP >= 16:
+		return "day"
+	default:
+		return "daytime"
+	}
+}
+
+// describeSigns lists the signage the bot can read right now.
+//
+// Signage is the difference between a bot that knows where things are and one
+// that has to search blindly, so it belongs in the state Jev reasons over. The
+// sign text is already cleaned of colour codes by the storage layer.
+func describeSigns(s Snapshot) string {
+	if len(s.VisibleSigns) == 0 {
+		return "none"
+	}
+	if len(s.VisibleSigns) > 3 {
+		s.VisibleSigns = s.VisibleSigns[:3]
+	}
+	return strings.Join(s.VisibleSigns, "; ")
 }
 
 func (r *Runner) thresholds() Thresholds {
@@ -443,21 +659,52 @@ func (r *Runner) Observe() Snapshot {
 	}
 
 	snap := Snapshot{
-		Now:        time.Now(),
-		Coords:     coords,
-		HP:         hp,
-		Hunger:     hunger,
-		HeldItem:   b.GetHeldItem(),
-		Inventory:  b.GetInventorySummary(),
-		VisibleMob: visibleMobs,
-		NearBlocks: perception.BlocksSummary(b, r.cfg.BlockScanDistance, r.cfg.BlockScanLimit),
-		Busy:       busy,
-		Exploring:  b.Explorer != nil && b.Explorer.IsExploring(),
-		IsNight:    r.isNight(),
-		HasBed:     r.hasBed(),
-		Nearby:     r.nearbyPeople(pos, lookTarget),
+		Now:          time.Now(),
+		Coords:       coords,
+		HP:           hp,
+		Hunger:       hunger,
+		HeldItem:     b.GetHeldItem(),
+		Inventory:    b.GetInventorySummary(),
+		VisibleMob:   visibleMobs,
+		NearBlocks:   perception.BlocksSummary(b, r.cfg.BlockScanDistance, r.cfg.BlockScanLimit),
+		Busy:         busy,
+		Exploring:    b.Explorer != nil && b.Explorer.IsExploring(),
+		IsNight:      r.isNight(),
+		HasBed:       r.hasBed(),
+		FreeSlots:    r.freeInventorySlots(),
+		Nearby:       r.nearbyPeople(pos, lookTarget),
+		VisibleSigns: r.visibleSignText(),
 	}
 	return snap
+}
+
+// visibleSignText lists the signage the bot can currently read. It is fed to
+// Jev so a labelled room can be understood rather than blindly searched.
+func (r *Runner) visibleSignText() []string {
+	signs := r.b.Storage().FindSigns()
+	out := make([]string, 0, len(signs))
+	for i, sign := range signs {
+		if i >= 3 {
+			break
+		}
+		out = append(out, fmt.Sprintf("%q at %d,%d,%d", sign.Text, sign.Pos.X(), sign.Pos.Y(), sign.Pos.Z()))
+	}
+	return out
+}
+
+// freeInventorySlots counts the empty slots in the bot's inventory. The
+// curriculum uses it so "go mine" is not offered to a bot that has nowhere to
+// put what it mines.
+func (r *Runner) freeInventorySlots() int {
+	slots := r.b.GetInventorySlots()
+	free := 0
+	for slot := uint32(0); slot < 36; slot++ {
+		stack, ok := slots[slot]
+		if !ok || stack.Count <= 0 {
+			free++
+		}
+	}
+	return free
 }
 
 // isNight reads the world clock. It is deliberately nil-safe: a bot that has

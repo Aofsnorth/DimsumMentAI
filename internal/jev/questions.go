@@ -16,6 +16,21 @@ const (
 	QHungry   = "hungry"
 	QActivity = "activity"
 	QWorthSay = "worth_speaking"
+	// QEngagement asks how absorbed the bot should be right now. It is the
+	// dial behind every choice question: a bored bot should do something
+	// visible, a busy one should stay out of the way, and without this the
+	// activity menu can only ever answer "what could it do", never "should it
+	// bother".
+	QEngagement = "engagement"
+	// QSmallTalk asks whether the moment is one where a short remark fits
+	// rather than a conversation. It is separate from QWorthSay on purpose:
+	// "worth starting a conversation" and "worth saying anything at all" are
+	// very different bars, and collapsing them is what produces a bot that
+	// either never speaks or talks constantly.
+	QSmallTalk = "small_talk"
+	// QMining asks whether the bot should go after a resource it can see, which
+	// is the decision that keeps a survival loop from being only wandering.
+	QMining = "worth_mining"
 )
 
 // Activity options offered to the model. Kept short on purpose: Jev is a
@@ -29,6 +44,24 @@ const (
 	ActivityApproach = "approach"
 	ActivityShelter  = "shelter"
 	ActivitySleep    = "sleep"
+	// ActivityChat walks over to the nearest player. It is distinct from
+	// approach on purpose: standing near someone and starting a conversation
+	// are separate intents, and a bot that conflates them stands next to a
+	// player in silence, which reads as a laggy client rather than a
+	// companion.
+	ActivityChat = "chat"
+	// ActivityGesture plays a short emote. Emoting at nothing in particular is
+	// something people do constantly, and it is the cheapest way for a bot to
+	// register as idle-but-present instead of frozen.
+	ActivityGesture = "gesture"
+	// ActivityMine commits to actually extracting a resource it can see. This
+	// is the option that was missing: without a work activity, an "autonomous"
+	// bot only ever strolls around a field and never changes state, which is
+	// the difference between a companion and a screensaver.
+	ActivityMine = "mine"
+	// ActivityLook reads the signage around the bot. It is the decision that
+	// lets a labelled storage room be used rather than blindly searched.
+	ActivityLook = "look_around"
 )
 
 // BuildReflexQuestions asks the survival and pacing judgements in one call.
@@ -47,6 +80,18 @@ func BuildReflexQuestions() map[string]json.RawMessage {
 		QWorthSay: mustMarshal(NoulQuestion{
 			Type:         TypeNoul,
 			Instructions: "Is this a natural moment to start a conversation nobody asked for? Answer no unless there is a specific reason to speak now — silence is usually the right choice.",
+		}),
+		QEngagement: mustMarshal(NoulQuestion{
+			Type:         TypeNoul,
+			Instructions: "How much should the bot be doing something right now? Answer yes if a person in this situation would probably be occupied — mining, building, or working through something. Answer no if they would more likely be standing about, and something worth doing is available.",
+		}),
+		QSmallTalk: mustMarshal(NoulQuestion{
+			Type:         TypeNoul,
+			Instructions: "Would a short remark to someone nearby be natural here, as in a greeting or a passing comment? This is a lower bar than starting a real conversation, but it still needs a reason — silence is usually right.",
+		}),
+		QMining: mustMarshal(NoulQuestion{
+			Type:         TypeNoul,
+			Instructions: "Is it worth starting to gather a resource it can see right now, judging by whether it looks reachable, useful, and safe to stop for?",
 		}),
 	}
 }
@@ -93,9 +138,13 @@ var activityDescriptions = map[string]string{
 	ActivityWander:   "walk somewhere new and look around",
 	ActivityExplore:  "explore the area a little, as if sightseeing",
 	ActivityGather:   "collect a resource it can see or plausibly reach",
-	ActivityApproach: "walk over to a nearby player",
+	ActivityApproach: "walk over to a nearby player, without necessarily saying anything",
+	ActivityChat:     "walk over to a nearby player to talk with them",
 	ActivityShelter:  "get under cover before it gets dangerous",
 	ActivitySleep:    "sleep until morning",
+	ActivityGesture:  "play a short emote, as people do when standing about",
+	ActivityMine:     "actually mine or chop the resource in front of it, and collect what drops",
+	ActivityLook:     "look around at nearby signs, chests and blocks to see what is here",
 }
 
 func mustMarshal(v any) json.RawMessage {

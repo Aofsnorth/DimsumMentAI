@@ -4,10 +4,10 @@
 
 # --- Server Settings ---
 server:
-  host: "192.168.1.114"
-  port: 7511
+  host: "192.168.1.19"
+  port: 19132
   offline: true # true = no Xbox Live auth (local server)
-  lan_discovery: true # auto-discover the single-player world opened to LAN
+  lan_discovery: true # auto-discover the single-player world opened to LAN (direct RakNet to a client-hosted world is rejected with invalidSkin — the host requires the Nonce from its advertisement)
   lan_world: "A" # optional: only join a world with this exact name
   # How a server command is written on the wire. The protocol does not settle
   # this and server software disagrees: Geyser strips a leading "/" (so "/register"
@@ -81,7 +81,7 @@ bot:
 # social_cooldown_sec is the number that matters most. Without it the bot
 # greets someone on every tick and reads as a spammer rather than a friend.
 agi:
-  enabled: false
+  enabled: true
   tick_interval_sec: 30
   llm_chance: 0.35
   self_preservation: true
@@ -138,10 +138,11 @@ agi:
   # (policy) dan dua ambang probabilitas (kebijakan).
   # Tanpa kunci: bot tetap jalan pakai threshold biasa. Fitur tambahan, bukan syarat.
   jev:
-    enabled: false
+    enabled: true
     base_url: "https://api.typesafe.ai"
     danger_threshold: 0.6 # di atas ini = bahaya
     speak_threshold: 0.75 # sengaja tinggi; bot yang terlalu gampang ngomong lebih buruk dari yang diam
+    engage_threshold: 0.4 # "harus sibuk?" di bawah ini bot boleh diem — diam terus juga kelihatan robot
     timeout_sec: 5 # Jev jawab 70-500ms; timeout itu buat guard, bukan tuning kecepatan
     prompts_file: "" # opsional: YAML untuk override wording pertanyaan (dikunci per nama pertanyaan)
 

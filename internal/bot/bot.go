@@ -19,6 +19,7 @@ import (
 	"bedrock-ai/internal/bot/interact"
 	"bedrock-ai/internal/bot/inventory"
 	"bedrock-ai/internal/bot/pathfinder"
+	"bedrock-ai/internal/bot/storage"
 	"bedrock-ai/internal/bot/survival"
 	"bedrock-ai/internal/bot/world"
 	"bedrock-ai/internal/config"
@@ -303,6 +304,17 @@ type Bot struct {
 	StackNetworkIDs map[uint32]int32
 	ItemNames       map[int32]string
 	Recipes         map[string]uint32
+
+	// ContainerWatch tracks the one container window the bot currently has
+	// open (chest, barrel). Nil means no container is open or expected.
+	ContainerWatch *ContainerWatchState
+	// UnreadableContainers remembers chests whose contents failed to arrive,
+	// so the multi-chest search does not re-open the same silent window in a
+	// tight loop. Keyed by "x,y,z" with the time it was recorded.
+	UnreadableContainers map[string]time.Time
+
+	// storageSvc is the container search/open service, built on first use.
+	storageSvc *storage.Service
 	// RecipeCandidates maps an output item name to ALL recipe network IDs that
 	// produce it. Many items (e.g. "stick") have one recipe per wood variant;
 	// keeping every candidate lets the crafter pick the one whose ingredients

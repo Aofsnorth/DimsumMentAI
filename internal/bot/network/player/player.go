@@ -24,6 +24,8 @@ var packetHandlers = map[uint32]func(*bot.Bot, packet.Packet) bool{
 	packet.IDRemoveActor:                 handleRemoveActor,
 	packet.IDInventoryContent:            handleInventoryContent,
 	packet.IDInventorySlot:               handleInventorySlot,
+	packet.IDContainerOpen:               handleContainerOpen,
+	packet.IDContainerClose:              handleContainerClose,
 	packet.IDItemStackResponse:           handleItemStackResponse,
 	packet.IDInventoryTransaction:        handleInventoryTransaction,
 	packet.IDMobEquipment:                handleMobEquipment,

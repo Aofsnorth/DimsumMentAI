@@ -222,6 +222,7 @@ func (d *Dialer) dialLAN(cfg config.ServerConfig, dialer minecraft.Dialer) (*min
 	}()
 
 	var lastDialErr error
+	var skipped []string
 	triedNetworkIDs := make(map[uint64]struct{})
 	for {
 		for networkID, raw := range listener.Responses() {
@@ -229,8 +230,11 @@ func (d *Dialer) dialLAN(cfg config.ServerConfig, dialer minecraft.Dialer) (*min
 				continue
 			}
 			triedNetworkIDs[networkID] = struct{}{}
-			server, ok := decodeLANServer(raw, cfg.LANWorld)
-			if !ok {
+			server, skipReason := classifyLANServer(raw, cfg.LANWorld)
+			if skipReason != "" {
+				skip := fmt.Sprintf("%q (%s): %s", server.LevelName, networkIDToText(networkID), skipReason)
+				skipped = append(skipped, skip)
+				slog.Debug("skipping discovered world", "reason", skipReason, "level", server.LevelName)
 				continue
 			}
 
@@ -279,7 +283,11 @@ func (d *Dialer) dialLAN(cfg config.ServerConfig, dialer minecraft.Dialer) (*min
 			if lastDialErr != nil {
 				return nil, lastDialErr
 			}
-			return nil, fmt.Errorf("no compatible NetherNet LAN world discovered via %s to %s", listenAddress, broadcastAddress)
+			err := fmt.Errorf("no compatible NetherNet LAN world discovered via %s to %s", listenAddress, broadcastAddress)
+			if len(skipped) > 0 {
+				err = fmt.Errorf("%w (saw %d incompatible advertisement(s): %s)", err, len(skipped), strings.Join(skipped, "; "))
+			}
+			return nil, err
 		case <-time.After(100 * time.Millisecond):
 		}
 	}
@@ -312,20 +320,38 @@ func serverAddressHost(configuredHost, listenAddress string) string {
 // decodeLANServer decodes the world advertisement and filters it down to worlds
 // this bot can actually join over NetherNet.
 func decodeLANServer(raw []byte, worldName string) (discovery.ServerData, bool) {
+	server, skipReason := classifyLANServer(raw, worldName)
+	return server, skipReason == ""
+}
+
+// classifyLANServer decodes an advertisement and, when the world is not one the
+// bot can join, explains why — so a wrong lan_world filter or an unexpected
+// advertisement shape never leaves the scan silently empty.
+func classifyLANServer(raw []byte, worldName string) (discovery.ServerData, string) {
 	var server discovery.ServerData
 	if err := server.UnmarshalBinary(raw); err != nil {
-		return discovery.ServerData{}, false
+		return discovery.ServerData{}, "advertisement did not decode"
 	}
 	// ConnectionType 4 marks a LAN world signalled over NetherNet. Editor-mode
 	// projects are only visible to clients in Editor Mode.
-	if server.ConnectionType != lanConnectionType || server.EditorWorld {
-		return discovery.ServerData{}, false
+	if server.ConnectionType != lanConnectionType {
+		return server, fmt.Sprintf("connection type %d is not a NetherNet LAN world", server.ConnectionType)
+	}
+	if server.EditorWorld {
+		return server, "editor world"
 	}
 	if worldName == "" {
-		return server, true
+		return server, ""
 	}
 	worldName = strings.TrimSpace(worldName)
-	return server, strings.EqualFold(server.LevelName, worldName) || strings.EqualFold(server.ServerName, worldName)
+	if strings.EqualFold(server.LevelName, worldName) || strings.EqualFold(server.ServerName, worldName) {
+		return server, ""
+	}
+	return server, fmt.Sprintf("world name does not match lan_world %q", worldName)
+}
+
+func networkIDToText(networkID uint64) string {
+	return strconv.FormatUint(networkID, 10)
 }
 
 func lanDiscoveryEndpoint(preferredHost string) (string, *net.UDPAddr) {
@@ -334,11 +360,35 @@ func lanDiscoveryEndpoint(preferredHost string) (string, *net.UDPAddr) {
 		preferred = preferred.To4()
 	}
 
-	for _, iface := range usableInterfaces() {
-		for _, addr := range interfaceIPv4Addrs(iface) {
-			if preferred != nil && !preferred.Equal(addr.ip) {
-				continue
+	interfaces := usableInterfaces()
+
+	// An exact match pins the interface: the user may have configured one of
+	// the bot's own addresses as the interface to advertise from.
+	if preferred != nil {
+		for _, iface := range interfaces {
+			for _, addr := range interfaceIPv4Addrs(iface) {
+				if preferred.Equal(addr.ip) {
+					return net.JoinHostPort(addr.ip.String(), "0"), &net.UDPAddr{IP: addr.broadcast, Port: discovery.DefaultPort}
+				}
 			}
+		}
+	}
+
+	// The configured host is usually the remote world's address. Broadcast on
+	// the interface that shares the host's subnet so its advertisement can
+	// actually come back — 255.255.255.255 is routinely swallowed by routers.
+	if preferred != nil {
+		for _, iface := range interfaces {
+			for _, addr := range interfaceIPv4Addrs(iface) {
+				if addr.mask != nil && addr.ip.Mask(addr.mask).Equal(preferred.Mask(addr.mask)) {
+					return net.JoinHostPort(addr.ip.String(), "0"), &net.UDPAddr{IP: addr.broadcast, Port: discovery.DefaultPort}
+				}
+			}
+		}
+	}
+
+	for _, iface := range interfaces {
+		for _, addr := range interfaceIPv4Addrs(iface) {
 			return net.JoinHostPort(addr.ip.String(), "0"), &net.UDPAddr{IP: addr.broadcast, Port: discovery.DefaultPort}
 		}
 	}
@@ -348,6 +398,7 @@ func lanDiscoveryEndpoint(preferredHost string) (string, *net.UDPAddr) {
 
 type interfaceIPv4Addr struct {
 	ip        net.IP
+	mask      net.IPMask
 	broadcast net.IP
 }
 
@@ -382,7 +433,7 @@ func interfaceIPv4Addrs(iface net.Interface) []interfaceIPv4Addr {
 		for i := range broadcast {
 			broadcast[i] = ip[i] | ^mask[i]
 		}
-		result = append(result, interfaceIPv4Addr{ip: ip, broadcast: broadcast})
+		result = append(result, interfaceIPv4Addr{ip: ip, mask: mask, broadcast: broadcast})
 	}
 	return result
 }
