@@ -33,7 +33,7 @@ func TestCanCraftRecipe(t *testing.T) {
 			name: "identical name and enough count",
 			recipe: RecipeInfo{
 				Ingredients: []protocol.ItemDescriptorCount{
-					{Descriptor: &protocol.DefaultItemDescriptor{NetworkID: 5}, Count: 2},
+					{Descriptor: &protocol.DefaultItemDescriptor{Name: "minecraft:stick"}, Count: 2},
 				},
 			},
 			inv:    map[uint32]protocol.ItemStack{0: {ItemType: protocol.ItemType{NetworkID: 5}, Count: 4}},
@@ -43,7 +43,7 @@ func TestCanCraftRecipe(t *testing.T) {
 			name: "canonical oak_wood ingredient matches oak_log in inventory",
 			recipe: RecipeInfo{
 				Ingredients: []protocol.ItemDescriptorCount{
-					{Descriptor: &protocol.DefaultItemDescriptor{NetworkID: -212}, Count: 1},
+					{Descriptor: &protocol.DefaultItemDescriptor{Name: "minecraft:oak_wood"}, Count: 1},
 				},
 			},
 			inv:    map[uint32]protocol.ItemStack{0: {ItemType: protocol.ItemType{NetworkID: 17}, Count: 4}},
@@ -53,7 +53,7 @@ func TestCanCraftRecipe(t *testing.T) {
 			name: "missing ingredient entirely",
 			recipe: RecipeInfo{
 				Ingredients: []protocol.ItemDescriptorCount{
-					{Descriptor: &protocol.DefaultItemDescriptor{NetworkID: 5}, Count: 1},
+					{Descriptor: &protocol.DefaultItemDescriptor{Name: "minecraft:stick"}, Count: 1},
 				},
 			},
 			inv:     map[uint32]protocol.ItemStack{0: {ItemType: protocol.ItemType{NetworkID: 17}, Count: 4}},
@@ -64,7 +64,7 @@ func TestCanCraftRecipe(t *testing.T) {
 			name: "insufficient count reports needed amount",
 			recipe: RecipeInfo{
 				Ingredients: []protocol.ItemDescriptorCount{
-					{Descriptor: &protocol.DefaultItemDescriptor{NetworkID: 5}, Count: 3},
+					{Descriptor: &protocol.DefaultItemDescriptor{Name: "minecraft:stick"}, Count: 3},
 				},
 			},
 			inv:     map[uint32]protocol.ItemStack{0: {ItemType: protocol.ItemType{NetworkID: 5}, Count: 1}},
@@ -75,8 +75,8 @@ func TestCanCraftRecipe(t *testing.T) {
 			name: "one of two ingredients missing",
 			recipe: RecipeInfo{
 				Ingredients: []protocol.ItemDescriptorCount{
-					{Descriptor: &protocol.DefaultItemDescriptor{NetworkID: 17}, Count: 1}, // have oak_log
-					{Descriptor: &protocol.DefaultItemDescriptor{NetworkID: 5}, Count: 1},  // missing stick
+					{Descriptor: &protocol.DefaultItemDescriptor{Name: "minecraft:oak_log"}, Count: 1}, // have oak_log
+					{Descriptor: &protocol.DefaultItemDescriptor{Name: "minecraft:stick"}, Count: 1},   // missing stick
 				},
 			},
 			inv:     map[uint32]protocol.ItemStack{0: {ItemType: protocol.ItemType{NetworkID: 17}, Count: 2}},
@@ -113,14 +113,14 @@ func TestListCraftableItems_TableFilter(t *testing.T) {
 		RecipesByNetID: map[uint32]RecipeInfo{
 			1: {
 				Ingredients: []protocol.ItemDescriptorCount{
-					{Descriptor: &protocol.DefaultItemDescriptor{NetworkID: 5}, Count: 1},
+					{Descriptor: &protocol.DefaultItemDescriptor{Name: "minecraft:stick"}, Count: 1},
 				},
 				Output: protocol.ItemStack{ItemType: protocol.ItemType{NetworkID: 100}},
 				Block:  "",
 			},
 			2: {
 				Ingredients: []protocol.ItemDescriptorCount{
-					{Descriptor: &protocol.DefaultItemDescriptor{NetworkID: 5}, Count: 1},
+					{Descriptor: &protocol.DefaultItemDescriptor{Name: "minecraft:stick"}, Count: 1},
 				},
 				Output: protocol.ItemStack{ItemType: protocol.ItemType{NetworkID: 101}},
 				Block:  "crafting_table",

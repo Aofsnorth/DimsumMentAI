@@ -26,6 +26,34 @@ type WorldCache struct {
 	ridToHash        map[uint32]uint32
 	useHashes        bool
 	paletteDumpCount int
+	subChunksApplied uint64
+
+	// paletteMu guards the resolved-palette caches below. They are deliberately
+	// separate from mu: mu is held while chunks are decoded, and a cell query
+	// that had to wait on a decode would stall the movement tick.
+	//
+	// These caches are palette-derived, not world-derived, so they survive a
+	// Reset (a rejoin into a new world) and are seeded once at construction.
+	paletteMu sync.RWMutex
+	ridNames  map[uint32]string
+	ridSolid  map[uint32]bool
+}
+
+// Reset drops everything that belongs to a single world session: the decoded
+// chunks, cached blobs, and the decode counters.
+//
+// The block-name/hash tables and the vertical range are deliberately kept —
+// they come from the protocol and the block palette, not from the world. A
+// rejoin into a world the host closed and reopened has a different seed, so
+// holding on to its old chunks would let pathfinding plan through terrain that
+// is no longer there.
+func (wc *WorldCache) Reset() {
+	wc.mu.Lock()
+	defer wc.mu.Unlock()
+	wc.chunks = make(map[chunkPos]*chunk.Chunk)
+	wc.blobs = make(map[uint64][]byte)
+	wc.paletteDumpCount = 0
+	wc.subChunksApplied = 0
 }
 
 // NewWorldCache creates a WorldCache.
@@ -36,10 +64,12 @@ func NewWorldCache(airRID uint32, r cube.Range, logger *slog.Logger) *WorldCache
 		}
 	}
 	wc := &WorldCache{
-		chunks: make(map[chunkPos]*chunk.Chunk),
-		airRID: airRID,
-		r:      r,
-		logger: logger,
+		chunks:   make(map[chunkPos]*chunk.Chunk),
+		airRID:   airRID,
+		r:        r,
+		logger:   logger,
+		ridNames: make(map[uint32]string),
+		ridSolid: make(map[uint32]bool),
 	}
 	wc.precomputeBlockHashes()
 	return wc
@@ -131,6 +161,15 @@ func (wc *WorldCache) ChunkCount() int {
 	wc.mu.RLock()
 	defer wc.mu.RUnlock()
 	return len(wc.chunks)
+}
+
+// SubChunksApplied returns how many sub-chunk payloads have been merged into
+// the cache. Zero means the world model is still effectively empty, no matter
+// how many chunk columns exist.
+func (wc *WorldCache) SubChunksApplied() uint64 {
+	wc.mu.RLock()
+	defer wc.mu.RUnlock()
+	return wc.subChunksApplied
 }
 
 // SetBlockRID updates a single cached block from a server UpdateBlock packet.

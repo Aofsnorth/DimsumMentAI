@@ -1,8 +1,6 @@
 package pathfinder
 
 import (
-	"fmt"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -27,11 +25,11 @@ type ChunkQuerier interface {
 
 type LocalWorldModel struct {
 	mu              sync.RWMutex
-	solidBlocks     map[string]bool
-	hazardBlocks    map[string]bool
-	passableBlocks  map[string]bool // mined/placed passable overrides (persistent)
-	bodyClearance   map[string]bool // bot AABB cells for the current tick only
-	tempSolidBlocks map[string]time.Time
+	solidBlocks     map[int64]bool
+	hazardBlocks    map[int64]bool
+	passableBlocks  map[int64]bool // mined/placed passable overrides (persistent)
+	bodyClearance   map[int64]bool // bot AABB cells for the current tick only
+	tempSolidBlocks map[int64]time.Time
 	chunkQuerier    ChunkQuerier
 
 	AllowScaffold bool
@@ -41,13 +39,55 @@ type LocalWorldModel struct {
 	targetX, targetY, targetZ int32
 }
 
+// packBlockKey encodes a block coordinate into a single int64 map key.
+//
+// The obvious implementation is fmt.Sprintf("%d,%d,%z"), and that is what this
+// used to do. It runs in the hottest path in the bot: IsSolid is called for
+// every collision and every pathfinding neighbour, dozens of times a tick, and
+// each Sprintf allocates a string and runs the formatting machinery. Packing
+// into an int64 makes the lookup allocation-free.
+//
+// The three fields use 26 + 12 + 26 bits, which is exactly 64. That is not
+// arbitrary: 26 bits per horizontal axis covers the full Bedrock world
+// (±30,000,000) and 12 bits covers the build height (±2048) exactly, so no
+// coordinate in a real world can ever collide.
+//
+// This is NOT the same encoding as packKey in astar.go. That one packs 21-bit
+// fields and is never unpacked, so its range never mattered; block keys are
+// unpacked again during PurgeFalseSolidOverrides and need the real range.
+func packBlockKey(x, y, z int32) int64 {
+	ux := uint64(int64(x)) & 0x3FFFFFF
+	uy := uint64(int64(y)) & 0xFFF
+	uz := uint64(int64(z)) & 0x3FFFFFF
+	return int64(uz | uy<<26 | ux<<38)
+}
+
+func unpackBlockKey(key int64) (x, y, z int32) {
+	// Read the fields back in the order packBlockKey wrote them.
+	uz := uint64(key) & 0x3FFFFFF
+	uy := (uint64(key) >> 26) & 0xFFF
+	ux := (uint64(key) >> 38) & 0x3FFFFFF
+
+	// Sign-extend the bit fields back to the negative coordinates they came from.
+	if ux&(1<<25) != 0 {
+		ux |= ^uint64(0x3FFFFFF)
+	}
+	if uy&(1<<11) != 0 {
+		uy |= ^uint64(0xFFF)
+	}
+	if uz&(1<<25) != 0 {
+		uz |= ^uint64(0x3FFFFFF)
+	}
+	return int32(ux), int32(uy), int32(uz)
+}
+
 func (w *LocalWorldModel) IsBreakable(x, y, z int32) bool {
 	w.mu.RLock()
 	defer w.mu.RUnlock()
 	if w.chunkQuerier != nil {
 		rid, loaded := w.chunkQuerier.GetBlockRID(x, y, z)
 		if loaded {
-			name, _, ok := chunk.RuntimeIDToState(rid)
+			name, ok := blockNameFor(w.chunkQuerier, rid)
 			if ok {
 				return name != "minecraft:bedrock"
 			}
@@ -58,25 +98,29 @@ func (w *LocalWorldModel) IsBreakable(x, y, z int32) bool {
 
 func NewLocalWorldModel() *LocalWorldModel {
 	return &LocalWorldModel{
-		solidBlocks:     make(map[string]bool),
-		hazardBlocks:    make(map[string]bool),
-		passableBlocks:  make(map[string]bool),
-		bodyClearance:   make(map[string]bool),
-		tempSolidBlocks: make(map[string]time.Time),
+		solidBlocks:     make(map[int64]bool),
+		hazardBlocks:    make(map[int64]bool),
+		passableBlocks:  make(map[int64]bool),
+		bodyClearance:   make(map[int64]bool),
+		tempSolidBlocks: make(map[int64]time.Time),
 	}
 }
 
 // ClearBodyClearance resets per-tick occupancy marks (bot body volume).
+//
+// The map is emptied in place rather than replaced. This runs 20 times a second
+// and a fresh map every tick is 20 allocations a second of garbage for a
+// structure that is almost always nearly empty anyway.
 func (w *LocalWorldModel) ClearBodyClearance() {
 	w.mu.Lock()
-	w.bodyClearance = make(map[string]bool)
+	clear(w.bodyClearance)
 	w.mu.Unlock()
 }
 
 // SetBodyClearance marks a block as non-solid for collision this tick only.
 func (w *LocalWorldModel) SetBodyClearance(x, y, z int32) {
 	w.mu.Lock()
-	w.bodyClearance[fmt.Sprintf("%d,%d,%d", x, y, z)] = true
+	w.bodyClearance[packBlockKey(x, y, z)] = true
 	w.mu.Unlock()
 }
 
@@ -99,7 +143,7 @@ func (w *LocalWorldModel) SetPathBounds(start, target Node) {
 func (w *LocalWorldModel) SetSolid(x, y, z int32, solid bool) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	k := fmt.Sprintf("%d,%d,%d", x, y, z)
+	k := packBlockKey(x, y, z)
 
 	if solid {
 		w.solidBlocks[k] = true
@@ -118,7 +162,8 @@ func (w *LocalWorldModel) PurgeFalseSolidOverrides() {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	for k := range w.passableBlocks {
-		if coords, ok := parseBlockKey(k); ok && w.chunkSaysSolid(coords[0], coords[1], coords[2]) {
+		x, y, z := unpackBlockKey(k)
+		if w.chunkSaysSolid(x, y, z) {
 			delete(w.passableBlocks, k)
 			delete(w.solidBlocks, k)
 		}
@@ -127,7 +172,8 @@ func (w *LocalWorldModel) PurgeFalseSolidOverrides() {
 		if solid {
 			continue
 		}
-		if coords, ok := parseBlockKey(k); ok && w.chunkSaysSolid(coords[0], coords[1], coords[2]) {
+		x, y, z := unpackBlockKey(k)
+		if w.chunkSaysSolid(x, y, z) {
 			delete(w.passableBlocks, k)
 			delete(w.solidBlocks, k)
 		}
@@ -139,31 +185,16 @@ func (w *LocalWorldModel) chunkSaysSolid(x, y, z int32) bool {
 	return loaded && isSolid
 }
 
-func parseBlockKey(k string) ([3]int32, bool) {
-	parts := strings.Split(k, ",")
-	if len(parts) != 3 {
-		return [3]int32{}, false
-	}
-	x, errX := strconv.ParseInt(parts[0], 10, 32)
-	y, errY := strconv.ParseInt(parts[1], 10, 32)
-	z, errZ := strconv.ParseInt(parts[2], 10, 32)
-	if errX != nil || errY != nil || errZ != nil {
-		return [3]int32{}, false
-	}
-	return [3]int32{int32(x), int32(y), int32(z)}, true
-}
-
 func (w *LocalWorldModel) SetTempSolid(x, y, z int32, duration time.Duration) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	k := fmt.Sprintf("%d,%d,%d", x, y, z)
-	w.tempSolidBlocks[k] = time.Now().Add(duration)
+	w.tempSolidBlocks[packBlockKey(x, y, z)] = time.Now().Add(duration)
 }
 
 func (w *LocalWorldModel) IsSolid(x, y, z int32) bool {
 	w.mu.RLock()
 	defer w.mu.RUnlock()
-	k := fmt.Sprintf("%d,%d,%d", x, y, z)
+	k := packBlockKey(x, y, z)
 
 	// Bot body volume wins over everything else this tick. If the bot just
 	// got marked tempSolid at its own position (stuck-recovery), treating the
@@ -210,10 +241,41 @@ func (w *LocalWorldModel) IsSolid(x, y, z int32) bool {
 	return false
 }
 
+// IsLoaded reports whether the world model actually knows what occupies a cell.
+//
+// This is the difference between "the server told me this is air" and "this cell
+// was never decoded". Path smoothing must not treat the two alike: a
+// string-pulled link is walked blindly, so pulling one across unknown cells
+// aims the bot straight at terrain the model has never seen — which is how it
+// used to wedge against a wall that only appeared once the bot was already
+// halfway down the link.
+func (w *LocalWorldModel) IsLoaded(x, y, z int32) bool {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+
+	// Explicit overrides are knowledge in their own right: the bot mined or
+	// placed these cells, or a stuck-recovery penalty marked them.
+	k := packBlockKey(x, y, z)
+	if w.solidBlocks[k] || w.passableBlocks[k] || w.hazardBlocks[k] {
+		return true
+	}
+	if _, marked := w.tempSolidBlocks[k]; marked {
+		return true
+	}
+
+	// No chunk source attached (unit tests, synthetic models) — nothing to be
+	// uncertain about, so stay permissive and keep the old behaviour.
+	if w.chunkQuerier == nil {
+		return true
+	}
+	_, loaded := w.chunkQuerier.IsBlockAir(x, y, z)
+	return loaded
+}
+
 func (w *LocalWorldModel) SetHazard(x, y, z int32, hazard bool) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	k := fmt.Sprintf("%d,%d,%d", x, y, z)
+	k := packBlockKey(x, y, z)
 	if hazard {
 		w.hazardBlocks[k] = true
 	} else {
@@ -221,12 +283,35 @@ func (w *LocalWorldModel) SetHazard(x, y, z int32, hazard bool) {
 	}
 }
 
+// nameAwareQuerier is implemented by caches that remember resolved block names.
+type nameAwareQuerier interface {
+	BlockName(rid uint32) (string, bool)
+}
+
+// blockNameFor resolves a runtime ID to a block name, preferring the cache when
+// the querier has one. IsHazard and IsLadder are called for every neighbour of
+// every pathfinding step, so this runs in the millions over a long gather.
+func blockNameFor(querier ChunkQuerier, rid uint32) (string, bool) {
+	if nq, ok := querier.(nameAwareQuerier); ok {
+		return nq.BlockName(rid)
+	}
+	// RuntimeIDToState is a package-level func var that dragonfly's world
+	// package fills in at init. A binary that never links it (this package's own
+	// tests, a tool) leaves it nil, and calling it takes the process down from
+	// inside the movement loop. Treat an unresolved name as "unknown" instead.
+	if chunk.RuntimeIDToState == nil {
+		return "", false
+	}
+	name, _, ok := chunk.RuntimeIDToState(rid)
+	return name, ok
+}
+
 func (w *LocalWorldModel) IsHazard(x, y, z int32) bool {
 	w.mu.RLock()
 	defer w.mu.RUnlock()
 
 	// 1. Check self-learned hazards
-	if w.hazardBlocks[fmt.Sprintf("%d,%d,%d", x, y, z)] {
+	if w.hazardBlocks[packBlockKey(x, y, z)] {
 		return true
 	}
 
@@ -234,7 +319,7 @@ func (w *LocalWorldModel) IsHazard(x, y, z int32) bool {
 	if w.chunkQuerier != nil {
 		rid, loaded := w.chunkQuerier.GetBlockRID(x, y, z)
 		if loaded {
-			name, _, ok := chunk.RuntimeIDToState(rid)
+			name, ok := blockNameFor(w.chunkQuerier, rid)
 			if ok {
 				if name == "minecraft:lava" || name == "minecraft:flowing_lava" || name == "minecraft:fire" {
 					return true
@@ -253,7 +338,7 @@ func (w *LocalWorldModel) IsLadder(x, y, z int32) bool {
 	if w.chunkQuerier != nil {
 		rid, loaded := w.chunkQuerier.GetBlockRID(x, y, z)
 		if loaded {
-			name, _, ok := chunk.RuntimeIDToState(rid)
+			name, ok := blockNameFor(w.chunkQuerier, rid)
 			if ok {
 				return name == "minecraft:ladder" || strings.Contains(name, "vine") || name == "minecraft:scaffolding"
 			}

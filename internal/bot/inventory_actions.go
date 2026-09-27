@@ -332,7 +332,15 @@ func (b *Bot) placeIngredientOnGrid(pick ingredientPick, s *craftStaging, gridSl
 // validate → stage → finalize orchestrator.
 func (b *Bot) finalizeCraft(recipe RecipeInfo, recipeNetID uint32, count int, outputSlot uint32, ingredientSources map[uint32]ingredientSourceSnapshot, s *craftStaging) error {
 	requestID, resultCh := b.beginStackRequest(recipe.Output.NetworkID)
-	actions := buildCraftActions(requestID, recipeNetID, recipe, count, s.gridInputs, outputSlot)
+	actions, err := buildCraftActions(requestID, recipeNetID, recipe, count, s.gridInputs, outputSlot, b.ItemNames[recipe.Output.NetworkID])
+	if err != nil {
+		// The grid is already staged, so release it before reporting the failure
+		// rather than leaving items stranded in the crafting input.
+		if restoreErr := b.restoreCraftingGrid(s.stagedIngredients, s.gridInputs, s.gridInputIndexes, s.itemName); restoreErr != nil {
+			return fmt.Errorf("craft %s: %w; restore crafting grid: %v", s.itemName, err, restoreErr)
+		}
+		return fmt.Errorf("craft %s: %w", s.itemName, err)
+	}
 	if _, err := b.sendStackRequest(requestID, resultCh, actions, s.itemName); err != nil {
 		if errors.Is(err, errStackRequestRejected) {
 			if restoreErr := b.restoreCraftingGrid(s.stagedIngredients, s.gridInputs, s.gridInputIndexes, s.itemName); restoreErr != nil {
@@ -402,16 +410,19 @@ func (b *Bot) CraftItemOnTable(recipeNetID uint32, count int) error {
 
 	resultItem := recipe.Output
 	resultItem.Count = safecast.To[uint16](outputCount)
+	resultStackItem, ok := stackRequestItemFromStack(resultItem, itemName)
+	if !ok {
+		return fmt.Errorf("cannot describe crafted output %q to the server", itemName)
+	}
 
 	actions := []protocol.StackRequestAction{
 		&protocol.AutoCraftRecipeStackRequestAction{
 			RecipeNetworkID: recipeNetID,
 			NumberOfCrafts:  byte(count),
-			TimesCrafted:    byte(count),
 			Ingredients:     recipe.Ingredients,
 		},
 		&protocol.CraftResultsDeprecatedStackRequestAction{
-			ResultItems:  []protocol.ItemStack{resultItem},
+			ResultItems:  []protocol.StackRequestItem{resultStackItem},
 			TimesCrafted: byte(count),
 		},
 	}
@@ -601,15 +612,23 @@ func (b *Bot) sendStackRequest(requestID int32, resultCh chan craftResult, actio
 	}
 }
 
-func buildCraftActions(requestID int32, recipeNetID uint32, recipe RecipeInfo, count int, gridInputs []craftingGridInput, outputSlot uint32) []protocol.StackRequestAction {
+// buildCraftActions assembles the stack request actions for one craft. Craft
+// results are addressed by namespaced item identifier rather than network ID, so
+// the output item must be resolvable to a name; otherwise the server would
+// receive an empty identifier and reject the request without a clear reason.
+func buildCraftActions(requestID int32, recipeNetID uint32, recipe RecipeInfo, count int, gridInputs []craftingGridInput, outputSlot uint32, outputName string) ([]protocol.StackRequestAction, error) {
 	outputCount := int(recipe.Output.Count) * count
 	resultItem := recipe.Output
 	resultItem.Count = safecast.To[uint16](outputCount)
+	resultStackItem, ok := stackRequestItemFromStack(resultItem, outputName)
+	if !ok {
+		return nil, fmt.Errorf("cannot determine the item name of recipe output %+v", recipe.Output)
+	}
 
 	actions := make([]protocol.StackRequestAction, 0, len(gridInputs)+3)
 	actions = append(actions,
 		&protocol.CraftRecipeStackRequestAction{RecipeNetworkID: recipeNetID, NumberOfCrafts: byte(count)},
-		&protocol.CraftResultsDeprecatedStackRequestAction{ResultItems: []protocol.ItemStack{resultItem}, TimesCrafted: byte(count)},
+		&protocol.CraftResultsDeprecatedStackRequestAction{ResultItems: []protocol.StackRequestItem{resultStackItem}, TimesCrafted: byte(count)},
 	)
 	for _, input := range gridInputs {
 		actions = append(actions, &protocol.ConsumeStackRequestAction{
@@ -634,5 +653,5 @@ func buildCraftActions(requestID int32, recipeNetID uint32, recipe RecipeInfo, c
 		Container: protocol.FullContainerName{ContainerID: protocol.ContainerCombinedHotBarAndInventory},
 		Slot:      byte(outputSlot),
 	}
-	return append(actions, place)
+	return append(actions, place), nil
 }

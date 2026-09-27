@@ -39,6 +39,15 @@ type Bot interface {
 	FormatItemName(name string) string
 }
 
+// serverAuthBreaking reports whether the bot's current server negotiated
+// server-authoritative block breaking. It is an optional capability resolved by
+// type assertion so the gathering.Bot interface stays implementable by test
+// fakes without knowing about connection state.
+func serverAuthBreaking(b Bot) bool {
+	sabd, ok := b.(interface{ ServerAuthBlockBreaking() bool })
+	return ok && sabd.ServerAuthBlockBreaking()
+}
+
 type ResourceGatherer struct {
 	bot              Bot
 	logger           *slog.Logger

@@ -2,6 +2,16 @@ package bot
 
 import "strings"
 
+// PlayerNameMatches reports whether a tracked name refers to the queried
+// player. Exported because callers that already hold the bot lock need it:
+// Bot.FindPlayer takes that same lock, and sync.Mutex is not reentrant, so
+// calling it from a locked section self-deadlocks.
+//
+// Kept as a pure function for exactly that reason — no lock, no I/O.
+func PlayerNameMatches(known, query string) bool {
+	return playerNameMatches(known, query)
+}
+
 func playerNameMatches(known, query string) bool {
 	known = cleanPlayerName(known)
 	query = cleanPlayerName(query)

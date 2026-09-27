@@ -14,7 +14,7 @@ const contextBudgetRatio = 0.25
 // present in modelContextWindows. Conservative on purpose: overestimating the
 // budget risks overflowing the real window, underestimating only trims earlier
 // history.
-const defaultContextWindow = 32768
+const defaultContextWindow = 32780
 
 // modelContextWindows maps lowercase model-name substrings to their context
 // window size in tokens. Ordered most-specific first so substring matching

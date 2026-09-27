@@ -88,7 +88,7 @@ Sensor komputasional yang mem-parse import statements dan memvalidasi
 aturan dependency antar package. Aturan mengikuti layering berikut:
 
 ```
-Layer 0 (leaves):  debuglog, servercompat, config, event, ai
+Layer 0 (leaves):  debuglog, servercompat, config, event, ai, memory
                      → tidak boleh import package internal lainnya
 Layer 1:           skin (→config), connection (→config, servercompat)
 Layer 2:           handler (→event, debuglog)
@@ -104,6 +104,7 @@ internal/config/  → TIDAK boleh import bot/ai/handler/connection/skin/... (lea
 internal/event/   → TIDAK boleh import bot/ai/handler/connection/skin/... (leaf)
 internal/debuglog → TIDAK boleh import package internal lainnya (leaf)
 internal/servercompat → TIDAK boleh import package internal lainnya (leaf)
+internal/memory/  → TIDAK boleh import package internal lainnya (leaf)
 internal/skin/    → hanya boleh import config
 internal/connection/ → hanya boleh import config, servercompat
 internal/handler/ → hanya boleh import event, debuglog
@@ -267,14 +268,16 @@ result, _ := runner.Run()
 | `internal/ai` | `throttler_test.go` | Duplicate detection, rate limiting, rollback, case-insensitivity |
 | `internal/ai` | `history_test.go` | Message storage, capping, copy semantics, FixMessages sanitization |
 | `internal/bot/action` | `labels_test.go` | Supported action labels, aliases, completeness |
+| `internal/bot/action` | `memory_labels_test.go` | MinePal-parity labels (remember/recall/forget/sethome/home/analyze/move/look) |
 | `internal/bot/action` | `helpers_test.go` | normalizeItemName, isWoodLike, normalizeCropType, parseCount, durationTicks |
 | `internal/bot/pathfinder` | `heuristic_test.go` | Euclidean distance, symmetry, negative coords |
 | `internal/bot/pathfinder` | `node_test.go` | Node equality, link type constants |
 | `internal/bot/pathfinder` | `astar_test.go` | A* pathfinding, fallback, reconstructPath, target reachability |
 | `internal/config` | `loader_test.go` | YAML loading, defaults, validation, error cases |
+| `internal/memory` | `memory_test.go` | Fact add/search/forget, places, JSON persistence, prompt render, concurrency |
 | `internal/event` | `bus_test.go` | Pub/sub, multiple subscribers, event type isolation, concurrency |
 | `internal/harness` | `harness_test.go` | Runner orchestration, finding aggregation, ConsoleReporter, JSONReporter, NullReporter |
-| `internal/harness/architecture` | `architecture_test.go` | Dependency rule enforcement, file filtering, custom rules, all layer rules |
+| `internal/harness/architecture` | `architecture_test.go` | Dependency rule enforcement, file filtering, custom rules, all layer rules, memory leaf rules |
 | `internal/harness/filesize` | `filesize_test.go` | Line/byte thresholds, test file leniency, non-Go filtering, empty dir |
 | `internal/harness/tododebt` | `tododebt_test.go` | TODO/FIXME/HACK detection, non-comment filtering, max findings limit |
 | `internal/harness/complexity` | `complexity_test.go` | Cyclomatic complexity detection, binary ops, test file ignoring |

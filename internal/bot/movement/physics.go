@@ -13,11 +13,105 @@ func (tc *TickContext) runPhysicsAndCollisions() {
 	tc.applyPositionCorrection()
 	tc.updateDescendingFlag()
 	tc.updateGroundedState()
+	tc.applyServerPositionAnchor()
 	tc.applyVerticalVelocity()
 	tc.applyStepDownAssist(tc.FeetY)
 	tc.applyCeilingCollision()
 	tc.applyGroundLanding()
 	tc.syncGrounded()
+}
+
+// serverAnchorWindow is how long a server-confirmed Y stays authoritative. The
+// single-player host corrects position roughly every 6 ticks, so this covers
+// several corrections while still expiring quickly if the bot is in genuine
+// mid-air after a jump.
+const serverAnchorWindow = 400 * time.Millisecond
+
+// applyServerPositionAnchor holds a stationary bot at the last Y the server
+// confirmed, instead of letting gravity pull it down when the local world model
+// has no floor decoded beneath it.
+//
+// The bug this fixes: `updateGroundedState` only reports grounded when the local
+// world model says the block below is solid. On a freshly joined LAN world that
+// block is frequently not decoded yet, so IsGrounded stayed false, gravity
+// accumulated every tick, and the bot fell — then the server snapped it back on
+// the next CorrectPlayerMovePrediction. That fall/snap cycle moved the body by
+// over a block, which the look code turned into a visible head tremor and an
+// upward aim bias whenever the bot was watching a nearby player.
+//
+// The anchor deliberately does nothing while the bot is moving, jumping or on a
+// ladder: those states have their own vertical model and must not be pinned.
+func (tc *TickContext) applyServerPositionAnchor() {
+	if tc.IsGrounded || tc.IsOnLadder || tc.ShouldJump || tc.IsParkourJump {
+		return
+	}
+	if tc.HasHorizontalMove || tc.HasPath {
+		return
+	}
+	if !tc.hasFreshServerAnchor() {
+		return
+	}
+	if absFloat32(tc.serverAnchorDelta()) > anchorCorrectionLimit {
+		// Too far from the server's Y in either direction to be a decoding gap;
+		// this is a real displacement (respawn/teleport) and must be handled by
+		// the normal movement code rather than silently snapped.
+		return
+	}
+
+	tc.NextY = tc.serverAnchorY()
+	tc.VelY = 0
+	tc.IsGrounded = true
+
+	// Self-renew the anchor. The server simulates our input and corrects any
+	// position it disagrees with, so silence while we hold its last confirmed Y
+	// means it still agrees. Without the renewal the anchor expired every
+	// 400 ms, the bot sagged until the next correction snapped it back, and
+	// that fall/snap cycle repeated forever — a continuous body bob that read
+	// as the head trembling up and down while the bot tracked a player.
+	// Partial-height floors (snow layers, slabs) trigger exactly this: the
+	// local world model never classifies them as solid, so gravity always wins
+	// locally and only the server's correction holds the bot up.
+	tc.B.Mu.Lock()
+	tc.B.ServerGroundAt = time.Now()
+	tc.B.Mu.Unlock()
+}
+
+// anchorCorrectionLimit is the largest Y gap the anchor will silently correct.
+// Anything larger means the bot really moved (teleport, respawn) and the
+// discrepancy is meaningful data, not a decode gap.
+const anchorCorrectionLimit = 1.5
+
+// hasFreshServerAnchor reports whether the server confirmed a position recently
+// enough to trust.
+func (tc *TickContext) hasFreshServerAnchor() bool {
+	tc.B.Mu.Lock()
+	at := tc.B.ServerGroundAt
+	tc.B.Mu.Unlock()
+	if at.IsZero() {
+		return false
+	}
+	return time.Since(at) <= serverAnchorWindow
+}
+
+// serverAnchorDelta is the signed distance from the bot's simulated feet to the
+// server-confirmed Y.
+func (tc *TickContext) serverAnchorDelta() float32 {
+	return tc.CurrPos.Y() - tc.serverAnchorY()
+}
+
+// serverAnchorY returns the last Y the server confirmed for this bot.
+func (tc *TickContext) serverAnchorY() float32 {
+	tc.B.Mu.Lock()
+	anchorY := tc.B.ServerGroundY
+	tc.B.Mu.Unlock()
+	return anchorY
+}
+
+func absFloat32(v float32) float32 {
+	if v < 0 {
+		return -v
+	}
+	return v
 }
 
 func (tc *TickContext) updateLadderState() {
@@ -216,11 +310,19 @@ func (tc *TickContext) syncGrounded() {
 	tc.B.Mu.Unlock()
 }
 
+// Ground-check sample offsets are shared, not rebuilt per call. The callers only
+// ever read them, and this is on the movement tick's hot path: four probes per
+// call, several calls a tick, and a fresh slice each time is pure garbage.
+var (
+	groundCheckOffsetsNarrow  = []float32{0.0}
+	groundCheckOffsetsDefault = []float32{0.0, -0.3, 0.3}
+)
+
 func groundCheckOffsets(isDescending, isParkourJump bool) []float32 {
 	if isDescending {
-		return []float32{0.0}
+		return groundCheckOffsetsNarrow
 	}
-	return []float32{0.0, -0.3, 0.3}
+	return groundCheckOffsetsDefault
 }
 
 func parkourWindowActive(until time.Time) bool {

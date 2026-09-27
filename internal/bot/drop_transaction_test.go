@@ -82,7 +82,6 @@ func dropTestItem(count uint16, stackNetworkID int32) protocol.ItemInstance {
 			NBTData:        map[string]any{"test": int32(1)},
 			CanBePlacedOn:  []string{"minecraft:stone"},
 			CanBreak:       []string{"minecraft:dirt"},
-			HasNetworkID:   true,
 		},
 	}
 }

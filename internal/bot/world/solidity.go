@@ -32,7 +32,11 @@ func (wc *WorldCache) BlockRIDAt(x, y, z int32) (uint32, bool) {
 		return wc.airRID, true
 	}
 
-	rid := wc.TranslateRuntimeID(c.Block(safecast.To[uint8](x&0xf), safecast.To[int16](y), safecast.To[uint8](z&0xf), 0))
+	// c.Block already yields a LOCAL runtime ID: chunk palettes were translated
+	// when the sub-chunk was decoded. Translating again feeds a local ID back
+	// into the network-hash table, which can remap a perfectly valid block onto
+	// an unrelated one whenever that ID happens to be a hash key.
+	rid := c.Block(safecast.To[uint8](x&0xf), safecast.To[int16](y), safecast.To[uint8](z&0xf), 0)
 	return rid, true
 }
 
@@ -51,10 +55,34 @@ func (wc *WorldCache) IsBlockAir(x, y, z int32) (bool, bool) {
 }
 
 // IsRIDSolid checks if the given block runtime ID is solid.
+//
+// The answer is cached per runtime ID. Resolving it the long way builds the
+// block's collision boxes (world.BlockByRuntimeID → Model → BBox) and its block
+// state (which allocates a name string and a properties map) — for every single
+// cell query. Physics, pathfinding and every block scan ask this thousands of
+// times a tick, and the palette is finite, so the answer is worth remembering.
 func (wc *WorldCache) IsRIDSolid(rid uint32) bool {
 	rid = wc.TranslateRuntimeID(rid)
-	name, _, ok := chunk.RuntimeIDToState(rid)
-	if ok && isBlockNamePassable(name) {
+
+	wc.paletteMu.RLock()
+	solid, cached := wc.ridSolid[rid]
+	wc.paletteMu.RUnlock()
+	if cached {
+		return solid
+	}
+
+	solid = wc.resolveRIDSolid(rid)
+
+	wc.paletteMu.Lock()
+	wc.ridSolid[rid] = solid
+	wc.paletteMu.Unlock()
+	return solid
+}
+
+// resolveRIDSolid does the actual palette lookup and is only called once per
+// distinct runtime ID.
+func (wc *WorldCache) resolveRIDSolid(rid uint32) bool {
+	if name, ok := wc.BlockName(rid); ok && isBlockNamePassable(name) {
 		return false
 	}
 
@@ -74,6 +102,28 @@ func (wc *WorldCache) IsRIDSolid(rid uint32) bool {
 
 	boxes := m.BBox(cube.Pos{}, mockBlockSource{})
 	return len(boxes) > 0
+}
+
+// BlockName returns the block name for a runtime ID, remembering the answer.
+//
+// Encoding a block state allocates both a name and a properties map, and the
+// tree scanner alone asks for well over a hundred thousand of these per gather.
+func (wc *WorldCache) BlockName(rid uint32) (string, bool) {
+	rid = wc.TranslateRuntimeID(rid)
+
+	wc.paletteMu.RLock()
+	name, cached := wc.ridNames[rid]
+	wc.paletteMu.RUnlock()
+	if cached {
+		return name, name != ""
+	}
+
+	name, _, ok := chunk.RuntimeIDToState(rid)
+
+	wc.paletteMu.Lock()
+	wc.ridNames[rid] = name
+	wc.paletteMu.Unlock()
+	return name, ok
 }
 
 // IsBlockSolid checks if the block at the given coordinates is solid.

@@ -171,22 +171,84 @@ func planIngredientConsumption(inv map[uint32]protocol.ItemStack, itemNames map[
 }
 
 // resolveIngredientIdentity extracts a human-readable name and/or a network ID
-// from an item descriptor. For DefaultItemDescriptor it uses the name lookup;
-// for ItemTagItemDescriptor it returns the tag name. Other descriptors return
-// empty values and are treated as server-handled.
+// from an item descriptor. DefaultItemDescriptor now carries the namespaced item
+// identifier instead of a network ID, so the identifier is matched against the
+// names the bot knows. ItemTagItemDescriptor returns the tag name. Other
+// descriptors return empty values and are treated as server-handled.
 func resolveIngredientIdentity(descriptor protocol.ItemDescriptor, itemNames map[int32]string) (string, int32) {
 	switch desc := descriptor.(type) {
 	case *protocol.DefaultItemDescriptor:
-		if desc.NetworkID == 0 {
+		if desc.Name == "" {
 			return "", 0
 		}
-		name := itemNames[safecast.To[int32](desc.NetworkID)]
-		return name, safecast.To[int32](desc.NetworkID)
+		if name, networkID, ok := lookupNameByIdentifier(itemNames, desc.Name); ok {
+			return name, networkID
+		}
+		// The bot does not know this item yet; fall back to the identifier so the
+		// caller can still report a meaningful name in errors.
+		return desc.Name, 0
 	case *protocol.ItemTagItemDescriptor:
 		return desc.Tag, 0
 	default:
 		return "", 0
 	}
+}
+
+// lookupNameByIdentifier resolves a namespaced identifier to a known item name
+// and its network ID. Map iteration order is random, so candidates are collected
+// and the lowest network ID wins: that keeps the result stable across calls for
+// recipes that reference the same item through more than one runtime ID.
+func lookupNameByIdentifier(itemNames map[int32]string, identifier string) (string, int32, bool) {
+	var (
+		bestName string
+		bestID   int32
+		found    bool
+	)
+	for networkID, candidate := range itemNames {
+		if !itemNameMatchesIdentifier(candidate, identifier) {
+			continue
+		}
+		if !found || networkID < bestID {
+			bestName, bestID, found = candidate, networkID, true
+		}
+	}
+	return bestName, bestID, found
+}
+
+// itemNameMatchesIdentifier reports whether an inventory item name refers to the
+// namespaced identifier used by item descriptors (minecraft:oak_planks). Both
+// sides are normalised, so an item name that already carries the namespace
+// prefix still matches the bare identifier from a descriptor.
+func itemNameMatchesIdentifier(itemName, identifier string) bool {
+	normalise := func(v string) string {
+		v, _ = strings.CutPrefix(strings.TrimSpace(v), "minecraft:")
+		return strings.ToLower(strings.ReplaceAll(v, " ", "_"))
+	}
+	return normalise(itemName) == normalise(identifier)
+}
+
+// stackRequestItemFromStack converts an item stack into the name-addressed form
+// used by craft-result stack request actions. Item stacks are identified by
+// network ID rather than name, so the caller supplies the resolved name. Names
+// that cannot be described this way are rejected.
+func stackRequestItemFromStack(stack protocol.ItemStack, name string) (protocol.StackRequestItem, bool) {
+	if name == "" {
+		return protocol.StackRequestItem{}, false
+	}
+	identifier := name
+	if !strings.Contains(identifier, ":") {
+		identifier = "minecraft:" + identifier
+	}
+	return protocol.StackRequestItem{
+		Identifier:     identifier,
+		MetadataValue:  stack.MetadataValue,
+		BlockRuntimeID: stack.BlockRuntimeID,
+		Count:          stack.Count,
+		NBTData:        stack.NBTData,
+		CanBePlacedOn:  stack.CanBePlacedOn,
+		CanBreak:       stack.CanBreak,
+		BlockingTick:   stack.BlockingTick,
+	}, true
 }
 
 // canonicalItemNames maps recipe ingredient names that differ from the

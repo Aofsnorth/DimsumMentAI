@@ -5,18 +5,25 @@ package gathering
 import (
 	"context"
 	"fmt"
+	"math"
+	"math/rand"
 	"strings"
 	"time"
 
 	"bedrock-ai/internal/bot/movement/animation"
-	"bedrock-ai/internal/event"
 
 	"github.com/go-gl/mathgl/mgl32"
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
 	"github.com/sandertv/gophertunnel/minecraft/protocol/packet"
 )
 
-func (tc *TreeChopper) chopTree(ctx context.Context, basePos protocol.BlockPos, targetCount int) {
+// chopTree fells the trunk at basePos and returns how many logs actually made
+// it into the inventory.
+//
+// Reporting is deliberately not done here: the caller may fell several trunks to
+// reach one large target, and one status per trunk would have the LLM announce
+// a finished haul three times over.
+func (tc *TreeChopper) chopTree(ctx context.Context, basePos protocol.BlockPos, targetCount int) int {
 	if targetCount <= 0 {
 		targetCount = 1
 	}
@@ -35,34 +42,23 @@ func (tc *TreeChopper) chopTree(ctx context.Context, basePos protocol.BlockPos, 
 	// tracked and finds nothing.
 	time.Sleep(400 * time.Millisecond)
 
-	// Verify the broken logs actually enter the inventory before reporting
-	// success. Previously the bot could break a log, fail to pick it up, and
-	// still announce that gathering was done.
+	// Verify the broken logs actually enter the inventory before counting them.
+	// Previously the bot could break a log, fail to pick it up, and still
+	// announce that gathering was done.
 	before := tc.rg.looter.currentItemCount("log")
 	tc.rg.looter.CollectAllDrops(ctx, 8.0)
 	got := tc.rg.looter.currentItemCount("log") - before
 	if got <= 0 {
 		tc.logger.Warn("Wood broken but not picked up", "target", targetCount)
-		tc.rg.bot.ReportActionStatus("", event.ActionStatus{
-			Action:  "chop",
-			Item:    "log",
-			Success: false,
-			Error:   "kayu sudah dihancurkan tapi belum terambil",
-		})
-		return
+		return 0
 	}
 	tc.logger.Info("Wood collected", "count", got, "target", targetCount)
-	tc.rg.bot.ReportActionStatus("", event.ActionStatus{
-		Action:  "chop",
-		Item:    "log",
-		Count:   got,
-		Success: true,
-	})
 	// Release the last pinned LookAt (topmost log) so the head returns to
 	// neutral instead of staying stuck looking up the trunk.
 	if rl, ok := tc.rg.bot.(interface{ ResetLook() }); ok {
 		rl.ResetLook()
 	}
+	return got
 }
 
 func (tc *TreeChopper) collectLogBlocks(basePos protocol.BlockPos, targetCount int) []protocol.BlockPos {
@@ -158,6 +154,11 @@ func (tc *TreeChopper) chopLogBlock(ctx context.Context, pos protocol.BlockPos) 
 	botPos := bot.GetCoords()
 	if float32(pos.Y())-botPos.Y() > 4.0 {
 		tc.rg.scaffold.TowerUpTo(ctx, float32(pos.Y())-1.0)
+		// Stocking the scaffold mine is a detour: the bot may now be standing
+		// several blocks from the trunk it came for. Get back within reach
+		// before swinging, otherwise the server just rejects the break and the
+		// logs stay put.
+		tc.returnToReach(ctx, pos)
 	}
 
 	tc.clearObstructions(ctx, pos)
@@ -168,10 +169,30 @@ func (tc *TreeChopper) chopLogBlock(ctx context.Context, pos protocol.BlockPos) 
 
 	tc.logger.Debug("Chopping log block", "pos", pos)
 	tc.startBreakBlock(pos)
-	tc.swingUntilBreak(pos, targetCenter, blockBreakDuration("oak_log", tc.equippedAxeName()))
+	tc.swingUntilBreak(ctx, targetCenter, sabdBreakDuration(serverAuthBreaking(bot), "oak_log", tc.equippedAxeName()))
 	tc.finishBreakBlock(pos)
 
 	bot.GetLocalWorldModel().SetSolid(pos.X(), pos.Y(), pos.Z(), false)
+}
+
+// chopReachLimit is how far the bot may stand from a log and still break it.
+const chopReachLimit = 4.0
+
+// returnToReach walks back to a log after an interruption (towering, mining
+// scaffold stock) left the bot out of breaking range.
+func (tc *TreeChopper) returnToReach(ctx context.Context, pos protocol.BlockPos) {
+	bot := tc.rg.bot
+	botPos := bot.GetCoords()
+	dx := botPos.X() - (float32(pos.X()) + 0.5)
+	dz := botPos.Z() - (float32(pos.Z()) + 0.5)
+	if float32(math.Sqrt(float64(dx*dx+dz*dz))) <= chopReachLimit {
+		return
+	}
+
+	tc.logger.Debug("Out of reach after towering, walking back to log", "pos", pos)
+	if tc.rg.bot.NavigateToBlock(pos.X(), pos.Y()-1, pos.Z(), 2.0) {
+		tc.rg.bot.StopMovement()
+	}
 }
 
 func (tc *TreeChopper) startBreakBlock(pos protocol.BlockPos) {
@@ -183,14 +204,66 @@ func (tc *TreeChopper) startBreakBlock(pos protocol.BlockPos) {
 	})
 }
 
-func (tc *TreeChopper) swingUntilBreak(pos protocol.BlockPos, targetCenter mgl32.Vec3, breakTime time.Duration) {
+// Swing rhythm. A fixed 100 ms tick between swings is the single most obvious
+// tell that a bot is working: a human raises the tool, accelerates into a burst
+// of a few swings, recovers, and repeats — and their aim drifts a little inside
+// the block instead of being welded to its centre.
+const (
+	chopWindUpMin   = 60 * time.Millisecond
+	chopWindUpMax   = 140 * time.Millisecond
+	chopSwingMin    = 70 * time.Millisecond
+	chopSwingMax    = 110 * time.Millisecond
+	chopRecoveryMin = 140 * time.Millisecond
+	chopRecoveryMax = 220 * time.Millisecond
+	chopBurstLength = 3
+	chopAimJitter   = 0.12
+)
+
+func chopWindUp() time.Duration {
+	return chopWindUpMin + time.Duration(rand.Int63n(int64(chopWindUpMax-chopWindUpMin)))
+}
+
+// chopCadence returns the pause after the nth swing of a burst: quick inside a
+// burst, a longer recovery between them.
+func chopCadence(swing int) time.Duration {
+	if swing%chopBurstLength == chopBurstLength-1 {
+		return chopRecoveryMin + time.Duration(rand.Int63n(int64(chopRecoveryMax-chopRecoveryMin)))
+	}
+	return chopSwingMin + time.Duration(rand.Int63n(int64(chopSwingMax-chopSwingMin)))
+}
+
+// chopAim jitters the aim point slightly around the block centre so the head
+// does not sit perfectly still on one pixel.
+func chopAim(center mgl32.Vec3) mgl32.Vec3 {
+	return mgl32.Vec3{
+		center.X() + chopAimJitter*(rand.Float32()*2-1),
+		center.Y() + chopAimJitter*(rand.Float32()*2-1),
+		center.Z() + chopAimJitter*(rand.Float32()*2-1),
+	}
+}
+
+func (tc *TreeChopper) swingUntilBreak(ctx context.Context, targetCenter mgl32.Vec3, breakTime time.Duration) {
 	bot := tc.rg.bot
 	elapsed := time.Duration(0)
-	for elapsed < breakTime {
+
+	// Wind-up before the first swing: starting instantly looks automated.
+	if !sleepContext(ctx, chopWindUp()) {
+		return
+	}
+	elapsed += chopWindUpMin // conservative: never overrun the break time
+
+	for swing := 0; elapsed < breakTime; swing++ {
 		_ = bot.WritePacket(animation.MineSwing(bot.GetEntityRuntimeID()))
-		bot.LookAt(targetCenter)
-		time.Sleep(100 * time.Millisecond)
-		elapsed += 100 * time.Millisecond
+		bot.LookAt(chopAim(targetCenter))
+
+		wait := chopCadence(swing)
+		if elapsed+wait > breakTime {
+			wait = breakTime - elapsed
+		}
+		if !sleepContext(ctx, wait) {
+			return
+		}
+		elapsed += wait
 	}
 }
 

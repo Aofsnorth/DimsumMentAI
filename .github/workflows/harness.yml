@@ -106,15 +106,15 @@ jobs:
 
       # --- Computational sensor: build ---
       - name: Build all packages
-        run: go build ./cmd/... ./internal/...
+        run: go build ./cmd/... ./internal/... ./tests/...
 
       # --- Computational sensor: unit tests ---
       - name: Run unit tests
-        run: go test -count=1 ./internal/...
+        run: go test -count=1 ./internal/... ./tests/...
 
       # --- Computational sensor: architecture fitness ---
       - name: Run architecture fitness sensor
-        run: go test -count=1 -v ./internal/harness/architecture/...
+        run: go test -count=1 -v ./tests/harness/architecture/...
 
       # --- Computational sensor: unified harness CLI ---
       - name: Run harness CLI (all sensors & guides)
@@ -122,12 +122,12 @@ jobs:
 
       # --- Computational sensor: race detector ---
       - name: Run race detector
-        run: go test -count=1 -race ./internal/...
+        run: go test -count=1 -race ./internal/... ./tests/...
 
       # --- Computational sensor: coverage ---
       - name: Run coverage
         run: |
-          go test -count=1 -coverprofile=coverage.out ./internal/...
+          go test -count=1 -coverprofile=coverage.out ./internal/... ./tests/...
           go tool cover -func=coverage.out | tail -1
 
       - name: Upload coverage artifact

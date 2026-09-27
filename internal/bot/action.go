@@ -189,6 +189,15 @@ func (b *Bot) GetCoords() mgl32.Vec3 {
 	return b.Pos
 }
 
+// GetYaw returns the body yaw in degrees, using the project convention
+// yaw = atan2(dz, dx) * 180/pi - 90. Interaction needs it to resolve "whatever
+// is in front of you" into an actual direction.
+func (b *Bot) GetYaw() float32 {
+	b.Mu.Lock()
+	defer b.Mu.Unlock()
+	return b.Yaw
+}
+
 // GetPlayerCoords returns coordinates of player by username
 func (b *Bot) GetPlayerCoords(username string) (mgl32.Vec3, bool) {
 	b.Mu.Lock()

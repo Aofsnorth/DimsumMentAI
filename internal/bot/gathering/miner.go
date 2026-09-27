@@ -29,7 +29,25 @@ func NewBlockMiner(rg *ResourceGatherer, logger *slog.Logger) *BlockMiner {
 	}
 }
 
+// GatherBlock mines a block type and reports the outcome as an action the
+// player can see.
 func (bm *BlockMiner) GatherBlock(ctx context.Context, blockName string, targetCount int) {
+	collected := bm.gatherBlocks(ctx, blockName, targetCount)
+	bm.rg.bot.ReportActionStatus("", event.ActionStatus{
+		Action:  "mine",
+		Item:    bm.resolveFuzzyName(blockName),
+		Count:   collected,
+		Success: true,
+	})
+}
+
+// gatherBlocks does the mining and returns how much was collected, without
+// reporting an action status.
+//
+// Internal detours use this — stocking scaffold blocks mid-chop, for example —
+// because a "mine: dirt" status would show up in the conversation for work the
+// player never asked for and derail the answer to what they did ask for.
+func (bm *BlockMiner) gatherBlocks(ctx context.Context, blockName string, targetCount int) int {
 	bot := bm.rg.bot
 	if targetCount <= 0 {
 		targetCount = 1
@@ -47,7 +65,11 @@ func (bm *BlockMiner) GatherBlock(ctx context.Context, blockName string, targetC
 	for currentCount-startCount < targetCount && failedAttempts < 8 {
 		select {
 		case <-ctx.Done():
-			return
+			collected := currentCount - startCount
+			if collected < 0 {
+				collected = 0
+			}
+			return collected
 		default:
 		}
 
@@ -95,12 +117,7 @@ func (bm *BlockMiner) GatherBlock(ctx context.Context, blockName string, targetC
 		collected = 0
 	}
 	bm.logger.Info("block gathering complete", "requested", resolvedName, "mined_blocks", minedBlocks, "collected", collected)
-	bot.ReportActionStatus("", event.ActionStatus{
-		Action:  "mine",
-		Item:    resolvedName,
-		Count:   collected,
-		Success: true,
-	})
+	return collected
 }
 
 func (bm *BlockMiner) findBestMineStep(resolvedName string, dugPositions map[string]bool) (mineStep, string, bool) {
@@ -208,7 +225,7 @@ func (bm *BlockMiner) mineSingle(ctx context.Context, step mineStep, blockName s
 		BlockFace:       step.Face,
 	})
 
-	breakTime := blockBreakDuration(blockName, bm.equippedToolName())
+	breakTime := sabdBreakDuration(serverAuthBreaking(bot), blockName, bm.equippedToolName())
 
 	elapsed := time.Duration(0)
 	swingInterval := 150 * time.Millisecond

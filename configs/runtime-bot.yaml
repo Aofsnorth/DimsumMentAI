@@ -7,6 +7,9 @@ server:
   host: "127.0.0.1"
   port: 19140
   offline: true # true = no Xbox Live auth (local server)
+  # lan_discovery: true # set true for a single-player world opened to LAN
+  # lan_world: "World name" # optional exact/insensitive world or host name filter
+  command_prefix: "auto" # auto | slash | none — see configs/bot.yaml for why this exists
 
 # --- Bot Identity ---
 bot:
@@ -15,6 +18,47 @@ bot:
   log_level: "debug" # debug, info, warn, or error
   debug: false # Enable visualizer debug features (break, place, inventory buttons)
   state_path: ".runtime-bot-state.json"
+
+  # Sent after every join. "/..." lines run as a real server command,
+  # anything else is sent as a plain chat message.
+  join_messages: []
+  join_message_delay_sec: 2 # wait after spawning before the first line (server may still be finishing the world transfer)
+  join_message_gap_sec: 1 # pause between lines, so a burst is not sent as one flood
+
+# ============================================
+#  AGI — bot yang punya inisiatif sendiri
+# ============================================
+# Default: enabled: false. Saat aktif, bot tidak lagi menunggu perintah — dia
+# punya agenda sendiri: reacted, jalan-jalan, ngobrol duluan, dan ngeliat orang
+# yang datang. Layer-nya sengaja dipisah:
+#
+#   Reflex  (lokal, instan, tanpa LLM)  — bahaya, lapar, orang mendekat.
+#           Harus instan: bot yang mikir dulu sebelum makan adalah bot yang kelaparan.
+#   Decision (LLM, dibatasi peluang)   — "mau ngapain sekarang?" yang dijawab
+#           model, dengan <silent/> sebagai jawaban yang paling sering benar.
+#
+# Tips: social_cooldown_sec adalah angka paling penting di sini. Tanpa itu bot
+# jadi spambot, bukan teman.
+agi:
+  enabled: false # true = bot main sendiri, tanpa perlu disuruh
+  tick_interval_sec: 30 # seberapa sering otaknye bangun
+  llm_chance: 0.35 # peluang (0-1) tiap tick untuk tanya LLM. Refleks tetap jalan terus.
+  self_preservation: true # makan kalau lapar, lari kalau kritis
+  low_hp_threshold: 8 # HP <= ini = bahaya
+  low_hunger_threshold: 6 # hunger <= ini = lapar
+  wander: true # jalan-jalan kalau nggak ada kerjaan
+  wander_duration_sec: 20
+  social: true # bisa ngobrol duluan tanpa diminta
+  social_cooldown_sec: 120 # jeda minimal antar pesan spontan
+  vision: true #(auto) lihat player yang mendekat
+  vision_radius: 10
+  vision_hold_sec: 5
+  vision_cooldown_sec: 15
+  jev:
+    enabled: false
+    base_url: "https://api.typesafe.ai"
+    danger_threshold: 0.6
+    speak_threshold: 0.75 # cegah kepala berbolak-balik
 
 # --- Skin & Geometry ---
 skin:

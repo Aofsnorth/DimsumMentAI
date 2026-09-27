@@ -2,6 +2,7 @@
 package world
 
 import (
+	"log/slog"
 	"math"
 	"sync/atomic"
 
@@ -32,6 +33,9 @@ func HandleWorldPacket(b *bot.Bot, pk packet.Packet) bool {
 	case *packet.SubChunk:
 		b.WorldCache.HandleSubChunk(p)
 		return true
+	case *packet.UpdateSubChunkBlocks:
+		handleUpdateSubChunkBlocks(b, p)
+		return true
 	case *packet.UpdateBlock:
 		handleUpdateBlock(b, p)
 		return true
@@ -60,6 +64,18 @@ func handleLevelChunk(b *bot.Bot, p *packet.LevelChunk) {
 		_ = b.Conn.Flush()
 	}
 
+	// Since protocol 800 (1.21.100+) Bedrock stopped inlining sub-chunk data in
+	// LevelChunk: every chunk packet arrives with SubChunkCount == 0 and the
+	// terrain only comes back as SubChunk packets after the client asks for it.
+	// Decoding a zero-count payload produced an all-air column, which made the
+	// whole WorldCache look like empty space — A* vetoed every neighbour and the
+	// block scanner never found anything. So request mode has to be detected
+	// before anything is stored.
+	if isSubChunkRequestMode(p) {
+		handleSubChunkRequestMode(b, p)
+		return
+	}
+
 	// Venity hub floods 400+ full chunks at spawn. Decode only chunks
 	// near the bot/active target so pathfinding has local ground data
 	// without making the packet loop chew through the whole flood.
@@ -70,40 +86,138 @@ func handleLevelChunk(b *bot.Bot, p *packet.LevelChunk) {
 		}
 		go b.WorldCache.HandleLevelChunk(&pkCopy)
 	}
-
-	handleLevelChunkSubChunkRequest(b, p)
 }
 
-func handleLevelChunkSubChunkRequest(b *bot.Bot, p *packet.LevelChunk) {
-	if p.SubChunkCount != protocol.SubChunkRequestModeLimitless && p.SubChunkCount != protocol.SubChunkRequestModeLimited {
-		return
+// isSubChunkRequestMode reports whether the server expects the client to pull
+// sub-chunk data instead of shipping it inside LevelChunk. Pre-800 servers
+// signalled this with a count above maxSubChunkCount; current servers just send
+// a count of 0 alongside a payload that is not a classic sub-chunk array.
+func isSubChunkRequestMode(p *packet.LevelChunk) bool {
+	return p.SubChunkCount == 0 || p.SubChunkCount > maxSubChunkCount
+}
+
+func handleSubChunkRequestMode(b *bot.Bot, p *packet.LevelChunk) {
+	limit := int32(0)
+	if v, ok := p.SubChunkLimit.Value(); ok && v > 0 {
+		limit = v
 	}
 
 	b.Mu.Lock()
+	first := !b.SubChunkRequestMode
 	b.SubChunkRequestMode = true
+	b.ChunkDimension = p.Dimension
+	b.SubChunkLimit = limit
+	noSubChunks := b.GeyserNoSubChunks
 	b.Mu.Unlock()
 
-	highestY := int32(25)
-	if p.SubChunkCount == protocol.SubChunkRequestModeLimited {
-		highestY = int32(p.HighestSubChunk)
+	if first {
+		b.Logger.Info("server uses sub-chunk request mode; terrain arrives as SubChunk packets",
+			"dimension", p.Dimension,
+			"sub_chunk_limit", limit,
+			"payload_len", len(p.RawPayload),
+		)
 	}
 
-	offsets := make([]protocol.SubChunkOffset, 0, highestY+4)
-	for y := int32(-4); y <= highestY; y++ {
+	// Geyser-fronted servers (GeyserNoSubChunks) drop the session on the first
+	// SubChunkRequest: captured live, the server went permanently silent 7ms
+	// after this packet left and never answered anything again, while the same
+	// dial stack without it stays connected. Those servers still stream
+	// data-carrying LevelChunks once a chunk radius has been requested, so the
+	// bot keeps its terrain without asking for sub-chunks.
+	if noSubChunks {
+		if first {
+			b.Logger.Debug("skipping eager SubChunkRequest (Geyser profile)",
+				"chunkX", p.Position.X(), "chunkZ", p.Position.Z())
+		}
+		return
+	}
+
+	// Ask for the chunk that triggered this straight away. The background
+	// requester in ChunkRequesterLoop covers the surrounding 5x5.
+	pos := b.GetCoords()
+	SendSubChunkRequest(b, p.Position.X(), p.Position.Z(),
+		SubChunkRow(int32(pos.Y())), p.Dimension, limit)
+}
+
+// maxSubChunkCount is the highest sub-chunk count a LevelChunk payload can
+// carry. The server signals request mode by sending a count above this, in
+// which case the real sub-chunks must be requested explicitly.
+const maxSubChunkCount = 64
+
+const (
+	// minSubChunkY and maxSubChunkY bound the overworld column in sub-chunk
+	// units, matching the bot's world range of [-64, 319].
+	minSubChunkY int32 = -4
+	maxSubChunkY int32 = 19
+	// fullColumnSubChunks is the number of sub-chunks in one full column.
+	fullColumnSubChunks = maxSubChunkY - minSubChunkY + 1
+)
+
+// SubChunkRow converts a world Y coordinate into its sub-chunk row index.
+func SubChunkRow(y int32) int32 {
+	return y >> 4
+}
+
+// SubChunkOffsets builds the vertical window of sub-chunk offsets to request,
+// centred on the row the bot is standing in. The server advertises
+// SubChunkLimit as a cap on how many sub-chunks a single request may carry, so
+// the window is clamped to that cap; overshooting it makes the server reject the
+// whole request and return nothing.
+func SubChunkOffsets(centerRow, limit int32) []protocol.SubChunkOffset {
+	if limit <= 0 || limit > fullColumnSubChunks {
+		limit = fullColumnSubChunks
+	}
+
+	start := centerRow - limit/2
+	if start < minSubChunkY {
+		start = minSubChunkY
+	}
+	if start+limit-1 > maxSubChunkY {
+		start = maxSubChunkY - limit + 1
+	}
+
+	offsets := make([]protocol.SubChunkOffset, 0, limit)
+	for y := start; y < start+limit; y++ {
 		offsets = append(offsets, protocol.SubChunkOffset{0, safecast.To[int8](y), 0})
 	}
+	return offsets
+}
 
+// SendSubChunkRequest asks the server for one chunk column and flushes the
+// packet. A SubChunkRequest for a chunk the server has not generated is
+// answered with SubChunkResultChunkNotFound, which is harmless.
+func SendSubChunkRequest(b *bot.Bot, chunkX, chunkZ, centerRow, dimension, limit int32) {
 	_ = b.Conn.WritePacket(&packet.SubChunkRequest{
-		Dimension: p.Dimension,
-		Position: protocol.SubChunkPos{
-			p.Position[0],
-			0,
-			p.Position[1],
-		},
-		Offsets: offsets,
+		Dimension: dimension,
+		Position:  protocol.SubChunkPos{chunkX, 0, chunkZ},
+		Offsets:   SubChunkOffsets(centerRow, limit),
 	})
 	_ = b.Conn.Flush()
 }
+
+// RequestChunkRadius asks the server to stream a chunk radius around the bot.
+//
+// A natural Bedrock client sends this right after spawning, and a server can
+// treat its absence as a malformed join: Geyser in particular, and the Java
+// server behind it, decide what to stream based on it. Without it the bot can
+// connect, spawn, and then sit in a world the server never bothered to fill —
+// which reads as a silent, intermittent disconnect depending on which server
+// software is in front.
+//
+// The radius is a request, not a demand: the server clamps it to what it is
+// willing to send, so this asks for a sane window and lets the server decide.
+func RequestChunkRadius(b *bot.Bot, radius int32) {
+	_ = b.Conn.WritePacket(&packet.RequestChunkRadius{
+		ChunkRadius:    radius,
+		MaxChunkRadius: uint8(radius),
+	})
+	_ = b.Conn.Flush()
+	b.Logger.Info("chunk radius requested", slog.Int("radius", int(radius)))
+}
+
+// DefaultChunkRadius is the radius the bot requests. Exported so main can wire
+// the function pointer without duplicating the number.
+const DefaultChunkRadius int32 = 8
 
 func handleClientCacheMissResponse(b *bot.Bot, p *packet.ClientCacheMissResponse) {
 	blobs := make(map[uint64][]byte, len(p.Blobs))
@@ -114,11 +228,25 @@ func handleClientCacheMissResponse(b *bot.Bot, p *packet.ClientCacheMissResponse
 }
 
 func handleUpdateBlock(b *bot.Bot, p *packet.UpdateBlock) {
-	b.WorldCache.SetBlockRID(p.Position.X(), p.Position.Y(), p.Position.Z(), p.NewBlockRuntimeID)
-	localRID := b.WorldCache.TranslateRuntimeID(p.NewBlockRuntimeID)
-	isSolid := b.WorldCache.IsRIDSolid(localRID)
-	b.WorldModel.SetSolid(p.Position.X(), p.Position.Y(), p.Position.Z(), isSolid)
-	b.NotifyBlockUpdate(p.Position, localRID)
+	applyBlockChange(b, p.Position.X(), p.Position.Y(), p.Position.Z(), p.NewBlockRuntimeID)
+}
+
+// handleUpdateSubChunkBlocks applies the batched block changes that modern
+// Bedrock sends instead of one UpdateBlock per change. Without this the world
+// model goes stale as soon as the bot places or breaks anything, and both A*
+// and the block scanner keep planning against the pre-change terrain.
+func handleUpdateSubChunkBlocks(b *bot.Bot, p *packet.UpdateSubChunkBlocks) {
+	for _, entry := range p.Blocks {
+		pos := entry.BlockPos
+		applyBlockChange(b, pos.X(), pos.Y(), pos.Z(), entry.BlockRuntimeID)
+	}
+}
+
+func applyBlockChange(b *bot.Bot, x, y, z int32, wireRID uint32) {
+	b.WorldCache.SetBlockRID(x, y, z, wireRID)
+	localRID := b.WorldCache.TranslateRuntimeID(wireRID)
+	b.WorldModel.SetSolid(x, y, z, b.WorldCache.IsRIDSolid(localRID))
+	b.NotifyBlockUpdate(protocol.BlockPos{x, y, z}, localRID)
 }
 
 func shouldDecodeLevelChunk(b *bot.Bot, p *packet.LevelChunk) bool {

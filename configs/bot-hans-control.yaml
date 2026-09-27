@@ -1,0 +1,174 @@
+# ============================================
+#  Minecraft Bedrock AI Bot Configuration
+# ============================================
+
+# --- Server Settings ---
+server:
+  host: "play.hansprojects.my.id"
+  port: 19132
+  offline: false # true = no Xbox Live auth (local server)
+  lan_discovery: false # auto-discover the single-player world opened to LAN
+  lan_world: "A" # optional: only join a world with this exact name
+  # How a server command is written on the wire. The protocol does not settle
+  # this and server software disagrees: Geyser strips a leading "/" (so "/register"
+  # arrives as an unknown command) while dragonfly requires it.
+  #   auto  (default) send "register" first, retry as "/register" if the server
+  #               answers nothing — the bot works out which it is talking to
+  #   slash          always send "/register"
+  #   none           always send "register"
+  # Pin it to slash/none once you know your server, to avoid a doubled command
+  # on a server that executes silently without replying.
+  command_prefix: "auto"
+  is_geyser_server: true
+  # How texture packs are handled.
+  #
+  # "skip" (default) refuses them. The bot is headless and never draws, so a
+  # pack is pure download cost — and refusing is what lets the ResourcePackStack
+  # check pass.
+  #
+  # "download" fetches and caches them. Be aware this FAILS on servers whose
+  # packs carry behaviour modules (Geyser servers usually do): gophertunnel's
+  # stack check hardcodes "this pack has no behaviours", so a pack that reports
+  # one is rejected as "not downloaded" no matter how completely it was
+  # fetched. The bot detects that and retries once without packs, so leaving
+  # this on is safe but costs one wasted connection per run.
+  resource_packs: "skip"
+  resource_pack_dir: "data/resourcepacks"
+
+# --- Bot Identity ---
+bot:
+  name: "Luna" # In-game display name
+  language: "Indonesian" # AI reply language, e.g. "English", "Indonesian", "Japanese"
+  log_level: "info" # debug, info, warn, or error (debug writes logs/debug-090ce4.log — flip it on when diagnosing)
+  memory_path: "data/bot_memory.json" # Curated long-term memories (facts + named places)
+  debug: false # Enable visualizer debug features (break, place, inventory buttons)
+
+  # --- Join Messages ---
+  # Sent once after every successful join, and again after a reconnect or a
+  # server switch (every session is fresh to the server). Useful for
+  # password-gated servers and lobby plugins, so the bot can get past a
+  # /register or /login prompt without you typing it by hand every time.
+  #
+  # A line starting with "/" is sent as a REAL server command. Anything else is
+  # sent as an ordinary chat message. That is the same rule a player follows:
+  # typing "/register pass pass" runs the command, it does not post the words.
+  #
+  #   join_messages:
+  #     - "/register pass1234 pass1234"   # server command (CommandRequest)
+  #     - "/login pass1234"              # server command
+  #     - "halo semua, aku Luna"         # plain chat message
+  #
+  # Do NOT put a password you would not type yourself in a world file you share.
+  # This server runs SimpleLogin: /register is a ONE-TIME setup (it answers
+  # "You are already registered" afterwards), and /login is what every later
+  # join needs — including automatic reconnects, which is why it belongs here
+  # rather than being typed once by hand.
+  join_messages:
+    - "/login Akukuat123"
+  join_message_delay_sec: 5 # wait after spawning before the first line (server may still be finishing the world transfer)
+  join_message_gap_sec: 1 # pause between lines, so a burst is not sent as one flood
+
+# --- AGI (autonomy) ---
+# Off by default. When enabled the bot stops waiting to be told what to do: it
+# reacts to danger and hunger on its own, looks up when a player walks into
+# view, wanders when idle, and can start a conversation nobody asked for.
+#
+# The loop is two layers. Reflexes (danger, hunger, someone approaching) are
+# local and instant — a bot that consults a model before eating is a bot that
+# starves. Decisions ("what do I want to do now?") ask the model, and are gated
+# by llm_chance and social_cooldown_sec.
+#
+# social_cooldown_sec is the number that matters most. Without it the bot
+# greets someone on every tick and reads as a spammer rather than a friend.
+agi:
+  enabled: false
+  tick_interval_sec: 30
+  llm_chance: 0.35
+  self_preservation: true
+  low_hp_threshold: 8
+  low_hunger_threshold: 6
+  wander: true
+  wander_duration_sec: 20
+  social: true
+  social_cooldown_sec: 120
+  vision: true
+  vision_radius: 10
+  vision_hold_sec: 5
+  vision_cooldown_sec: 15
+  # --- Jarak pandang & jam dunia ---
+  # Semua angka "taste" ada di sini, bukan di kode. Ubah tanpa rebuild.
+  perception:
+    mob_scan_distance: 32 # mobs sejauh ini masih ditulis ke prompt
+    block_scan_distance: 12 # blok sejauh ini masih ditulis
+    block_scan_limit: 4 # maksimal blok yang masuk prompt
+    mob_prompt_limit: 6 # maksimal mob yang masuk prompt
+    nearby_radius: 30 # siapa yang "dekat" kalau vision mati
+    bed_keywords: ["bed"] # cocoknya inventory item buat tidur (case/namespace diabaikan)
+  night_start_ticks: 12500 # Bedrock 0-24000; harus sama dengan survival manager
+  night_end_ticks: 23500
+  eye_height: 1.62 # tinggi mata di atas kaki; dipakai tiap ray line-of-sight
+  wander_radius: 12 # seberapa jauh satu langkah jalan-jalan boleh mendarat
+  # Idle nudge: langkah kecil-kecil saat diem. INI BUKAN KOSMETIK.
+  # Server punya AFK kicker yang memantau PERUBAHAN POSISI (bukan gerak kepala).
+  # Bot yang diem 100% akan di-kick walau kepalanya terus berputar — itulah
+  # penyebab bot keluar dari server Geyser setelah ~26 detik.
+  # Turunkan min_sec kalau server kick lebih cepat dari 14 detik.
+  idle_nudge_min_sec: 5
+  idle_nudge_max_sec: 9
+  idle_nudge_reach: 6 # maksimal jarak satu langkah (blok)
+  # --- Jev (TypeSafe AI System One) ---
+  # Jev bukan LLM: dia gak bisa nulis teks. Dia cuma jawab pertanyaan typed
+  # dengan probabilitas (noul = yes/no, choice = pilih satu, score = nilai).
+  #-ITu sebabnya dipisah dua: Jev yang PUTUSIN ("lari gak?", "momen ini
+  # layak ngomong?"), LLM yang NULIS ("bilang apa?").
+  #
+  # Jauh lebih cepat & murah dari LLM (70-500ms, $0.042/MTok input, output
+  # gratis), dan output-nya typed — 0% error parsing.
+  #
+  # Akses: console.typesafe.ai (early access bisa waitlist), atau lewat gateway:
+  #   Vercel AI Gateway → base_url: "https://ai-gateway.vercel.sh/v1"
+  #                      model: "typesafe-ai/jev"
+  #   OpenRouter        → base_url: "https://openrouter.ai/api/v1"
+  #                      model: "typesafe/jev-1.13"
+  # Kunci dibaca dari env TYPESAFE_API_KEY (lihat .env / .env.example).
+  # Tanpa kunci: bot tetap jalan pakai threshold biasa. Ini fitur tambahan,
+  # bukan syarat.
+  # Kunci DAN nama model dibaca dari .env (TYPESAFE_API_KEY, JEV_MODEL) — bukan
+  # dari YAML, supaya tidak ada yang bisa ke-commit. Config cuma pegang endpoint
+  # (policy) dan dua ambang probabilitas (kebijakan).
+  # Tanpa kunci: bot tetap jalan pakai threshold biasa. Fitur tambahan, bukan syarat.
+  jev:
+    enabled: false
+    base_url: "https://api.typesafe.ai"
+    danger_threshold: 0.6 # di atas ini = bahaya
+    speak_threshold: 0.75 # sengaja tinggi; bot yang terlalu gampang ngomong lebih buruk dari yang diam
+    timeout_sec: 5 # Jev jawab 70-500ms; timeout itu buat guard, bukan tuning kecepatan
+    prompts_file: "" # opsional: YAML untuk override wording pertanyaan (dikunci per nama pertanyaan)
+
+# --- Skin & Geometry ---
+skin:
+  image_path: "imports/skins/image/Anime-thing-on-planetminecraft-com.png"
+  arm_size: "slim" # "slim" (Alex) or "wide" (Steve)
+
+# --- AI & LLM Settings ---
+# Supported providers (all OpenAI-compatible chat-completion format):
+#   - nvidia              → uses https://integrate.api.nvidia.com (env: NVIDIA_API_KEY)
+#   - openai_compatible   → generic; requires base_url (env: OPENAI_API_KEY)
+#   - none                → disable AI
+ai:
+  provider: "openai_compatible"
+  model: "stealth/space-bunny-alpha" # must match /v1/models exactly: "<provider>/<name>"
+  #kc/inclusionai/ling-3.0-flash:free
+  # API key is loaded from .env (NVIDIA_API_KEY). See .env.example.
+  base_url: "https://api.cline.bot/api/v1" # leave empty to use provider default (nvidia). Required for openai_compatible/anthropic_compatible/google_compatible.
+  main_player: "MemberArthenyx"
+  respond_only_to_linked_player: false
+  respond_only_when_tagged: true # true = only respond when tagged/named in chat (e.g. Luna or @Luna)
+  custom_personality: "" # Custom LLM personality prompt override (leave empty to use default)
+  context_window: 1000000 # Model context window in tokens; 0 = auto-detect. Bot uses 25% of this as its per-request budget and auto-compacts history beyond it.
+
+# --- Chat Throttle Settings ---
+chat:
+  duplicate_window_sec: 3 # Same player + same message within N seconds is dropped
+  rate_limit_window_sec: 100 # Window for global flood protection
+  max_messages_per_window: 1000 # Max messages handled across all players in rate window

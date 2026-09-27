@@ -21,6 +21,14 @@ type ChatCompletionResponse struct {
 	Choices []struct {
 		Message Message `json:"message"`
 	} `json:"choices"`
+	// Data mirrors Choices for gateways that wrap the OpenAI payload in an
+	// envelope, e.g. {"data":{"choices":[...]},"success":true}. Both are
+	// optional and at most one is populated.
+	Data *struct {
+		Choices []struct {
+			Message Message `json:"message"`
+		} `json:"choices"`
+	} `json:"data"`
 }
 
 // NvidiaClient is a generic multi-protocol chat completion client. Despite the
@@ -36,8 +44,11 @@ type NvidiaClient struct {
 	client   *http.Client
 	History  *MessageHistory
 	persona  string
-	rules    string
-	language string
+	// personaTemplate is the unresolved persona, kept so the name can be
+	// re-substituted when the server assigns a different one mid-session.
+	personaTemplate string
+	rules           string
+	language        string
 
 	contextWindowOverride int // 0 = auto-detect from model registry
 }
@@ -100,22 +111,40 @@ func NewLLMClient(provider, model, baseURL string) *NvidiaClient {
 	}
 
 	return &NvidiaClient{
-		apiKey:   apiKey,
-		model:    model,
-		baseURL:  baseURL,
-		provider: provider,
-		protocol: protocolForProvider(provider),
-		client:   &http.Client{Timeout: 120 * time.Second},
-		History:  NewMessageHistory(20),
-		persona:  PromptCharacter,
-		rules:    BedrockSystemRules,
-		language: "Indonesian",
+		apiKey:          apiKey,
+		model:           model,
+		baseURL:         baseURL,
+		provider:        provider,
+		protocol:        protocolForProvider(provider),
+		client:          &http.Client{Timeout: 120 * time.Second},
+		History:         NewMessageHistory(20),
+		personaTemplate: PromptCharacter,
+		persona:         BuildPersona(PromptCharacter, ""),
+		rules:           BedrockSystemRules,
+		language:        "Indonesian",
 	}
 }
 
 // SetPersona overrides the default persona prompt
-func (nc *NvidiaClient) SetPersona(persona string) {
-	nc.persona = persona
+// SetPersona overrides the default persona prompt and binds it to a name.
+//
+// botName is required because the persona templates carry a name placeholder:
+// without it a persona would still be talking about whichever name was compiled
+// into the constant. An empty name is allowed, and the persona then simply has
+// no name to use.
+func (nc *NvidiaClient) SetPersona(persona, botName string) {
+	if persona == "" {
+		return
+	}
+	nc.personaTemplate = persona
+	nc.persona = BuildPersona(persona, botName)
+}
+
+// SetBotName re-binds the persona to a new username. The run loop calls this on
+// every session because the bot can be switched to another server, where the
+// server may hand it a different identity than the one in the config.
+func (nc *NvidiaClient) SetBotName(botName string) {
+	nc.persona = BuildPersona(nc.personaTemplate, botName)
 }
 
 // SetRules overrides the default technical constraint rules

@@ -10,6 +10,14 @@ import (
 	"github.com/go-gl/mathgl/mgl32"
 )
 
+// Direct-steer radii. Outside them a bot with no path cannot move at all, so
+// every place that decides "give up on the path" has to agree with
+// updateAllowDirectSteering about where that boundary is.
+const (
+	directSteerWalkToRadius = 16.0
+	directSteerFollowRadius = 8.0
+)
+
 func (tc *TickContext) updateDistanceToPlayer() {
 	tc.DistToPlayer = 999.0
 	if tc.MState == "follow" && tc.TPlayer != "" {
@@ -37,7 +45,7 @@ func (tc *TickContext) updateTargetPositionIfFollowing() {
 			dPlayer := float32(math.Sqrt(float64(dxP*dxP + dzP*dzP)))
 			hDiff := float32(math.Abs(float64(playerFeetPos.Y() - tc.CurrPos.Y())))
 
-			isClose := dPlayer < 2.0 && hDiff < 1.5
+			isClose := dPlayer < followStopDist && hDiff < followStopHeightDiff
 
 			if isClose {
 				tc.B.CurrentPath = nil
@@ -58,7 +66,9 @@ func (tc *TickContext) updateTargetPositionIfFollowing() {
 				tc.TPos = tc.B.TargetPos
 
 				hasPath := len(tc.B.CurrentPath) > 0 && tc.B.PathIndex < len(tc.B.CurrentPath)
-				if (!hasPath || tc.B.TicksStuck > 10) && timeSinceRecalc > 800*time.Millisecond {
+				// Re-read the recalc age: the branch above may have just replanned, and
+				// a stale timestamp from before it would double-run A* in this tick.
+				if (!hasPath || tc.B.TicksStuck > 10) && time.Since(tc.B.LastPathRecalcTime) > 800*time.Millisecond {
 					tc.B.LastPathRecalcTime = time.Now()
 					tc.B.Mu.Unlock()
 					RecalculatePath(tc.B)
@@ -121,10 +131,10 @@ func (tc *TickContext) updateAllowDirectSteering() {
 	hDiffToTarget := tc.heightDiffToTarget()
 
 	if tc.MState == "walk_to" {
-		if distanceToTarget < 16.0 {
+		if distanceToTarget < directSteerWalkToRadius {
 			tc.AllowDirectSteering = true
 		}
-	} else if distanceToTarget < 8.0 && hDiffToTarget < 1.5 {
+	} else if distanceToTarget < directSteerFollowRadius && hDiffToTarget < 1.5 {
 		tc.AllowDirectSteering = true
 	}
 }

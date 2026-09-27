@@ -155,15 +155,16 @@ func TestTransactionSlotToGlobal(t *testing.T) {
 		want   uint32
 		ok     bool
 	}{
-		{protocol.InventoryAction{WindowID: protocol.WindowIDInventory, InventorySlot: 0}, 0, true},
-		{protocol.InventoryAction{WindowID: protocol.WindowIDInventory, InventorySlot: 35}, 35, true},
-		{protocol.InventoryAction{WindowID: protocol.WindowIDInventory, InventorySlot: 36}, 0, false},
-		{protocol.InventoryAction{WindowID: protocol.WindowIDArmour, InventorySlot: 0}, 36, true},
-		{protocol.InventoryAction{WindowID: protocol.WindowIDArmour, InventorySlot: 3}, 39, true},
-		{protocol.InventoryAction{WindowID: protocol.WindowIDArmour, InventorySlot: 4}, 0, false},
-		{protocol.InventoryAction{WindowID: protocol.WindowIDOffHand, InventorySlot: 0}, 40, true},
-		{protocol.InventoryAction{WindowID: protocol.WindowIDOffHand, InventorySlot: 1}, 0, false},
-		{protocol.InventoryAction{WindowID: 123, InventorySlot: 0}, 0, false},
+		{protocol.InventoryAction{WindowID: protocol.Option(int8(protocol.WindowIDInventory)), InventorySlot: 0}, 0, true},
+		{protocol.InventoryAction{WindowID: protocol.Option(int8(protocol.WindowIDInventory)), InventorySlot: 35}, 35, true},
+		{protocol.InventoryAction{WindowID: protocol.Option(int8(protocol.WindowIDInventory)), InventorySlot: 36}, 0, false},
+		{protocol.InventoryAction{WindowID: protocol.Option(int8(protocol.WindowIDArmour)), InventorySlot: 0}, 36, true},
+		{protocol.InventoryAction{WindowID: protocol.Option(int8(protocol.WindowIDArmour)), InventorySlot: 3}, 39, true},
+		{protocol.InventoryAction{WindowID: protocol.Option(int8(protocol.WindowIDArmour)), InventorySlot: 4}, 0, false},
+		{protocol.InventoryAction{WindowID: protocol.Option(int8(protocol.WindowIDOffHand)), InventorySlot: 0}, 40, true},
+		{protocol.InventoryAction{WindowID: protocol.Option(int8(protocol.WindowIDOffHand)), InventorySlot: 1}, 0, false},
+		{protocol.InventoryAction{WindowID: protocol.Option(int8(123)), InventorySlot: 0}, 0, false},
+		{protocol.InventoryAction{InventorySlot: 0}, 0, false},
 	}
 	for _, tt := range tests {
 		got, ok := transactionSlotToGlobal(tt.action)
@@ -179,11 +180,11 @@ func TestIsPlayerInventoryTransaction(t *testing.T) {
 		action protocol.InventoryAction
 		want   bool
 	}{
-		{protocol.InventoryAction{SourceType: protocol.InventoryActionSourceContainer, WindowID: protocol.WindowIDInventory}, true},
-		{protocol.InventoryAction{SourceType: protocol.InventoryActionSourceContainer, WindowID: protocol.WindowIDArmour}, true},
-		{protocol.InventoryAction{SourceType: protocol.InventoryActionSourceContainer, WindowID: protocol.WindowIDOffHand}, true},
-		{protocol.InventoryAction{SourceType: protocol.InventoryActionSourceWorld, WindowID: protocol.WindowIDInventory}, false},
-		{protocol.InventoryAction{SourceType: protocol.InventoryActionSourceContainer, WindowID: 123}, false},
+		{protocol.InventoryAction{SourceType: protocol.InventoryActionSourceContainer, WindowID: protocol.Option(int8(protocol.WindowIDInventory))}, true},
+		{protocol.InventoryAction{SourceType: protocol.InventoryActionSourceContainer, WindowID: protocol.Option(int8(protocol.WindowIDArmour))}, true},
+		{protocol.InventoryAction{SourceType: protocol.InventoryActionSourceContainer, WindowID: protocol.Option(int8(protocol.WindowIDOffHand))}, true},
+		{protocol.InventoryAction{SourceType: protocol.InventoryActionSourceWorld, WindowID: protocol.Option(int8(protocol.WindowIDInventory))}, false},
+		{protocol.InventoryAction{SourceType: protocol.InventoryActionSourceContainer, WindowID: protocol.Option(int8(123))}, false},
 	}
 	for _, tt := range tests {
 		got := isPlayerInventoryTransaction(tt.action)
@@ -421,7 +422,7 @@ func TestApplyInventoryTransactionReportsHeldCountChange(t *testing.T) {
 	updated := applyInventoryTransaction(b, &packet.InventoryTransaction{
 		Actions: []protocol.InventoryAction{{
 			SourceType:    protocol.InventoryActionSourceContainer,
-			WindowID:      protocol.WindowIDInventory,
+			WindowID:      protocol.Option(int8(protocol.WindowIDInventory)),
 			InventorySlot: 1,
 			OldItem:       before,
 			NewItem:       after,

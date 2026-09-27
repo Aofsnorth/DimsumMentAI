@@ -103,6 +103,26 @@ func blockBreakDuration(blockName, toolName string) time.Duration {
 	return time.Duration(ms) * time.Millisecond
 }
 
+// sabdBreakMargin pads the computed break duration on servers that negotiated
+// server-authoritative block breaking. Those servers validate that the full
+// vanilla break time elapsed before honouring PredictDestroy, and
+// blockBreakDuration is biased 80ms EARLY for legacy servers. An early
+// PredictDestroy is silently rejected — the block stays while the bot walks
+// off convinced it chopped. Empirically on the LAN host: 1.5s of ContinueDestroy
+// for a 3.0s oak log was rejected, 3.5s was honoured.
+const sabdBreakMargin = 300 * time.Millisecond
+
+// sabdBreakDuration returns how long the bot must keep mining before finishing
+// a break: the legacy duration, plus the server-auth margin when the current
+// server requires the PlayerAuthInput block-action form.
+func sabdBreakDuration(serverAuthBreaking bool, blockName, toolName string) time.Duration {
+	d := blockBreakDuration(blockName, toolName)
+	if serverAuthBreaking {
+		d += sabdBreakMargin
+	}
+	return d
+}
+
 // equippedToolName returns the item name currently in the bot's held slot.
 // Returns empty string when the held slot is empty or unknown.
 func (bm *BlockMiner) equippedToolName() string {

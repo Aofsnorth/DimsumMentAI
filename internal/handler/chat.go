@@ -10,19 +10,43 @@ import (
 	"github.com/sandertv/gophertunnel/minecraft/protocol/packet"
 )
 
+// ServerReplier is the slice of *bot.Bot this package needs. Declared as an
+// interface so internal/handler does not import internal/bot, which would be an
+// import cycle: bot already imports handler.
+type ServerReplier interface {
+	NoteServerReply(text string)
+}
+
 type ChatHandler struct {
 	logger *slog.Logger
 	bus    *event.Bus
+	bot    ServerReplier
 }
 
-func NewChatHandler(logger *slog.Logger, bus *event.Bus) *ChatHandler {
-	return &ChatHandler{logger: logger, bus: bus}
+func NewChatHandler(logger *slog.Logger, bus *event.Bus, replier ...ServerReplier) *ChatHandler {
+	h := &ChatHandler{logger: logger, bus: bus}
+	if len(replier) > 0 {
+		h.bot = replier[0]
+	}
+	return h
+}
+
+// SetServerReplier attaches the bot after construction. The registry is wired up
+// before the bot exists, so this is how the handler gets told where to report
+// command replies.
+func (h *ChatHandler) SetServerReplier(replier ServerReplier) {
+	h.bot = replier
 }
 
 func (h *ChatHandler) Handle(_ context.Context, pk packet.Packet) error {
 	p, ok := pk.(*packet.Text)
 	if !ok {
 		return nil
+	}
+	// A bot is needed to record the reply, so the handler carries an optional
+	// pointer rather than importing internal/bot (which would be a cycle).
+	if h.bot != nil {
+		h.bot.NoteServerReply(p.Message)
 	}
 	if !isRoutableChatText(p.TextType) {
 		h.logger.Debug("ignored non-chat text packet", slog.Int("type", int(p.TextType)))
@@ -53,7 +77,6 @@ func (h *ChatHandler) Handle(_ context.Context, pk packet.Packet) error {
 		slog.Int("text_type", int(p.TextType)),
 		slog.String("raw_source", sourceName),
 	)
-
 	if cleanMessage == "" {
 		h.logger.Info("chat ignored: empty message after parse")
 		return nil

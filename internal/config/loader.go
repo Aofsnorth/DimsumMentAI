@@ -49,6 +49,17 @@ func Load(path string) (*Config, error) {
 }
 
 func applyDefaults(cfg *Config) {
+	cfg.Server.CommandPrefix = strings.ToLower(strings.TrimSpace(cfg.Server.CommandPrefix))
+	if cfg.Server.CommandPrefix == "" {
+		cfg.Server.CommandPrefix = CommandPrefixAuto
+	}
+	cfg.Server.ResourcePacks = strings.ToLower(strings.TrimSpace(cfg.Server.ResourcePacks))
+	if cfg.Server.ResourcePacks == "" {
+		cfg.Server.ResourcePacks = ResourcePacksSkip
+	}
+	if cfg.Server.ResourcePackDir == "" {
+		cfg.Server.ResourcePackDir = "data/resourcepacks"
+	}
 	if cfg.Bot.Language == "" {
 		cfg.Bot.Language = "Indonesian"
 	}
@@ -69,10 +80,107 @@ func applyDefaults(cfg *Config) {
 	if cfg.Chat.MaxMessagesPerWindow <= 0 {
 		cfg.Chat.MaxMessagesPerWindow = 100
 	}
+	// Join messages: default to a short settle delay and a one-second gap. Zero
+	// would fire the first line during the world transfer, before the server has
+	// finished handing over the command list.
+	if cfg.Bot.JoinMessageDelaySec <= 0 {
+		cfg.Bot.JoinMessageDelaySec = 2
+	}
+	if cfg.Bot.JoinMessageGapSec <= 0 {
+		cfg.Bot.JoinMessageGapSec = 1
+	}
 	// Proactive conversation: disabled by default (interval=0). When
 	// enabled, default chance is 0.3 (30% of ticks actually query the LLM).
 	if cfg.AI.ProactiveChance <= 0 && cfg.AI.ProactiveIntervalSec > 0 {
 		cfg.AI.ProactiveChance = 0.3
+	}
+	applyAGIDefaults(cfg)
+}
+
+// applyAGIDefaults fills the autonomy defaults. The thresholds are chosen so a
+// full 20/20 bar never trips them: a reflex that fires on a healthy bot would
+// make it eat and armour up constantly.
+func applyAGIDefaults(cfg *Config) {
+	agi := &cfg.AGI
+	if agi.TickIntervalSec <= 0 {
+		agi.TickIntervalSec = 30
+	}
+	if agi.LLMChance <= 0 {
+		agi.LLMChance = 0.35
+	}
+	if agi.LLMChance > 1 {
+		agi.LLMChance = 1
+	}
+	if agi.LowHPThreshold <= 0 || agi.LowHPThreshold > 20 {
+		agi.LowHPThreshold = 8
+	}
+	if agi.LowHunger < 0 || agi.LowHunger > 20 {
+		agi.LowHunger = 6
+	}
+	if agi.WanderDurationSec <= 0 {
+		agi.WanderDurationSec = 20
+	}
+	if agi.SocialCooldownSec <= 0 {
+		agi.SocialCooldownSec = 120
+	}
+	if agi.VisionRadius <= 0 {
+		agi.VisionRadius = 10
+	}
+	if agi.VisionHoldSec <= 0 {
+		agi.VisionHoldSec = 5
+	}
+	if agi.VisionCooldownSec <= 0 {
+		agi.VisionCooldownSec = 15
+	}
+	if agi.Jev.DangerThreshold <= 0 || agi.Jev.DangerThreshold > 1 {
+		agi.Jev.DangerThreshold = 0.6
+	}
+	if agi.Jev.SpeakThreshold <= 0 || agi.Jev.SpeakThreshold > 1 {
+		agi.Jev.SpeakThreshold = 0.75
+	}
+	if agi.Jev.TimeoutSec <= 0 {
+		agi.Jev.TimeoutSec = 5
+	}
+	if agi.NightStartTicks == 0 {
+		agi.NightStartTicks = 12500
+	}
+	if agi.NightEndTicks == 0 {
+		agi.NightEndTicks = 23500
+	}
+	if agi.EyeHeight <= 0 {
+		agi.EyeHeight = 1.62
+	}
+	if agi.WanderRadius <= 0 {
+		agi.WanderRadius = 12
+	}
+
+	perception := &agi.Perception
+	if perception.MobScanDistance <= 0 {
+		perception.MobScanDistance = 32
+	}
+	if perception.BlockScanDistance <= 0 {
+		perception.BlockScanDistance = 12
+	}
+	if perception.BlockScanLimit <= 0 {
+		perception.BlockScanLimit = 4
+	}
+	if perception.MobPromptLimit <= 0 {
+		perception.MobPromptLimit = 6
+	}
+	if perception.NearbyRadius <= 0 {
+		perception.NearbyRadius = 30
+	}
+	if len(perception.BedKeywords) == 0 {
+		perception.BedKeywords = []string{"bed"}
+	}
+	if agi.IdleNudgeMinSec <= 0 {
+		agi.IdleNudgeMinSec = 5
+	}
+	if agi.IdleNudgeMaxSec <= agi.IdleNudgeMinSec {
+		agi.IdleNudgeMaxSec = agi.IdleNudgeMinSec + 4
+	}
+	if agi.IdleNudgeReach <= 0 {
+		agi.IdleNudgeReach = 6
 	}
 }
 
@@ -106,6 +214,18 @@ func validateRequired(cfg *Config) error {
 	case "debug", "info", "warn", "error":
 	default:
 		return fmt.Errorf("bot.log_level must be one of: debug, info, warn, error")
+	}
+	switch cfg.Server.CommandPrefix {
+	case CommandPrefixAuto, CommandPrefixSlash, CommandPrefixNone:
+	default:
+		return fmt.Errorf("server.command_prefix must be one of: %s, %s, %s",
+			CommandPrefixAuto, CommandPrefixSlash, CommandPrefixNone)
+	}
+	switch cfg.Server.ResourcePacks {
+	case ResourcePacksSkip, ResourcePacksDownload:
+	default:
+		return fmt.Errorf("server.resource_packs must be one of: %s, %s",
+			ResourcePacksSkip, ResourcePacksDownload)
 	}
 	return nil
 }

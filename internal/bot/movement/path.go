@@ -112,6 +112,10 @@ func RecalculatePath(b *bot.Bot) {
 		b.LastPathRecalcTime = time.Now()
 		b.ConsecutiveStuckCount = 0
 		b.LastJumpPathIndex = -1
+		// Fresh route from a fresh position: the no-progress window must restart
+		// too, or a re-plan triggered by an old stall reports as a new one.
+		b.StuckWindowStart = time.Time{}
+		b.StuckWindowPos = lastTickPos
 		nodeCoords := make([]string, len(path))
 		for i, n := range path {
 			nodeCoords[i] = fmt.Sprintf("(%d,%d,%d,%s,%s)", n.X, n.Y, n.Z, n.LinkType, n.Action)

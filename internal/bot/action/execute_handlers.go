@@ -41,7 +41,26 @@ func selectAttackTarget(b *bot.Bot, param, user string) (*entity.Info, bool) {
 	excluded := excludedPlayerIDsLocked(b, user)
 	b.Mu.Unlock()
 
-	return entity.NearestVisibleMob(b.WorldModel, b, origin, actors, visibleTargetDistance, param, excluded)
+	return entity.NearestVisibleMob(b.WorldModel, visibilityReader{b}, origin, actors, visibleTargetDistance, param, excluded)
+}
+
+// visibilityReader answers "is this cell known to the bot" from the world model
+// rather than from the raw chunk cache.
+//
+// The chunk cache is 16-block granular: once any cell in a chunk is stored, the
+// whole chunk reports as loaded. That is right for terrain the server sent, but
+// it makes a single unknown cell invisible, so line-of-sight would happily walk
+// through a gap the bot has no knowledge of. The world model tracks loaded-ness
+// per cell, which is what "can I actually see past this" needs.
+type visibilityReader struct {
+	b *bot.Bot
+}
+
+func (v visibilityReader) GetBlockName(x, y, z int32) (string, bool) {
+	if v.b.WorldModel == nil || !v.b.WorldModel.IsLoaded(x, y, z) {
+		return "", false
+	}
+	return "minecraft:air", true
 }
 
 func handlePVP(b *bot.Bot, param, user string) {
@@ -76,8 +95,14 @@ func excludedPlayerIDsLocked(b *bot.Bot, user string) map[uint64]struct{} {
 		excluded[id] = struct{}{}
 	}
 	if user != "" {
-		if id, _, ok := b.FindPlayer(user); ok {
-			excluded[id] = struct{}{}
+		// Matched against the map this function is already reading under the
+		// bot lock. b.FindPlayer takes that same lock, and sync.Mutex is not
+		// reentrant, so calling it here deadlocked: every attack froze the
+		// whole bot on its own mutex instead of hitting a mob.
+		for name, id := range b.PlayerEntityIDs {
+			if bot.PlayerNameMatches(name, user) {
+				excluded[id] = struct{}{}
+			}
 		}
 	}
 	return excluded

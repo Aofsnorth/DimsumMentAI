@@ -2,6 +2,7 @@ package gathering
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"math"
 	"time"
@@ -33,31 +34,119 @@ type treeCandidate struct {
 	matched bool // true when block name matches the preferred wood type
 }
 
+// maxGatherAttempts caps how many trunks one gather request may work on. It
+// bounds the work per request: a request for a large pile walks a few trees and
+// then reports what it actually has, instead of touring the entire forest in a
+// single command.
+const maxGatherAttempts = 12
+
 func (tc *TreeChopper) GatherWood(ctx context.Context, targetCount int, preferred string) {
-	bot := tc.rg.bot
-
-	tc.logger.Debug("Starting wood gathering", "target", targetCount)
-	// No early ReportActionStatus here — the chopTree success/failure report
-	// at the end is the single source of truth. Reporting Success: true up
-	// front made the LLM announce "dapet oak log" before the bot had even
-	// finished chopping.
-
-	candidates, maxRadius := tc.findTreeCandidates(bot.GetCoords(), preferred)
-	if len(candidates) == 0 {
-		tc.logger.Warn("No log blocks found nearby", "maxRadius", maxRadius)
-		bot.ReportActionStatus("", event.ActionStatus{
-			Action:  "chop",
-			Item:    "log",
-			Success: false,
-			Error:   "no trees found nearby",
-		})
-		return
+	if targetCount <= 0 {
+		targetCount = 1
 	}
 
-	tc.selectAndChopCandidates(ctx, candidates, targetCount)
+	tc.logger.Debug("Starting wood gathering", "target", targetCount)
+	// No early ReportActionStatus here — the final tally at the end of
+	// fellTreesUntilTarget is the single source of truth. Reporting Success: true
+	// up front made the LLM announce "dapet oak log" before the bot had even
+	// finished chopping.
+
+	collected, felled := tc.fellTreesUntilTarget(ctx, targetCount, preferred)
+	tc.reportGatherResult(collected, targetCount, felled)
 }
 
-func (tc *TreeChopper) findTreeCandidates(botPos mgl32.Vec3, preferred string) ([]treeCandidate, int32) {
+// fellTreesUntilTarget keeps felling trunks until it has the requested number
+// of logs, runs out of reachable trees, or hits maxGatherAttempts.
+//
+// A single trunk only holds a handful of logs, so one chop can never satisfy a
+// request like "take 200 logs". The old code chopped one tree, reported whatever
+// it got, and stopped — the count was parsed and then quietly dropped on the
+// floor. Candidates are re-scanned after every trunk because both the world
+// (that tree is gone) and the bot (it walked) have changed.
+func (tc *TreeChopper) fellTreesUntilTarget(ctx context.Context, targetCount int, preferred string) (collected, felled int) {
+	bot := tc.rg.bot
+	felledBases := make(map[protocol.BlockPos]bool)
+	var pending []treeCandidate
+
+	for attempt := 0; attempt < maxGatherAttempts && collected < targetCount; attempt++ {
+		select {
+		case <-ctx.Done():
+			return collected, felled
+		default:
+		}
+
+		// The candidate list is scanned once and then consumed, not rebuilt per
+		// tree. A scan walks (2r+1)² × 13 cells — over a hundred thousand at the
+		// widest radius — and re-running it for every trunk turned a five-tree
+		// gather into millions of cell queries. The list stays valid because a
+		// chopped trunk is skipped rather than removed.
+		if len(pending) == 0 {
+			var maxRadius int32
+			pending, maxRadius = tc.findTreeCandidates(bot.GetCoords(), preferred, felledBases)
+			if len(pending) == 0 {
+				tc.logger.Info("No further log blocks found nearby",
+					"collected", collected, "target", targetCount, "maxRadius", maxRadius)
+				return collected, felled
+			}
+		}
+
+		best := pending[0]
+		pending = pending[1:]
+		felledBases[best.base] = true
+		tc.logSelectedCandidate(best, attempt+1)
+
+		reached, got := tc.ChopTreeAt(ctx, best.base, targetCount-collected)
+		if !reached {
+			// Unreachable base: do not count it as felled, but do keep going so a
+			// tree on a ledge cannot end the whole request.
+			tc.logger.Warn("Tree base unreachable, trying next candidate", "pos", best.base)
+			continue
+		}
+
+		felled++
+		collected += got
+		tc.logger.Info("Tree felled", "tree", felled, "collected", collected, "target", targetCount)
+	}
+
+	return collected, felled
+}
+
+// gatherOutcome decides what the bot tells the LLM about a finished gather.
+//
+// It is pure so the policy can be tested without a live bot. The rule that
+// matters: a partial haul is a failure. Announcing success with a short count
+// let the model treat "12 of 200 logs" as the finished order, and the player
+// never learned the bot had run out of trees.
+func gatherOutcome(collected, target, felled int) (success bool, errMsg string) {
+	switch {
+	case collected >= target:
+		return true, ""
+	case collected > 0:
+		return false, fmt.Sprintf("hanya dapat %d dari %d log (%d pohon ditebang)", collected, target, felled)
+	default:
+		return false, "tidak ada pohon yang bisa ditebang"
+	}
+}
+
+func (tc *TreeChopper) reportGatherResult(collected, target, felled int) {
+	success, errMsg := gatherOutcome(collected, target, felled)
+	if success {
+		tc.logger.Info("Wood gathering finished", "collected", collected, "target", target, "trees", felled)
+	} else {
+		tc.logger.Warn("Wood gathering did not reach target",
+			"collected", collected, "target", target, "trees", felled, "reason", errMsg)
+	}
+
+	tc.rg.bot.ReportActionStatus("", event.ActionStatus{
+		Action:  "chop",
+		Item:    "log",
+		Count:   collected,
+		Success: success,
+		Error:   errMsg,
+	})
+}
+
+func (tc *TreeChopper) findTreeCandidates(botPos mgl32.Vec3, preferred string, skip map[protocol.BlockPos]bool) ([]treeCandidate, int32) {
 	bx := int32(math.Floor(float64(botPos.X())))
 	by := int32(math.Floor(float64(botPos.Y())))
 	bz := int32(math.Floor(float64(botPos.Z())))
@@ -66,7 +155,7 @@ func (tc *TreeChopper) findTreeCandidates(botPos mgl32.Vec3, preferred string) (
 	var candidates []treeCandidate
 
 	for _, radius := range searchRadii {
-		candidates = tc.scanRadiusForCandidates(bx, by, bz, radius, preferred)
+		candidates = tc.scanRadiusForCandidates(bx, by, bz, radius, preferred, skip)
 		if len(candidates) > 0 {
 			if radius > 16 {
 				tc.logger.Info("Found trees only after widening search", "radius", radius, "candidates", len(candidates))
@@ -76,19 +165,32 @@ func (tc *TreeChopper) findTreeCandidates(botPos mgl32.Vec3, preferred string) (
 		tc.logger.Debug("No logs in radius, widening search", "radius", radius)
 	}
 
+	sortTreeCandidates(candidates)
 	return candidates, searchRadii[len(searchRadii)-1]
 }
 
-func (tc *TreeChopper) scanRadiusForCandidates(bx, by, bz, radius int32, preferred string) []treeCandidate {
-	var candidates []treeCandidate
+// sortTreeCandidates orders bases by score (distance plus a height penalty, with
+// a heavy penalty for a wood type the caller did not ask for). The felling loop
+// always takes the head of the list, so this is what decides which tree gets cut
+// first.
+func sortTreeCandidates(candidates []treeCandidate) {
+	for i := 1; i < len(candidates); i++ {
+		for j := i; j > 0 && candidates[j-1].score > candidates[j].score; j-- {
+			candidates[j-1], candidates[j] = candidates[j], candidates[j-1]
+		}
+	}
+}
+
+func (tc *TreeChopper) scanRadiusForCandidates(bx, by, bz, radius int32, preferred string, skip map[protocol.BlockPos]bool) []treeCandidate {
 	visitedBase := make(map[protocol.BlockPos]bool)
 	botPos := protocol.BlockPos{bx, by, bz}
+	var candidates []treeCandidate
 
 	for dx := -radius; dx <= radius; dx++ {
 		for dz := -radius; dz <= radius; dz++ {
 			for dy := int32(-4); dy <= 8; dy++ {
 				tx, ty, tz := bx+dx, by+dy, bz+dz
-				candidate, ok := tc.evaluateTreeCandidate(protocol.BlockPos{tx, ty, tz}, botPos, preferred, visitedBase)
+				candidate, ok := tc.evaluateTreeCandidate(protocol.BlockPos{tx, ty, tz}, botPos, preferred, visitedBase, skip)
 				if ok {
 					candidates = append(candidates, candidate)
 				}
@@ -99,7 +201,7 @@ func (tc *TreeChopper) scanRadiusForCandidates(bx, by, bz, radius int32, preferr
 	return candidates
 }
 
-func (tc *TreeChopper) evaluateTreeCandidate(pos, botPos protocol.BlockPos, preferred string, visitedBase map[protocol.BlockPos]bool) (treeCandidate, bool) {
+func (tc *TreeChopper) evaluateTreeCandidate(pos, botPos protocol.BlockPos, preferred string, visitedBase, skip map[protocol.BlockPos]bool) (treeCandidate, bool) {
 	name, ok := tc.rg.bot.GetBlockName(pos.X(), pos.Y(), pos.Z())
 	if !ok || !isLogBlockName(name) {
 		return treeCandidate{}, false
@@ -110,6 +212,11 @@ func (tc *TreeChopper) evaluateTreeCandidate(pos, botPos protocol.BlockPos, pref
 		return treeCandidate{}, false
 	}
 	visitedBase[base] = true
+	// A trunk that is already down (or was unreachable) must not be offered
+	// again on the next scan of the same area.
+	if skip[base] {
+		return treeCandidate{}, false
+	}
 
 	belowName, belowOK := tc.rg.bot.GetBlockName(base.X(), base.Y()-1, base.Z())
 	if !belowOK || isLogBlockName(belowName) {
@@ -132,52 +239,20 @@ func (tc *TreeChopper) evaluateTreeCandidate(pos, botPos protocol.BlockPos, pref
 	return treeCandidate{base, hDist, dyAbs, score, matched}, true
 }
 
-func (tc *TreeChopper) selectAndChopCandidates(ctx context.Context, candidates []treeCandidate, targetCount int) {
-	sortTreeCandidates(candidates)
-
-	maxAttempts := 3
-	if len(candidates) < maxAttempts {
-		maxAttempts = len(candidates)
-	}
-	for attempt := 0; attempt < maxAttempts; attempt++ {
-		best := candidates[attempt]
-		tc.logSelectedCandidate(best, candidates, attempt)
-		if tc.ChopTreeAt(ctx, best.base, targetCount) {
-			tc.logger.Info("Wood gathering finished", "attempt", attempt+1, "target", targetCount)
-			return
-		}
-		tc.logger.Warn("Tree base unreachable, trying next candidate", "attempt", attempt+1, "pos", best.base)
-	}
-	tc.logger.Warn("All tree-base candidates exhausted", "tried", maxAttempts)
-	tc.rg.bot.ReportActionStatus("", event.ActionStatus{
-		Action:  "chop",
-		Item:    "log",
-		Success: false,
-		Error:   "kehalang sesuatu",
-	})
-}
-
-func sortTreeCandidates(candidates []treeCandidate) {
-	for i := 1; i < len(candidates); i++ {
-		for j := i; j > 0 && candidates[j-1].score > candidates[j].score; j-- {
-			candidates[j-1], candidates[j] = candidates[j], candidates[j-1]
-		}
-	}
-}
-
-func (tc *TreeChopper) logSelectedCandidate(best treeCandidate, candidates []treeCandidate, attempt int) {
+func (tc *TreeChopper) logSelectedCandidate(best treeCandidate, attempt int) {
 	tc.logger.Info("Selected tree base",
 		"pos", best.base,
 		"hDist", best.hDist,
 		"dyAbs", best.dyAbs,
 		"score", best.score,
 		"matched_preferred", best.matched,
-		"candidates", len(candidates),
-		"attempt", attempt+1,
+		"attempt", attempt,
 	)
 }
 
-func (tc *TreeChopper) ChopTreeAt(ctx context.Context, startPos protocol.BlockPos, targetCount int) bool {
+// ChopTreeAt walks to startPos and fells that trunk. It reports whether the base
+// was reached and how many logs the chop actually yielded.
+func (tc *TreeChopper) ChopTreeAt(ctx context.Context, startPos protocol.BlockPos, targetCount int) (reached bool, collected int) {
 	tc.logger.Debug("Directed to chop tree", "pos", startPos)
 	if targetCount <= 0 {
 		targetCount = 1
@@ -191,7 +266,6 @@ func (tc *TreeChopper) ChopTreeAt(ctx context.Context, startPos protocol.BlockPo
 	// bot's pathfinder corrects an earlier mis-step (e.g. ledge it just fell
 	// off). Tolerance bumped to 3.5 so standing one block away counts as
 	// "reached" — the chopTree BFS will handle the rest.
-	reached := false
 	for attempt := 0; attempt < 3; attempt++ {
 		if tc.rg.bot.NavigateToBlock(startPos.X(), startPos.Y(), startPos.Z(), 3.5) {
 			reached = true
@@ -202,15 +276,14 @@ func (tc *TreeChopper) ChopTreeAt(ctx context.Context, startPos protocol.BlockPo
 	}
 	if !reached {
 		tc.logger.Warn("Could not reach tree base", "pos", startPos)
-		return false
+		return false, 0
 	}
 	tc.rg.bot.StopMovement()
 
 	// startPos already IS the base (GatherWood traced it before selecting),
 	// so we don't trace again here. Callers from elsewhere that pass a
 	// canopy log can rely on chopTree's BFS to walk the trunk upward.
-	tc.chopTree(ctx, startPos, targetCount)
-	return true
+	return true, tc.chopTree(ctx, startPos, targetCount)
 }
 
 // equippedAxeName returns the bot's currently held item name (empty when no

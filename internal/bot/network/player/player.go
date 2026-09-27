@@ -30,6 +30,10 @@ var packetHandlers = map[uint32]func(*bot.Bot, packet.Packet) bool{
 	packet.IDUpdateAttributes:            handleUpdateAttributesPacket,
 	packet.IDNetworkStackLatency:         handleNetworkStackLatency,
 	packet.IDPacketViolationWarning:      handlePacketViolationWarning,
+	packet.IDCommandOutput:               handleCommandOutput,
+	packet.IDAvailableCommands:           handleAvailableCommands,
+	packet.IDSetTime:                     handleSetTime,
+	packet.IDPlayStatus:                  handlePlayStatus,
 }
 
 // HandlePlayerPacket dispatches a packet to the appropriate handler.

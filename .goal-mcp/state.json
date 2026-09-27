@@ -1,0 +1,95 @@
+{
+  "goal": {
+    "id": "g-mujei5jrl7",
+    "objective": "Fix NexusOne Geyser silent disconnect: find and fix the spawn-time behaviour that makes play.nexusone.fun:19132 stop responding (suspect: MobEquipment packet with GeyserHash NBT item), gated behind the Geyser profile so non-Geyser servers are unaffected.",
+    "stop_condition": "A live run against NexusOne stays connected 90+ seconds with continuous S2C packets (no 'connection lost after a long silence' warning), and a control run against HansProjects remains stable afterwards; go build ./... and go test ./... pass.",
+    "validation": [
+      "go build ./...",
+      "go test ./...",
+      "BOT_PACKET_CAPTURE run vs play.nexusone.fun:19132 for 90s+, then analyze_capture.py shows S2C packets continuing past 60s",
+      "Control run vs play.hansprojects.my.id:19132 stays silent-warning-free"
+    ],
+    "constraints": [],
+    "status": "active",
+    "created_at": "2026-09-27T05:51:39.160Z",
+    "updated_at": "2026-09-27T06:19:40.078Z",
+    "checkpoints": 1,
+    "max_checkpoints": 20,
+    "progress_log": [
+      {
+        "at": "2026-09-27T06:17:53.661Z",
+        "checkpoint": 1,
+        "summary": "Found NexusOne drop root cause (bot echoed server-pushed GeyserHash item back via MobEquipment after inventory sync) and gated the echo behind new GeyserNoHeldItemEcho profile flag; also verified gophertunnel already sends SetLocalPlayerAsInitialised.",
+        "validation_result": "go build ./... OK; go test ./... all packages pass; live NexusOne run 60s: 3172 S2C, last S2C at 59.9s, 0 watchdog warnings (previously died at ~8.4s); control HansProjects run 95s: 10776 S2C, last S2C at 94.9s, 'Login successful.', 0 watchdog warnings."
+      }
+    ],
+    "evidence": [
+      {
+        "id": "e-mujfi6jyd0",
+        "at": "2026-09-27T06:19:40.078Z",
+        "kind": "test",
+        "description": "Live verification of the NexusOne disconnect fix (GeyserNoHeldItemEcho gate): BOT_PACKET_CAPTURE run against play.nexusone.fun:19132 for 60s — 3172 S2C packets, last S2C at ms=59923, zero C2S MobEquipment echo (previously the only extra packet vs the surviving HansProjects run), zero 'connection lost after a long silence' warnings. Before the fix the server went permanently silent at ~8.4s.",
+        "result": "pass"
+      }
+    ]
+  },
+  "tasks": [],
+  "archived_goals": [
+    {
+      "id": "g-muj9cgpr44",
+      "objective": "Research and produce a prioritized, concrete, technically-specific feature list of behavioural gaps for a Minecraft Bedrock autonomous-player agent (gophertunnel Go bot) to look and feel human, including open-source precedent.",
+      "stop_condition": "Deliver a prioritized feature list where each item has: what it does, why it matters for naturalness, complexity S/M/L, the existing DimsumMentAI subsystem it builds on, and risk flags. Every claim about existing OSS projects is backed by a fetched source.",
+      "validation": [
+        "All 6 requested research areas covered with concrete findings",
+        "Open-source Bedrock/Java MC bot projects surveyed with sourced autonomy features and reported problems",
+        "Existing subsystem names verified against DimsumMentAI/internal tree so 'builds on X' is accurate"
+      ],
+      "constraints": [
+        "Do not modify bot code — this is a research/report deliverable only",
+        "No generic advice; every item must name concrete mechanics, fields, or packet-level details",
+        "Respect the stated existing-feature list as already done; do not re-research it"
+      ],
+      "status": "done",
+      "created_at": "2026-09-27T03:27:15.616Z",
+      "updated_at": "2026-09-27T03:30:54.949Z",
+      "checkpoints": 2,
+      "max_checkpoints": 20,
+      "progress_log": [
+        {
+          "at": "2026-09-27T03:28:20.749Z",
+          "checkpoint": 1,
+          "summary": "Built subsystem map of internal/bot/* and gathered primary sources on mineflayer-movement heuristics and mindcraft-ce feature delta.",
+          "validation_result": "Confirmed via list_directory: internal/bot has 23 subpackages incl. movement (gaze.go, steering.go, follow.go, physics.go, path.go), exploration/explorer.go, rand/, planner/, perception/, survival/, combat/, jev/. Fetched mineflayer-movement README (4-heuristic steering model with fov/rotations/blend params) and mindcraft-ce README (explicitly labels original mindcraft pathfinding as \"standard robotic movement\")."
+        },
+        {
+          "at": "2026-09-27T03:29:46.224Z",
+          "checkpoint": 2,
+          "summary": "Mapped the autonomy stack: agi.Runner.Tick, jev question set, survival.Manager.Tick, and confirmed idle falls through to Wander.",
+          "validation_result": "Read agi/runner.go and agi/brain.go and survival/{manager,actions}.go. Confirmed: (1) agi.Runner.doActivity maps ActivityApproach -> r.Wander() (stub, does not approach) and ActivityRest -> a log line only; (2) the no-urgency path in Tick() calls maybeWander() every tick, so idle == wander; (3) Wander() launches Explorer.ExploreRandom on context.Background() uncancellable; (4) survival.Manager.Tick() calls only tickAutoEat+tickAutoArmor, so SleepInBed/AutoPlaceTorches/BuildEmergencyShelter/RecoverFromDeath/UseHealingPotion are never invoked proactively; (5) survival/actions.go uses fixed blocking time.Sleep(80-1000ms) with no variance. jev question set is 4 questions with a 5-option activity menu (rest/wander/explore/gather/approach)."
+        },
+        {
+          "at": "2026-09-27T03:30:54.949Z",
+          "checkpoint": 2,
+          "summary": "goal_control:complete — Research complete. All 6 requested areas covered, OSS precedent surveyed with fetched sources, and a prioritized feature list delivered with per-item complexity, subsystem mapping, and risk flags.",
+          "validation_result": "-"
+        }
+      ],
+      "evidence": [
+        {
+          "id": "e-muj9h4df5t",
+          "at": "2026-09-27T03:30:52.899Z",
+          "kind": "artifact",
+          "description": "Primary-source review of DimsumMentAI autonomy stack confirming the specific behavioural gaps: agi/runner.go:208 (idle falls through to maybeWander), runner.go:218-228 (ActivityRest is a log line, ActivityApproach calls Wander), runner.go:563 (uncancellable context.Background wander goroutine), survival/manager.go:109-112 (Tick drives only auto-eat + auto-armor, so SleepInBed/AutoPlaceTorches/BuildEmergencyShelter/RecoverFromDeath/UseHealingPotion never fire proactively), survival/actions.go:284,298 and combat/shield_bow.go:179 (fixed blocking time.Sleep with zero variance), perception/visible_blocks.go:67-70 (perception scans a full axis-aligned cube with no FOV cone), jev/questions.go:24-30 (5-option activity menu), agi/brain.go:33-45 (Snapshot lacks time-of-day, light level, tool durability, inventory fullness).",
+          "result": "pass"
+        },
+        {
+          "id": "e-muj9h4djm8",
+          "at": "2026-09-27T03:30:52.903Z",
+          "kind": "other",
+          "description": "External research gathered: mineflayer-movement README (raycast FOV steering with distance/danger/proximity/conformity heuristics, fov=240/rotations=15/blend=1); mindcraft-ce README (\"standard robotic movement\" criticism, door/gate/swim upgrades); zenn.dev first-hand build log (deterministic Executor beats LLM freedom; reverse tech-tree priority ordering; 1x1 shafts trip invalid_player_movement, use staircase mining; pathfinder.stop() leaves server-side desync; 2/3 reliability at stone tier, 0/3 at iron); Generative Agents (memory retrieval = recency+importance+relevance, reflection threshold 150, ~2-3x/day, full arch most believable); gophertunnel PlayerAuthInput docs (client sends once every tick, server-authoritative movement); Minecraft Wiki (walk 4.317 m/s, sprint 5.612 m/s, jump 1.2522 blocks; creeper 30-tick/1.5s fuse, triggers within 3 blocks, requires uninterrupted LOS, no idle/step sounds); bedrock.dev detection systems; Mineflayer issue #3899 anti-cheat false positives.",
+          "result": "pass"
+        }
+      ]
+    }
+  ]
+}

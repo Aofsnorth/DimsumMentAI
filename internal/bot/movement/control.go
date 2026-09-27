@@ -7,6 +7,7 @@ import (
 	"math"
 	"time"
 
+	"bedrock-ai/internal/bot"
 	"bedrock-ai/internal/bot/rand"
 	"bedrock-ai/internal/safecast"
 
@@ -63,6 +64,17 @@ func (tc *TickContext) resolveTargetLook() bool {
 	return wantsToMove
 }
 
+// Follow walk/stop hysteresis thresholds. A single 2.0-block threshold on both
+// the engage and release side made the walk state flap when the target hovered
+// right at it, alternating the look target between the walking pose and the
+// tracked pose — which read as the head bouncing while following.
+const (
+	followWalkDist       = 2.2
+	followStopDist       = 1.8
+	followWalkHeightDiff = 1.7
+	followStopHeightDiff = 1.3
+)
+
 func (tc *TickContext) wantsToMove() bool {
 	if tc.MState == "walk_to" {
 		return true
@@ -70,7 +82,7 @@ func (tc *TickContext) wantsToMove() bool {
 	if tc.MState != "follow" {
 		return false
 	}
-	return tc.DistToPlayer >= 2.0 || tc.PlayerHeightDiff >= 1.5
+	return tc.FollowWalking
 }
 
 func (tc *TickContext) applyMoveLookTarget() {
@@ -79,13 +91,17 @@ func (tc *TickContext) applyMoveLookTarget() {
 		targetYaw := float32(yawRad*180/math.Pi) - 90
 		tc.TargetYaw = targetYaw
 		tc.TargetPitch = 0
-		// Snap the head + body much more aggressively toward the walk
-		// direction so computeMoveSpeed doesn't throttle us to 10% while
-		// EaseAngle is still catching up. Easing is nice for idle looks, but
-		// mid-walk it makes the bot face sideways and crawl.
-		tc.HeadYaw = targetYaw
-		// Body still eases, just faster — preserves a hint of torso lag for
-		// realism without the multi-tick crawl.
+		// The BODY still turns hard toward the walk direction so
+		// computeMoveSpeed doesn't throttle us to 10% while EaseAngle is still
+		// catching up — movement speed and the strafe/forward split both read
+		// tc.Yaw, not tc.HeadYaw.
+		//
+		// The HEAD deliberately does NOT snap here. Snapping it to the movement
+		// direction every tick threw away the head-trunk separation on which the
+		// natural look depends: the ease in applyEasedLook could then never let
+		// the head arrive before the body, because its starting point was reset
+		// to the body angle each tick. Head aim now comes from the route
+		// look-ahead in walkingGazeAngles, which leads the body into turns.
 		tc.Yaw = EaseAngle(tc.Yaw, targetYaw, 4.0, 40.0, 0.7)
 	} else {
 		tc.TargetYaw = tc.Yaw
@@ -113,9 +129,12 @@ func (tc *TickContext) applyFollowLookTarget() {
 	playerPos := tc.B.TargetPos
 	tc.B.Mu.Unlock()
 
+	// Aim at the head, not the feet. Adding the eye height to both sides would
+	// cancel out and leave the bot staring at the target's shins.
+	eye := tc.CurrPos.Y() + bot.PlayerEyeHeight
 	dxP := playerPos.X() - tc.CurrPos.X()
 	dzP := playerPos.Z() - tc.CurrPos.Z()
-	dyP := (playerPos.Y() + 1.62) - (tc.CurrPos.Y() + 1.62)
+	dyP := (playerPos.Y() + bot.PlayerEyeHeight) - eye
 
 	distP := float32(math.Sqrt(float64(dxP*dxP + dzP*dzP)))
 	if distP > 0.1 {
@@ -125,8 +144,11 @@ func (tc *TickContext) applyFollowLookTarget() {
 		tc.TargetPitch = float32(-pitchRad * 180 / math.Pi)
 		// Clamp to a comfortable range so the camera never gets stuck looking
 		// straight up/down (which causes the eased pitch to stall at the ±90
-		// boundary and feel unnatural).
-		tc.TargetPitch = clampFloat32(tc.TargetPitch, -85, 85)
+		// boundary and feel unnatural). No deadzone here: the stationary
+		// smoothing stage applies a soft level band instead, and a hard cutoff
+		// at this boundary used to chatter whenever the target's raw pitch sat
+		// right on it.
+		tc.TargetPitch = clampFloat32(tc.TargetPitch, -25, 25)
 	} else {
 		tc.TargetYaw = tc.Yaw
 		tc.TargetPitch = tc.Pitch
@@ -138,8 +160,13 @@ func (tc *TickContext) applyEasedLookDirection(wantsToMove bool) {
 	absYawDiff := math.Abs(float64(yawDiff))
 	yawSpeed := tc.selectYawSpeed(absYawDiff)
 	pitchSpeed := float32(28.0)
-	if !wantsToMove {
-		tc.TargetYaw, tc.TargetPitch = dampenLookJitter(tc.Yaw, tc.Pitch, tc.TargetYaw, tc.TargetPitch)
+	if wantsToMove {
+		// Walking owns its target (route direction plus gaze scan). Keep the
+		// smoothed state in sync so the first stationary tick after stopping
+		// does not glide in from a stale angle.
+		tc.SmoothedLookYaw, tc.SmoothedLookPitch = tc.TargetYaw, tc.TargetPitch
+	} else {
+		tc.smoothStationaryLookTarget()
 		pitchSpeed = 12.0
 	}
 	tc.applyEasedLook(wantsToMove, yawSpeed, pitchSpeed)
@@ -210,10 +237,14 @@ func (tc *TickContext) applyEasedLook(wantsToMove bool, yawMax, pitchMax float32
 
 	// Smoothly ease head toward target (with smooth speed variation).
 	walkingScanEnabled := wantsToMove && tc.HasHorizontalMove && !tc.IsLadderActive
+	gazeYaw, gazePitch := tc.TargetYaw, tc.TargetPitch
+	if walkingScanEnabled {
+		gazeYaw, gazePitch = tc.walkingScanBase()
+	}
 	headTargetYaw, headTargetPitch := walkingHeadTarget(
 		tc.Tick,
-		tc.TargetYaw,
-		tc.TargetPitch,
+		gazeYaw,
+		gazePitch,
 		walkingScanEnabled,
 	)
 	tc.HeadYaw = EaseAngle(tc.HeadYaw, headTargetYaw, headMin*headYawSpd, yawMax*headYawSpd, headEase*headYawSpd)
@@ -221,19 +252,23 @@ func (tc *TickContext) applyEasedLook(wantsToMove bool, yawMax, pitchMax float32
 
 	// --- Organic drift ------------------------------------------------------
 	// Continuous, non-repeating micro-motion via incommensurate sine
-	// frequencies. Amplitude is larger when idle (breathing / looking around)
-	// and nearly imperceptible when actively moving.
-	ampYaw := float32(0.35)
-	ampPitch := float32(0.45)
+	// frequencies, kept in LookDriftYaw/LookDriftPitch instead of being added
+	// onto HeadYaw/Pitch.
+	//
+	// Writing the drift into the eased state made it a feedback loop: the drift
+	// pushed the head off target, the ease pulled it back at only 0.22 per tick,
+	// and the leftover error showed up as a continuous up-down oscillation. The
+	// drift is now applied as a visual offset on the outgoing packet only, so it
+	// can never perturb the state the easing converges toward.
+	ampYaw := float32(0.22)
+	ampPitch := float32(0.28)
 	if wantsToMove {
-		ampYaw = 0.10
-		ampPitch = 0.12
+		ampYaw = 0.08
+		ampPitch = 0.10
 	}
-	dYaw, dPitch := organicLookDrift(tc.Tick, ampYaw, ampPitch)
-	tc.HeadYaw = normalizeYaw(tc.HeadYaw + dYaw)
-	tc.Pitch = clampFloat32(tc.Pitch+dPitch, -90, 90)
+	tc.LookDriftYaw, tc.LookDriftPitch = organicLookDrift(tc.Tick, ampYaw, ampPitch)
 	if walkingScanEnabled {
-		tc.HeadYaw, tc.Pitch = boundWalkingGaze(tc.TargetYaw, tc.TargetPitch, tc.HeadYaw, tc.Pitch)
+		tc.HeadYaw, tc.Pitch = boundWalkingGaze(gazeYaw, gazePitch, tc.HeadYaw, tc.Pitch)
 	}
 
 	// --- Body (lags) -------------------------------------------------------
@@ -255,6 +290,20 @@ func (tc *TickContext) applyEasedLook(wantsToMove bool, yawMax, pitchMax float32
 	}
 	bodySpd := smoothSpeedMultiplier(tc.Tick, speedAmp, 4.3)
 	tc.Yaw = EaseAngle(tc.Yaw, bodyTargetYaw, bodyMin*bodySpd, bodyCap*bodySpd, bodyEase*bodySpd)
+}
+
+// walkingScanBase is the angle the walking gaze scan is layered on top of.
+//
+// While there is a route to follow, that is the look-ahead aim: a point a few
+// metres down the path, so the head is already turned toward the next corner and
+// the vertical angle follows the terrain. Without a route it is the movement
+// direction itself, which keeps the head-tracked follow and idle poses — and the
+// steering reference the movement code reads — completely untouched.
+func (tc *TickContext) walkingScanBase() (float32, float32) {
+	if yaw, pitch, ok := tc.walkingGazeAngles(); ok {
+		return yaw, pitch
+	}
+	return tc.TargetYaw, tc.TargetPitch
 }
 
 func walkingHeadTarget(tick uint64, targetYaw, targetPitch float32, enabled bool) (float32, float32) {
@@ -385,19 +434,83 @@ func (tc *TickContext) setNaturalLookTarget(pos mgl32.Vec3) {
 	tc.TargetYaw, tc.TargetPitch = naturalLookAngles(tc.CurrPos, pos, tc.Yaw)
 }
 
-func dampenLookJitter(currentYaw, currentPitch, targetYaw, targetPitch float32) (float32, float32) {
-	yawDiff := angleDifference(targetYaw, currentYaw)
-	if math.Abs(float64(yawDiff)) < 0.8 {
-		targetYaw = currentYaw
+// lookTargetSmoothing is the per-tick EMA factor for the stationary look
+// target. At 20 ticks/s, 0.10 gives a ~0.5 s time constant: deliberate glides
+// still feel immediate, while a raw target alternating between two quantized
+// positions collapses to a flat line before the eased head ever reacts.
+const lookTargetSmoothing = 0.10
+
+const (
+	// lookSaccadeYaw/Pitch are the raw-target jumps that snap the EMA instead
+	// of slewing through it, so a fresh idle look or a look-at command still
+	// turns the head promptly.
+	lookSaccadeYaw   = 45.0
+	lookSaccadePitch = 30.0
+
+	// lookLevelBand is the half-width of the soft level band applied after the
+	// EMA. Inside it the pitch is attenuated quadratically: continuous at the
+	// band edge, ~0 at level. A hard cut here used to chatter whenever a
+	// small height difference put the raw pitch right on the threshold.
+	lookLevelBand = 1.5
+)
+
+// smoothStationaryLookTarget low-pass filters the stationary look target and
+// applies a soft level band. It replaces the old hard deadzone plus
+// freeze-to-current damping, which had two defects that showed up as a visible
+// head tremor while tracking a nearby player:
+//
+//  1. The hard deadzone snapped the target between 0 and the raw angle
+//     whenever the raw pitch hovered at the threshold (a few centimetres of
+//     height difference between bot and player, plus position quantization).
+//  2. Freezing the target to the current angle for small differences left the
+//     head permanently short of its true angle by up to ~1.4 degrees, which
+//     read as aiming slightly above the player's head.
+//
+// Pinned static looks (drop aiming, forced angles) bypass the smoothing so
+// action code that waits on a specific angle still converges quickly.
+func (tc *TickContext) smoothStationaryLookTarget() {
+	if tc.pinnedStaticLook() {
+		tc.SmoothedLookYaw, tc.SmoothedLookPitch = tc.TargetYaw, tc.TargetPitch
+		return
 	}
 
-	pitchDiff := targetPitch - currentPitch
-	if math.Abs(float64(pitchDiff)) < 1.4 {
-		targetPitch = currentPitch
-	} else if math.Abs(float64(pitchDiff)) < 6.0 {
-		targetPitch = currentPitch + pitchDiff*0.4
+	rawYaw, rawPitch := tc.TargetYaw, tc.TargetPitch
+
+	if math.Abs(float64(angleDifference(rawYaw, tc.SmoothedLookYaw))) > lookSaccadeYaw {
+		tc.SmoothedLookYaw = rawYaw
+	} else {
+		tc.SmoothedLookYaw = normalizeYaw(tc.SmoothedLookYaw + lookTargetSmoothing*angleDifference(rawYaw, tc.SmoothedLookYaw))
 	}
-	return targetYaw, targetPitch
+
+	if math.Abs(float64(rawPitch-tc.SmoothedLookPitch)) > lookSaccadePitch {
+		tc.SmoothedLookPitch = rawPitch
+	} else {
+		tc.SmoothedLookPitch += lookTargetSmoothing * (rawPitch - tc.SmoothedLookPitch)
+	}
+
+	tc.TargetYaw = tc.SmoothedLookYaw
+	tc.TargetPitch = softenLevelBand(tc.SmoothedLookPitch)
+}
+
+// pinnedStaticLook reports whether an action pinned the look angles and the
+// eased head must reach exactly that angle without extra lag.
+func (tc *TickContext) pinnedStaticLook() bool {
+	tc.B.Mu.Lock()
+	pinned := tc.B.IdleLookTargetType == "static"
+	tc.B.Mu.Unlock()
+	return pinned
+}
+
+// softenLevelBand attenuates pitch quadratically inside ±lookLevelBand and
+// passes it through unchanged outside. Unlike a hard zero, it is continuous,
+// so an input hovering at the band edge cannot make the output chatter.
+func softenLevelBand(pitch float32) float32 {
+	mag := absFloat32(pitch)
+	if mag >= lookLevelBand {
+		return pitch
+	}
+	scale := (mag / lookLevelBand) * (mag / lookLevelBand)
+	return pitch * scale
 }
 
 func naturalLookAngles(originFeet, target mgl32.Vec3, currentYaw float32) (float32, float32) {
@@ -412,21 +525,23 @@ func naturalLookAngles(originFeet, target mgl32.Vec3, currentYaw float32) (float
 	}
 
 	pitchDist := distH
-	if pitchDist < 1.8 {
-		pitchDist = 1.8
+	if pitchDist < 0.35 {
+		pitchDist = 0.35
 	}
 	pitch := float32(-math.Atan2(float64(dy), pitchDist) * 180 / math.Pi)
 	if distH < 1.0 {
-		pitch = clampFloat32(pitch, -18, 18)
+		pitch = clampFloat32(pitch, -30, 30)
 	} else {
 		// Asymmetric clamp: real players idle-look slightly downward more
 		// often than upward (ground, feet, blocks nearby). Capping the up
-		// angle at 25° keeps the head from appearing stuck skyward.
-		pitch = clampFloat32(pitch, -25, 40)
+		// angle keeps the head from appearing stuck skyward.
+		pitch = clampFloat32(pitch, -25, 25)
 	}
-	if math.Abs(float64(pitch)) < 1.25 {
-		pitch = 0
-	}
+	// No hard deadzone: the raw geometry is honest, and the stationary
+	// smoothing stage (smoothStationaryLookTarget) removes sub-degree noise
+	// with a continuous filter instead of a discontinuous cut. A hard cut here
+	// made the target snap between 0 and the raw angle whenever the raw pitch
+	// hovered at the threshold, which read as a head tremor while tracking.
 	return yaw, pitch
 }
 

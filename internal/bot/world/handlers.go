@@ -15,17 +15,22 @@ import (
 	"github.com/sandertv/gophertunnel/minecraft/protocol/packet"
 )
 
+// maxSubChunkCount is the highest sub-chunk count a LevelChunk payload can
+// carry. Counts above it are request-mode markers rather than real counts, and
+// the real sub-chunks arrive separately as SubChunk packets.
+const maxSubChunkCount = 64
+
 // HandleLevelChunk processes a LevelChunk packet and stores the decoded chunk.
 func (wc *WorldCache) HandleLevelChunk(pk *packet.LevelChunk) {
 	pos := chunkPos{X: pk.Position.X(), Z: pk.Position.Z()}
 	count := int(pk.SubChunkCount)
 
-	if pk.SubChunkCount == protocol.SubChunkRequestModeLimitless ||
-		pk.SubChunkCount == protocol.SubChunkRequestModeLimited {
-		c := chunk.New(wc.airRID, wc.r)
-		wc.mu.Lock()
-		wc.chunks[pos] = c
-		wc.mu.Unlock()
+	if count == 0 || count > maxSubChunkCount {
+		// Request mode: the packet carries no sub-chunk data, and the real
+		// terrain arrives later as SubChunk packets. Storing an empty air column
+		// here would both wipe any data already loaded for this position and
+		// report "loaded, all air" to the pathfinder, hiding the fact that the
+		// chunk is simply unknown.
 		return
 	}
 
@@ -72,12 +77,30 @@ func (wc *WorldCache) applySubChunkEntry(entry protocol.SubChunkEntry, pos proto
 		return
 	}
 
-	storages, ok := wc.decodeSubChunkPayload(entry.RawPayload)
+	rawPayload, ok := entry.RawPayload.Value()
+	if !ok {
+		return
+	}
+
+	storages, ok := wc.decodeSubChunkPayload(rawPayload)
 	if !ok {
 		return
 	}
 	applyStorageToChunk(c, wc.airRID, wc.r, subY, storages)
-	if wc.logger != nil {
+
+	wc.mu.Lock()
+	wc.subChunksApplied++
+	applied := wc.subChunksApplied
+	wc.mu.Unlock()
+
+	// First real terrain is the breadcrumb that proves the world model is
+	// populated. Log it at info level: everything downstream (A*, block
+	// scanning, scaffolding) is meaningless while this counter is still zero.
+	if applied == 1 && wc.logger != nil {
+		wc.logger.Info("WorldCache: first terrain sub-chunk decoded",
+			"chunkX", cPos.X, "chunkZ", cPos.Z, "subY", subY, "chunks", wc.ChunkCount())
+	}
+	if wc.logger != nil && wc.logger.Enabled(context.TODO(), -4) {
 		wc.logger.Debug("WorldCache: decoded SubChunk", "chunkX", cPos.X, "chunkZ", cPos.Z, "subY", subY)
 	}
 }

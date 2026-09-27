@@ -100,7 +100,7 @@ func TestPlanIngredientConsumptionNameMatching(t *testing.T) {
 	}
 	ingredients := []protocol.ItemDescriptorCount{
 		{
-			Descriptor: &protocol.DefaultItemDescriptor{NetworkID: -212, MetadataValue: 0},
+			Descriptor: &protocol.DefaultItemDescriptor{Name: "minecraft:oak_wood"},
 			Count:      1,
 		},
 	}
@@ -137,7 +137,7 @@ func TestBuildCraftActionsVanillaSequence(t *testing.T) {
 	t.Parallel()
 	recipe := RecipeInfo{
 		Ingredients: []protocol.ItemDescriptorCount{{
-			Descriptor: &protocol.DefaultItemDescriptor{NetworkID: -212},
+			Descriptor: &protocol.DefaultItemDescriptor{Name: "minecraft:oak_wood"},
 			Count:      1,
 		}},
 		Output: protocol.ItemStack{
@@ -146,7 +146,10 @@ func TestBuildCraftActionsVanillaSequence(t *testing.T) {
 		},
 	}
 	inputs := []craftingGridInput{{slot: 29, count: 1, stackNetworkID: 42}}
-	actions := buildCraftActions(-3, 414, recipe, 1, inputs, 3)
+	actions, err := buildCraftActions(-3, 414, recipe, 1, inputs, 3, "stick")
+	if err != nil {
+		t.Fatalf("buildCraftActions() error = %v", err)
+	}
 	if len(actions) != 4 {
 		t.Fatalf("len(actions) = %d, want 4", len(actions))
 	}
@@ -162,7 +165,8 @@ func TestBuildCraftActionsVanillaSequence(t *testing.T) {
 	if !ok {
 		t.Fatalf("actions[1] = %T, want CraftResultsDeprecated", actions[1])
 	}
-	if results.TimesCrafted != 1 || len(results.ResultItems) != 1 || results.ResultItems[0].NetworkID != 5 || results.ResultItems[0].Count != 4 {
+	if results.TimesCrafted != 1 || len(results.ResultItems) != 1 ||
+		results.ResultItems[0].Identifier != "minecraft:stick" || results.ResultItems[0].Count != 4 {
 		t.Errorf("unexpected craft results fields: %+v", results)
 	}
 

@@ -16,7 +16,7 @@
 //	internal/bot/action/ → may import internal/bot (action dispatch)
 //
 // Expanded rules also enforce that leaf packages (debuglog, servercompat,
-// config, event) do not depend on higher-level packages, and that
+// config, event, memory) do not depend on higher-level packages, and that
 // mid-layer packages (skin, connection, handler) only depend on their
 // designated lower layers.
 //
@@ -49,7 +49,7 @@ type DependencyRule struct {
 //
 // The layering is:
 //
-//	Layer 0 (leaves):     debuglog, servercompat, config, event, ai
+//	Layer 0 (leaves):     debuglog, servercompat, config, event, ai, memory
 //	Layer 1:              skin (→config), connection (→config, servercompat)
 //	Layer 2:              handler (→event, debuglog)
 //	Layer 3:              bot (→ai, config, event, handler, ...)
@@ -111,6 +111,16 @@ func DefaultRules(moduleName string) []DependencyRule {
 		{mi + "servercompat", mi + "event", "servercompat must not depend on event — servercompat is a leaf"},
 		{mi + "servercompat", mi + "skin", "servercompat must not depend on skin — servercompat is a leaf"},
 		{mi + "servercompat", mi + "debuglog", "servercompat must not depend on debuglog — servercompat is a leaf"},
+
+		{mi + "memory", mi + "bot", "memory must not depend on bot — memory is a leaf"},
+		{mi + "memory", mi + "ai", "memory must not depend on ai — memory is a leaf"},
+		{mi + "memory", mi + "handler", "memory must not depend on handler — memory is a leaf"},
+		{mi + "memory", mi + "connection", "memory must not depend on connection — memory is a leaf"},
+		{mi + "memory", mi + "config", "memory must not depend on config — memory is a leaf"},
+		{mi + "memory", mi + "event", "memory must not depend on event — memory is a leaf"},
+		{mi + "memory", mi + "skin", "memory must not depend on skin — memory is a leaf"},
+		{mi + "memory", mi + "debuglog", "memory must not depend on debuglog — memory is a leaf"},
+		{mi + "memory", mi + "servercompat", "memory must not depend on servercompat — memory is a leaf"},
 
 		// --- Layer 1: skin may only depend on config ---
 		{mi + "skin", mi + "bot", "skin must not depend on bot — skin is a low-level utility"},

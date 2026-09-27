@@ -12,6 +12,7 @@ import (
 	"bedrock-ai/internal/bot"
 	"bedrock-ai/internal/bot/action"
 	"bedrock-ai/internal/bot/entity"
+	"bedrock-ai/internal/bot/perception"
 	"bedrock-ai/internal/bot/rand"
 )
 
@@ -126,6 +127,7 @@ func buildProactivePrompt(b *bot.Bot, targetPlayer string) (string, string) {
 	botName := b.Name
 	b.Mu.Unlock()
 	visibleMobs := VisibleMobsSummary(b, 32, 8)
+	visibleBlocks := perception.BlocksSummary(b, 12.0, 6)
 
 	botStatusText := fmt.Sprintf("HP: %d/20, Hunger: %d/20", hp, hunger)
 	systemPrompt := b.AiClient.BuildSystemPrompt(
@@ -143,8 +145,11 @@ func buildProactivePrompt(b *bot.Bot, targetPlayer string) (string, string) {
 		}
 	}
 
+	// Append curated long-term memories (MinePal-style Active Memory).
+	systemPrompt = appendMemoryContext(b, systemPrompt)
+
 	proactivePrompt := fmt.Sprintf(
-		`[PROACTIVE TICK] Waktu: %s. Pemain terdekat: %s. Visible mobs (line-of-sight, non-item): %s. Aktor/mob lain di dekatmu (tanpa jaminan terlihat): %s.
+		`[PROACTIVE TICK] Waktu: %s. Pemain terdekat: %s. Visible mobs (line-of-sight, non-item): %s. Visible blocks nearby (line-of-sight): %s. Aktor/mob lain di dekatmu (tanpa jaminan terlihat): %s.
 Kamu lagi nggak diajak ngobrol oleh siapapun. Apakah kamu mau mulai ngobrol atau ngelakuin sesuatu sendiri?
 
 Pilihan:
@@ -156,6 +161,7 @@ JANGAN paksa diri untuk ngomong kalau gak ada yang menarik. Kadang diam lebih ba
 		time.Now().Format("15:04"),
 		strings.Join(getNearbyPlayers(b), ", "),
 		visibleMobs,
+		visibleBlocks,
 		getNearbyActorSummary(b),
 	)
 

@@ -296,11 +296,10 @@ var inputFlagNames = []string{
 	"SneakCurrentRaw",
 }
 
-func decodeInputFlags(bs protocol.Bitset) []string {
+func decodeInputFlags(flags protocol.InputFlags) []string {
 	var set []string
-	n := bs.Len()
-	for i := 0; i < n; i++ {
-		if bs.Load(i) {
+	for i := 0; i < packet.InputFlagCount; i++ {
+		if flags.Load(i) {
 			if i < len(inputFlagNames) {
 				set = append(set, inputFlagNames[i])
 			} else {

@@ -16,17 +16,20 @@ import (
 // pattern of fixed tick-parity jumps. The frequencies are chosen to be
 // mutually irrational so the combined waveform never repeats within any
 // practical session length.
+//
+// All components stay well below 1 Hz. Earlier revisions carried extra terms
+// at 0.061 and 0.079 rad/tick; at 20 ticks per second those are roughly
+// 1.2-1.6 Hz, which is squarely in the range the eye reads as a vibration
+// rather than a drift, and the head visibly trembled while the bot stood still.
 func organicLookDrift(tick uint64, ampYaw, ampPitch float32) (float32, float32) {
 	t := float64(tick)
 	yawDrift := ampYaw * float32(
-		math.Sin(t*0.0131)+
-			0.35*math.Sin(t*0.0297+1.7)+
-			0.15*math.Sin(t*0.0613+3.1),
+		math.Sin(t*0.0091)+
+			0.35*math.Sin(t*0.0157+1.7),
 	)
 	pitchDrift := ampPitch * float32(
-		math.Sin(t*0.0183+0.5)+
-			0.30*math.Sin(t*0.0411+2.3)+
-			0.12*math.Sin(t*0.0791+4.7),
+		math.Sin(t*0.0113+0.5)+
+			0.30*math.Sin(t*0.0187+2.3),
 	)
 	return yawDrift, pitchDrift
 }

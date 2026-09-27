@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"strings"
 	"time"
 
 	"bedrock-ai/internal/bot"
@@ -69,19 +70,44 @@ func handleReadError(b *bot.Bot, err error, readStart, lastReadAt time.Time) err
 	})
 
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-		b.Logger.Info("connection closed during shutdown",
-			slog.String("reason", err.Error()),
-		)
+		// A read that ends in context.Canceled with a long silence behind it is
+		// NOT a server kick — a kick arrives as a DisconnectError carrying a
+		// reason. This is the UDP path going quiet until RakNet gives up: the
+		// server or an intermediary proxy stopped answering. Telling the two
+		// apart matters, because only a kick is something the bot can act on.
+		if gapMs > 3000 {
+			b.Logger.Warn("connection lost after a long silence (UDP timeout, not a server kick)",
+				slog.String("reason", err.Error()),
+				slog.Int64("silent_for_ms", gapMs),
+				slog.String("hypothesis", "server or proxy stopped responding; the bot was not rejected with a reason"),
+			)
+		} else {
+			b.Logger.Info("connection closed during shutdown",
+				slog.String("reason", err.Error()),
+			)
+		}
 		return nil
 	}
 
 	var disc minecraft.DisconnectError
 	if errors.As(err, &disc) {
-		b.Logger.Info("disconnected by server",
-			slog.String("reason", disc.Error()),
+		reason := strings.TrimSpace(disc.Error())
+
+		// An empty reason is the host walking away without a goodbye: a
+		// single-player world closing, or the host leaving. Logging that as a
+		// plain "disconnected by server" with reason="" left the run looking like
+		// a clean shutdown, so the bot died silently mid-walk.
+		if reason == "" {
+			reason = "host closed the world (no disconnect reason sent)"
+		}
+		b.Logger.Warn("disconnected by server",
+			slog.String("reason", reason),
 		)
-		b.Bus.Publish(event.SpawnEvent{})
-		return nil
+		// Same event the kick path publishes, so every consumer of disconnects
+		// sees this one too. The previous SpawnEvent here had no subscribers at
+		// all and said the opposite of what happened.
+		b.Bus.Publish(event.DisconnectEvent{Reason: reason})
+		return &bot.ServerDisconnect{Reason: disc.Error()}
 	}
 	return fmt.Errorf("read packet: %w", err)
 }
@@ -126,8 +152,10 @@ func logUnhandledPacket(b *bot.Bot, pk packet.Packet, handled bool) {
 }
 
 func isExpectedUnhandledPacket(pk packet.Packet) bool {
+	// The SetTime packet is now handled (it drives the day/night behaviour in
+	// the autonomy brain), so it is no longer expected-unhandled.
 	switch pk.ID() {
-	case packet.IDUpdateBlock, packet.IDMoveActorDelta, packet.IDSetActorData, packet.IDSetTime:
+	case packet.IDUpdateBlock, packet.IDMoveActorDelta, packet.IDSetActorData:
 		return true
 	}
 	return false

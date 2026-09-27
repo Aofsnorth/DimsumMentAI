@@ -3,6 +3,7 @@ package pathfinder
 import (
 	"container/heap"
 	"fmt"
+	"math"
 
 	"bedrock-ai/internal/safecast"
 )
@@ -283,27 +284,56 @@ func canWalkLine(from, to Node, dx, dz, horizDist int32, world WorldModel) bool 
 		t := float32(s) / float32(steps)
 		sx := float32(from.X) + 0.5 + float32(dx)*t
 		sz := float32(from.Z) + 0.5 + float32(dz)*t
-		sy := from.Y
-		if dy != 0 {
-			sy = from.Y + int32(float32(dy)*t)
-		}
+		sy := float32(from.Y) + float32(dy)*t
 
-		if !canWalkAtSample(int32(sx), int32(sz), sy, dy, world) {
+		// Floor, not truncation: int32() truncates toward zero, so a sample at
+		// -3.2 read as block -3 instead of -4 and every negative-coordinate link
+		// was validated one column off, in both axes and in the descent.
+		bx := int32(math.Floor(float64(sx)))
+		by := int32(math.Floor(float64(sy)))
+		bz := int32(math.Floor(float64(sz)))
+
+		if !canWalkAtSample(bx, by, bz, world) {
 			return false
 		}
 	}
 	return true
 }
 
-func canWalkAtSample(bx, bz, by, dy int32, world WorldModel) bool {
+// loadAwareWorld is implemented by world models that can tell "known to be
+// air" apart from "not decoded yet". Models that cannot (test doubles) are
+// treated as fully known, which preserves the pre-existing behaviour.
+type loadAwareWorld interface {
+	IsLoaded(x, y, z int32) bool
+}
+
+func canWalkAtSample(bx, by, bz int32, world WorldModel) bool {
+	if !cellsKnown(bx, by, bz, world) {
+		return false
+	}
 	if world.IsSolid(bx, by, bz) || world.IsSolid(bx, by+1, bz) {
 		return false
 	}
 	if world.IsHazard(bx, by, bz) || world.IsHazard(bx, by+1, bz) {
 		return false
 	}
-	if dy >= 0 && !world.IsSolid(bx, by-1, bz) {
+	// Every sample of a walk link has to stand on something. The floor check used
+	// to be skipped for descending links (dy < 0), which let the smoother drop a
+	// mid-segment descent over a cliff or a hole straight into a long blind
+	// straight line.
+	if !world.IsSolid(bx, by-1, bz) {
 		return false
 	}
 	return true
+}
+
+// cellsKnown reports whether the body and floor cells of a sample are decoded.
+func cellsKnown(bx, by, bz int32, world WorldModel) bool {
+	law, ok := world.(loadAwareWorld)
+	if !ok {
+		return true
+	}
+	return law.IsLoaded(bx, by, bz) &&
+		law.IsLoaded(bx, by+1, bz) &&
+		law.IsLoaded(bx, by-1, bz)
 }

@@ -44,9 +44,19 @@ func (s *Scaffolder) FindScaffoldItem() (uint32, protocol.ItemStack, bool) {
 	return 0, protocol.ItemStack{}, false
 }
 
+// scaffoldStockTarget is how many blocks the bot tries to have on hand before
+// it starts towering. Small on purpose: mining is a detour, and the tower only
+// needs a few blocks to finish the trunk.
+const scaffoldStockTarget = 6
+
+// scaffoldStockBlocks are the blocks mined when the bot has nothing to tower
+// with, in preference order.
+var scaffoldStockBlocks = []string{"dirt", "cobblestone"}
+
 func (s *Scaffolder) TowerUpTo(ctx context.Context, targetY float32) {
 	bot := s.rg.bot
 	s.logger.Debug("Towering up", "target_y", targetY)
+	stocked := false
 
 	for {
 		select {
@@ -62,6 +72,15 @@ func (s *Scaffolder) TowerUpTo(ctx context.Context, targetY float32) {
 
 		slot, item, ok := s.FindScaffoldItem()
 		if !ok {
+			// Nothing to build with. Mine a small stock before giving up: the
+			// alternative was standing at the foot of a tree staring at logs that
+			// are out of reach, then reporting the whole gather as failed. Only
+			// ever stock once per tower, so a world without dirt cannot spin here.
+			if !stocked {
+				stocked = true
+				s.ensureScaffoldStock(ctx)
+				continue
+			}
 			s.logger.Warn("No scaffold items found, aborting tower up")
 			break
 		}
@@ -97,6 +116,22 @@ func (s *Scaffolder) TowerUpTo(ctx context.Context, targetY float32) {
 		world.SetSolid(refPos.X(), refPos.Y()+1, refPos.Z(), true)
 
 		time.Sleep(200 * time.Millisecond)
+	}
+}
+
+// ensureScaffoldStock mines a few blocks to tower with. It stops as soon as
+// anything usable is on hand, so a bot that already carries cobblestone never
+// goes mining for dirt.
+func (s *Scaffolder) ensureScaffoldStock(ctx context.Context) {
+	for _, blockName := range scaffoldStockBlocks {
+		if _, _, ok := s.FindScaffoldItem(); ok {
+			return
+		}
+		s.logger.Info("No scaffold blocks on hand, mining a small stock",
+			"block", blockName, "target", scaffoldStockTarget)
+		// Quiet on purpose: this is an internal detour inside another action, and
+		// a "mine" status here would show the player a task they never asked for.
+		s.rg.miner.gatherBlocks(ctx, blockName, scaffoldStockTarget)
 	}
 }
 
@@ -137,7 +172,14 @@ func (s *Scaffolder) DescendFromTower(ctx context.Context, targetY float32) {
 			BlockFace:       1,
 		})
 
-		time.Sleep(400 * time.Millisecond)
+		// Under server-auth block breaking the host honours PredictDestroy only
+		// after the full vanilla break time elapsed; the fixed 400ms predates that
+		// mode and leaves scaffold blocks standing.
+		breakWait := 400 * time.Millisecond
+		if serverAuthBreaking(bot) {
+			breakWait = sabdBreakDuration(true, "dirt", "")
+		}
+		time.Sleep(breakWait)
 
 		_ = bot.WritePacket(&packet.PlayerAction{
 			EntityRuntimeID: bot.GetEntityRuntimeID(),
@@ -148,6 +190,17 @@ func (s *Scaffolder) DescendFromTower(ctx context.Context, targetY float32) {
 		_ = bot.WritePacket(&packet.PlayerAction{
 			EntityRuntimeID: bot.GetEntityRuntimeID(),
 			ActionType:      protocol.PlayerActionPredictDestroyBlock,
+			BlockPosition:   refPos,
+			BlockFace:       1,
+		})
+		// StopBreak must be the last packet of the sequence. Without it the server
+		// still holds destroy-progress at this position, and the next block the
+		// bot places here — a foundation, a wall, the start of a house — comes
+		// back already broken. Every other break path in the bot ends the same
+		// way (see miner.mineSingle).
+		_ = bot.WritePacket(&packet.PlayerAction{
+			EntityRuntimeID: bot.GetEntityRuntimeID(),
+			ActionType:      protocol.PlayerActionStopBreak,
 			BlockPosition:   refPos,
 			BlockFace:       1,
 		})

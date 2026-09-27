@@ -33,6 +33,7 @@ func newVisibilityBot(t *testing.T, origin mgl32.Vec3, actors map[uint64]*entity
 	t.Helper()
 	world := pathfinder.NewLocalWorldModel()
 	world.SetChunkQuerier(openBlockQuerier{loaded: loaded})
+
 	return &bot.Bot{
 		Logger:        slog.New(slog.NewTextHandler(io.Discard, nil)),
 		Name:          "TestBot",

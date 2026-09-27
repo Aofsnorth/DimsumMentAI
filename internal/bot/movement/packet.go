@@ -4,23 +4,14 @@
 package movement
 
 import (
-	"math"
-
 	"bedrock-ai/internal/debuglog"
+	"math"
+	"time"
 
 	"github.com/go-gl/mathgl/mgl32"
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
 	"github.com/sandertv/gophertunnel/minecraft/protocol/packet"
 )
-
-// interactNoise returns a tiny, smooth, non-repeating angular offset that
-// simulates sub-degree mouse jitter on the interact (crosshair) channels.
-// amp is the peak amplitude in degrees; phase offsets the waveform so yaw
-// and pitch noise don't move in lockstep.
-func interactNoise(tick uint64, amp, phase float32) float32 {
-	t := float64(tick) + float64(phase)
-	return amp * float32(math.Sin(t*0.087)+0.4*math.Sin(t*0.191+1.1))
-}
 
 func (tc *TickContext) writePlayerAuthInputPacket() bool {
 	tc.prepareMoveVector()
@@ -28,10 +19,11 @@ func (tc *TickContext) writePlayerAuthInputPacket() bool {
 	inputData := tc.buildInputData(emoteJump, emoteSneak)
 	itemInteractionData := tc.takeItemInteractionData(&inputData)
 	itemStackRequest := tc.takeItemStackRequest(&inputData)
-	return tc.sendPlayerAuthInput(inputData, itemInteractionData, itemStackRequest)
+	blockActions := tc.takeBlockActions(&inputData)
+	return tc.sendPlayerAuthInput(inputData, itemInteractionData, itemStackRequest, blockActions)
 }
 
-func (tc *TickContext) takeItemInteractionData(inputData *protocol.Bitset) *protocol.UseItemTransactionData {
+func (tc *TickContext) takeItemInteractionData(inputData *protocol.InputFlags) *protocol.UseItemTransactionData {
 	data, ok := tc.B.TakeItemInteractionData()
 	if !ok {
 		return nil
@@ -40,13 +32,25 @@ func (tc *TickContext) takeItemInteractionData(inputData *protocol.Bitset) *prot
 	return &data
 }
 
-func (tc *TickContext) takeItemStackRequest(inputData *protocol.Bitset) *protocol.ItemStackRequest {
+func (tc *TickContext) takeItemStackRequest(inputData *protocol.InputFlags) *protocol.ItemStackRequest {
 	request, ok := tc.B.TakeItemStackRequest()
 	if !ok {
 		return nil
 	}
 	inputData.Set(packet.InputFlagPerformItemStackRequest)
 	return &request
+}
+
+// takeBlockActions drains the block actions queued for this tick — break
+// routing (see internal/bot/breaking.go) plus the per-tick ContinueDestroy —
+// and flags the PlayerAuthInput as carrying them, the way a stock client sends
+// block breaking on servers that negotiated server-authoritative breaking.
+func (tc *TickContext) takeBlockActions(inputData *protocol.InputFlags) []protocol.PlayerBlockAction {
+	actions := tc.B.TakeBlockTickActions()
+	if len(actions) > 0 {
+		inputData.Set(packet.InputFlagPerformBlockActions)
+	}
+	return actions
 }
 
 func (tc *TickContext) prepareMoveVector() {
@@ -182,8 +186,8 @@ func (tc *TickContext) handleEmoteShake(isPathfindingState bool) {
 	}
 }
 
-func (tc *TickContext) buildInputData(emoteJump, emoteSneak bool) protocol.Bitset {
-	inputData := protocol.NewBitset(packet.PlayerAuthInputBitsetSize)
+func (tc *TickContext) buildInputData(emoteJump, emoteSneak bool) protocol.InputFlags {
+	inputData := protocol.NewInputFlags(packet.InputFlagCount)
 	// BlockBreakingDelayEnabled is sent by a real Bedrock client on EVERY tick
 	// (verified via MITM capture: 245/245 PlayerAuthInput packets, even while
 	// standing perfectly still). Our bot never sent it, which is the single most
@@ -229,7 +233,7 @@ func (tc *TickContext) shouldSetSneak(emoteSneak bool) bool {
 	return tc.VelY <= 0.0 && !tc.ActivelyClimbing || tc.VelY < 0
 }
 
-func (tc *TickContext) applyMovementInputFlags(inputData protocol.Bitset) {
+func (tc *TickContext) applyMovementInputFlags(inputData protocol.InputFlags) {
 	if tc.MoveVec.Y() > 0.1 {
 		inputData.Set(packet.InputFlagUp)
 	} else if tc.MoveVec.Y() < -0.1 {
@@ -242,8 +246,8 @@ func (tc *TickContext) applyMovementInputFlags(inputData protocol.Bitset) {
 	}
 }
 
-func (tc *TickContext) sendPlayerAuthInput(inputData protocol.Bitset, itemInteractionData *protocol.UseItemTransactionData, itemStackRequest *protocol.ItemStackRequest) bool {
-	pk := tc.buildPlayerAuthInputPacket(inputData, itemInteractionData, itemStackRequest)
+func (tc *TickContext) sendPlayerAuthInput(inputData protocol.InputFlags, itemInteractionData *protocol.UseItemTransactionData, itemStackRequest *protocol.ItemStackRequest, blockActions []protocol.PlayerBlockAction) bool {
+	pk := tc.buildPlayerAuthInputPacket(inputData, itemInteractionData, itemStackRequest, blockActions)
 	tc.logPlayerAuthInputCond()
 	if err := tc.B.Conn.WritePacket(pk); err != nil {
 		tc.B.Logger.Warn("SendInputLoop: connection closed or write failed", "error", err.Error())
@@ -262,7 +266,7 @@ func (tc *TickContext) sendPlayerAuthInput(inputData protocol.Bitset, itemIntera
 	return true
 }
 
-func (tc *TickContext) buildPlayerAuthInputPacket(inputData protocol.Bitset, itemInteractionData *protocol.UseItemTransactionData, itemStackRequest *protocol.ItemStackRequest) *packet.PlayerAuthInput {
+func (tc *TickContext) buildPlayerAuthInputPacket(inputData protocol.InputFlags, itemInteractionData *protocol.UseItemTransactionData, itemStackRequest *protocol.ItemStackRequest, blockActions []protocol.PlayerBlockAction) *packet.PlayerAuthInput {
 	pk := &packet.PlayerAuthInput{
 		Position: tc.CurrPos.Add(mgl32.Vec3{0, 1.62, 0}),
 		Pitch:    tc.Pitch,
@@ -272,12 +276,11 @@ func (tc *TickContext) buildPlayerAuthInputPacket(inputData protocol.Bitset, ite
 		// body finishes rotating. This is the single biggest contributor to
 		// natural-looking head motion on normal servers.
 		HeadYaw: tc.HeadYaw,
-		// InteractYaw/InteractPitch represent the crosshair / aim direction.
-		// A real client derives these from the head angle with sub-degree
-		// mouse jitter, so we add a faint continuous noise to avoid sending
-		// a mathematically identical value every tick.
-		InteractPitch:      tc.Pitch + interactNoise(tc.Tick, 0.06, 0.0),
-		InteractYaw:        normalizeYaw(tc.HeadYaw + interactNoise(tc.Tick, 0.08, 1.3)),
+		// InteractYaw/InteractPitch represent the crosshair / aim direction and
+		// carry the cosmetic drift. The drift lives here rather than in
+		// HeadYaw/Pitch so it can never feed back into the eased gaze.
+		InteractPitch:      tc.Pitch + tc.LookDriftPitch,
+		InteractYaw:        normalizeYaw(tc.HeadYaw + tc.LookDriftYaw),
 		MoveVector:         tc.MoveVec,
 		InputData:          inputData,
 		InputMode:          packet.InputModeTouch,
@@ -289,10 +292,13 @@ func (tc *TickContext) buildPlayerAuthInputPacket(inputData protocol.Bitset, ite
 		RawMoveVector:      tc.MoveVec,
 	}
 	if itemInteractionData != nil {
-		pk.ItemInteractionData = *itemInteractionData
+		pk.ItemInteractionData = protocol.Option(*itemInteractionData)
 	}
 	if itemStackRequest != nil {
-		pk.ItemStackRequest = *itemStackRequest
+		pk.ItemStackRequest = protocol.Option(*itemStackRequest)
+	}
+	if len(blockActions) > 0 {
+		pk.BlockActions = protocol.Option(blockActions)
 	}
 	return pk
 }
@@ -325,10 +331,36 @@ func (tc *TickContext) logPlayerAuthInputCond() {
 		"deltaY":         tc.MoveDelta.Y(),
 		"deltaZ":         tc.MoveDelta.Z(),
 		"yaw":            tc.Yaw,
+		"pitch":          tc.Pitch,
+		"headYaw":        tc.HeadYaw,
+		"targetYaw":      tc.TargetYaw,
+		"targetPitch":    tc.TargetPitch,
+		"driftPitch":     tc.LookDriftPitch,
+		"driftYaw":       tc.LookDriftYaw,
+		"interactPitch":  tc.Pitch + tc.LookDriftPitch,
+		"interactYaw":    normalizeYaw(tc.HeadYaw + tc.LookDriftYaw),
+		"smoothPitch":    tc.SmoothedLookPitch,
+		"smoothYaw":      tc.SmoothedLookYaw,
+		"isGrounded":     tc.IsGrounded,
+		"velY":           tc.VelY,
+		"anchorY":        tc.serverAnchorY(),
+		"anchorDelta":    tc.serverAnchorDelta(),
+		"trackingLook":   tc.isTrackingLookTarget(),
 	})
 	// #endregion
 }
 
 func (tc *TickContext) shouldLogInput() bool {
-	return tc.Tick < 5 || tc.Tick%200 == 0 || tc.HasHorizontalMove || tc.ShouldJump
+	return tc.Tick < 5 || tc.Tick%200 == 0 || tc.HasHorizontalMove || tc.ShouldJump ||
+		(tc.isTrackingLookTarget() && tc.Tick%10 == 0)
+}
+
+// isTrackingLookTarget reports whether a look-at/follow target is currently
+// active. Used to raise the log sample rate while tracking, where the
+// interesting signal (pitch chatter) happens far faster than the default
+// once-per-200-ticks sampling can see.
+func (tc *TickContext) isTrackingLookTarget() bool {
+	tc.B.Mu.Lock()
+	defer tc.B.Mu.Unlock()
+	return tc.B.LookTargetName != "" && time.Now().Before(tc.B.LookTargetUntil)
 }

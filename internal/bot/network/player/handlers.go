@@ -64,6 +64,21 @@ func handleRespawn(b *bot.Bot, pk packet.Packet) bool {
 	return true
 }
 
+// handleSetTime keeps the world clock current.
+//
+// It was listed as an "expected unhandled" packet, which meant SurvivalMgr's
+// worldTime never moved off zero: every query reported dawn, forever. The
+// autonomy brain needs a real clock — whether it is night decides whether
+// wandering somewhere new is a sensible thing to do — so a clock frozen at dawn
+// is not a cosmetic gap.
+func handleSetTime(b *bot.Bot, pk packet.Packet) bool {
+	p := pk.(*packet.SetTime)
+	if b.SurvivalMgr != nil {
+		b.SurvivalMgr.SetWorldTime(int64(p.Time))
+	}
+	return true
+}
+
 func handleAddActor(b *bot.Bot, pk packet.Packet) bool {
 	p := pk.(*packet.AddActor)
 	b.Mu.Lock()
@@ -104,45 +119,29 @@ func handleMoveActorDelta(b *bot.Bot, pk packet.Packet) bool {
 	p := pk.(*packet.MoveActorDelta)
 	b.Mu.Lock()
 	if act, ok := b.Actors[p.EntityRuntimeID]; ok {
-		act.Position = mergeMoveActorDeltaPosition(act.Position, p.Position, p.Flags)
+		act.Position = mergeMoveActorDeltaPosition(act.Position, p)
 	}
 	b.Mu.Unlock()
 	return true
 }
 
-// mergeMoveActorDeltaPosition applies only the axes flagged as present in a
-// MoveActorDelta packet. As of Bedrock 1.16.100 the packet zeroes any axis it
-// does not carry, so blindly assigning the whole vector teleports entities to a
-// zeroed coordinate and breaks position-dependent logic such as combat target
-// selection and grounded visibility.
-func mergeMoveActorDeltaPosition(current, incoming mgl32.Vec3, flags uint16) mgl32.Vec3 {
+// mergeMoveActorDeltaPosition applies only the axes carried by a MoveActorDelta
+// packet. Each axis is a separate optional value, so an axis the server omits
+// must keep its previous value rather than resetting to zero. Blindly
+// assigning the whole vector would teleport entities to the origin and break
+// position-dependent logic such as combat target selection.
+func mergeMoveActorDeltaPosition(current mgl32.Vec3, p *packet.MoveActorDelta) mgl32.Vec3 {
 	merged := current
-	if flags&packet.MoveActorDeltaFlagHasX != 0 {
-		merged[0] = incoming[0]
+	if x, ok := p.PositionX.Value(); ok {
+		merged[0] = x
 	}
-	if flags&packet.MoveActorDeltaFlagHasY != 0 {
-		merged[1] = incoming[1]
+	if y, ok := p.PositionY.Value(); ok {
+		merged[1] = y
 	}
-	if flags&packet.MoveActorDeltaFlagHasZ != 0 {
-		merged[2] = incoming[2]
+	if z, ok := p.PositionZ.Value(); ok {
+		merged[2] = z
 	}
 	return merged
-}
-
-// mergeActorDeltaPosition applies only axes flagged present in the delta
-// packet. Unflagged axes decode as zero and must not reset the tracked value.
-func mergeActorDeltaPosition(act *entity.Info, p *packet.MoveActorDelta) {
-	pos := act.Position
-	if p.Flags&packet.MoveActorDeltaFlagHasX != 0 {
-		pos[0] = p.Position.X()
-	}
-	if p.Flags&packet.MoveActorDeltaFlagHasY != 0 {
-		pos[1] = p.Position.Y()
-	}
-	if p.Flags&packet.MoveActorDeltaFlagHasZ != 0 {
-		pos[2] = p.Position.Z()
-	}
-	act.Position = pos
 }
 
 func handleMoveActorAbsolute(b *bot.Bot, pk packet.Packet) bool {
@@ -254,9 +253,49 @@ func syncHeldEquipmentIfUpdated(b *bot.Bot, updated bool) {
 	if !updated {
 		return
 	}
+	// Geyser front-ends die on this echo: captured live on
+	// play.nexusone.fun, the session went permanently silent milliseconds
+	// after the bot echoed a server-pushed Geyser custom item (GeyserHash NBT)
+	// back in a MobEquipment, while the same bot on a Geyser server whose
+	// inventory stays empty (so the echo never fires) held its connection.
+	// A real Bedrock client only sends MobEquipment when the local player
+	// switches slots, so skipping the echo here matches vanilla behaviour.
+	b.Mu.Lock()
+	noEcho := b.GeyserNoHeldItemEcho
+	b.Mu.Unlock()
+	if noEcho {
+		b.Logger.Debug("skipping held equipment echo (Geyser profile)")
+		return
+	}
 	if err := b.SyncHeldEquipment(); err != nil {
 		b.Logger.Warn("failed to sync held equipment", slog.Any("error", err))
 	}
+}
+
+// handlePlayStatus answers the server's spawn notification the way a real
+// client does. A vanilla Bedrock client replies to PlayStatus(3) with
+// SetLocalPlayerAsInitialised, which marks the client as fully initialised;
+// Geyser front-ends use that reply to mark the upstream session initialised
+// (without it, cumulus forms such as SimpleLogin's login window are never
+// delivered) and to forward ServerboundPlayerLoadedPacket to the Java server.
+// A BDS does not punish its absence, but it also expects it, so sending it is
+// plain client behaviour rather than a Geyser workaround.
+func handlePlayStatus(b *bot.Bot, pk packet.Packet) bool {
+	p := pk.(*packet.PlayStatus)
+	if p.Status != packet.PlayStatusPlayerSpawn {
+		return true
+	}
+	if b.Conn == nil {
+		return true
+	}
+	runtimeID := b.Conn.GameData().EntityRuntimeID
+	if err := b.Conn.WritePacket(&packet.SetLocalPlayerAsInitialised{EntityRuntimeID: runtimeID}); err != nil {
+		b.Logger.Warn("failed to send SetLocalPlayerAsInitialised", slog.Any("error", err))
+		return true
+	}
+	b.Logger.Info("sent SetLocalPlayerAsInitialised after PlayStatus PLAYER_SPAWN",
+		slog.Uint64("runtime_id", runtimeID))
+	return true
 }
 
 func handleMobEquipment(b *bot.Bot, pk packet.Packet) bool {

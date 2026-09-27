@@ -28,7 +28,9 @@ func (b *Bot) BreakObstacleAt(pos protocol.BlockPos) {
 
 	go func() {
 		runtimeID := b.Conn.GameData().EntityRuntimeID
-		_ = b.Conn.WritePacket(&packet.PlayerAction{
+		// Routed through b.WritePacket so the break actions reach
+		// server-auth-block-breaking hosts in PlayerAuthInput form.
+		_ = b.WritePacket(&packet.PlayerAction{
 			EntityRuntimeID: runtimeID,
 			ActionType:      protocol.PlayerActionStartBreak,
 			BlockPosition:   pos,
@@ -45,7 +47,7 @@ func (b *Bot) BreakObstacleAt(pos protocol.BlockPos) {
 		elapsed := time.Duration(0)
 		total := time.Duration(breakMs) * time.Millisecond
 		for elapsed < total {
-			_ = b.Conn.WritePacket(animation.MineSwing(runtimeID))
+			_ = b.WritePacket(animation.MineSwing(runtimeID))
 			wait := swingInterval
 			if elapsed+wait > total {
 				wait = total - elapsed
@@ -54,19 +56,19 @@ func (b *Bot) BreakObstacleAt(pos protocol.BlockPos) {
 			elapsed += wait
 		}
 
-		_ = b.Conn.WritePacket(&packet.PlayerAction{
+		_ = b.WritePacket(&packet.PlayerAction{
 			EntityRuntimeID: runtimeID,
 			ActionType:      protocol.PlayerActionCrackBreak,
 			BlockPosition:   pos,
 			BlockFace:       1,
 		})
-		_ = b.Conn.WritePacket(&packet.PlayerAction{
+		_ = b.WritePacket(&packet.PlayerAction{
 			EntityRuntimeID: runtimeID,
 			ActionType:      protocol.PlayerActionPredictDestroyBlock,
 			BlockPosition:   pos,
 			BlockFace:       1,
 		})
-		_ = b.Conn.WritePacket(&packet.PlayerAction{
+		_ = b.WritePacket(&packet.PlayerAction{
 			EntityRuntimeID: runtimeID,
 			ActionType:      protocol.PlayerActionStopBreak,
 			BlockPosition:   pos,

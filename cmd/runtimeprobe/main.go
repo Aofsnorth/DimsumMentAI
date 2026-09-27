@@ -113,7 +113,7 @@ func sendInputLoop(conn *minecraft.Conn, stop <-chan struct{}) {
 		case <-stop:
 			return
 		case <-ticker.C:
-			inputData := protocol.NewBitset(packet.PlayerAuthInputBitsetSize)
+			inputData := protocol.NewInputFlags(packet.InputFlagCount)
 			inputData.Set(packet.InputFlagBlockBreakingDelayEnabled)
 			inputData.Set(packet.InputFlagVerticalCollision)
 			if err := conn.WritePacket(&packet.PlayerAuthInput{

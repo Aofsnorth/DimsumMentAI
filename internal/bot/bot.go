@@ -16,6 +16,7 @@ import (
 	"bedrock-ai/internal/bot/fishing"
 	"bedrock-ai/internal/bot/gathering"
 	"bedrock-ai/internal/bot/husbandry"
+	"bedrock-ai/internal/bot/interact"
 	"bedrock-ai/internal/bot/inventory"
 	"bedrock-ai/internal/bot/pathfinder"
 	"bedrock-ai/internal/bot/survival"
@@ -23,6 +24,7 @@ import (
 	"bedrock-ai/internal/config"
 	"bedrock-ai/internal/event"
 	"bedrock-ai/internal/handler"
+	"bedrock-ai/internal/memory"
 
 	"github.com/df-mc/dragonfly/server/block/cube"
 	"github.com/go-gl/mathgl/mgl32"
@@ -65,6 +67,14 @@ var (
 	// import it back here — the loop is started via this function pointer.
 	StartProactiveLoopFunc func(ctx context.Context, b *Bot)
 
+	// StartAGILoopFunc starts the autonomy brain. bot/agi imports bot for the
+	// same reason bot/chat does, so it is injected rather than imported.
+	StartAGILoopFunc func(ctx context.Context, b *Bot)
+
+	// RequestChunkRadiusFunc asks the server to stream chunks around the bot.
+	// Injected because bot imports network, so network cannot import bot back.
+	RequestChunkRadiusFunc func(b *Bot)
+
 	// Planner initialization hook. bot/planner imports bot, so we can't
 	// import it back here — the concrete planner is constructed via this
 	// function pointer and stored as PlannerInterface.
@@ -97,17 +107,90 @@ type Bot struct {
 	VenityCompat      bool // play.venity.net hub: aggressive chunk flood + ~30s session checks
 	NetherGamesCompat bool // play.nethergames.org/net: stricter login compatibility
 	RewindMovement    bool // server uses RewindHistorySize / CorrectPlayerMovePrediction
-	Language          string
-	StatePath         string
-	Debug             bool
-	ProtoSkin         protocol.Skin
-	PlayerUUID        uuid.UUID
+
+	// join holds the pending server-switch request and the cancel func of the
+	// live session. Switching servers is a new connection, not a packet, so it
+	// has to be handed to the run loop between sessions.
+	join joinState
+	// command holds the last server command's output. Separate mutex from Mu so
+	// the packet loop never waits on the bot lock.
+	command commandState
+	// JoinMessages are replayed after every successful join. A leading "/" means
+	// a server command, anything else is chat.
+	JoinMessages        []string
+	JoinMessageDelay    time.Duration
+	JoinMessageInterval time.Duration
+	// SearchRadiusBlocks and SearchRadiusPortal bound how far the navigation
+	// actions look for a named block and for a portal, in blocks. Zero uses the
+	// package defaults.
+	SearchRadiusBlocks int
+	SearchRadiusPortal int
+
+	// GeyserNoSubChunks disables the sub-chunk requester. Measured on
+	// play.hansprojects.my.id: a client that sends SubChunkRequest is dropped
+	// after ~25s of silence, while one that only requests a chunk radius stays
+	// connected. Set from the detected server profile, not from config, so it
+	// only ever applies to a Geyser front-end.
+	GeyserNoSubChunks bool
+
+	// GeyserNoHeldItemEcho suppresses the held-item MobEquipment echo after a
+	// server-driven inventory update. Measured on play.nexusone.fun: echoing a
+	// server-pushed Geyser custom item (GeyserHash NBT) back in a client-side
+	// MobEquipment makes the session go permanently silent, while Geyser
+	// servers that never receive the echo stay connected. Set from the detected
+	// server profile, not from config, so it only ever applies to a Geyser
+	// front-end.
+	GeyserNoHeldItemEcho bool
+
+	// IdleNudge enables the small idle steps that keep a Geyser-fronted server
+	// from timing the bot out. It is set from the detected server profile, NOT
+	// from config: a server the bot already sits fine on (Hans, the origin
+	// servers) must keep behaving exactly as before, because the nudge is only
+	// a fix for servers that drop silent clients, not a general improvement.
+	IdleNudge bool
+
+	// Idle-nudge fields. LastIdleNudgeAt schedules the next small idle step;
+	// the gap and reach bound how often and how far. Zero uses package defaults.
+	LastIdleNudgeAt time.Time
+	IdleNudgeMinSec int
+	IdleNudgeMaxSec int
+	IdleNudgeReach  float32
+
+	// CommandOutputWindow is how long a command's reply stays reportable.
+	// Zero uses the package default.
+	CommandOutputWindow time.Duration
+	// AutoRetryWait is how long the bare command form gets to produce a reply
+	// before the slash form is tried. Zero uses the package default.
+	AutoRetryWait time.Duration
+	// CommandPrefix selects the wire form of a server command: auto, slash or
+	// none. See config.ServerConfig.CommandPrefix.
+	CommandPrefix string
+	// GeyserOverride is the operator's explicit `is_geyser_server` setting, or
+	// nil when detection should decide. It is stored because noteServer runs
+	// again on every session and must not undo an explicit choice.
+	GeyserOverride *bool
+	// CommandPrefixOrder decides which form "auto" tries first. It is set from
+	// the detected server profile because the two orders are not
+	// interchangeable: a Geyser front-end answers the slash form and ignores
+	// the bare one, while other servers do the opposite. Empty means
+	// bare-first, which is what the origin servers were verified against.
+	CommandPrefixOrder string
+	Language           string
+	StatePath          string
+	Memory             *memory.Store // curated long-term facts + named places (MinePal-style memory)
+	Debug              bool
+	ProtoSkin          protocol.Skin
+	PlayerUUID         uuid.UUID
 
 	// AI and configuration
 	AiClient  *ai.NvidiaClient
 	Throttler *ai.MessageThrottler
 	AiCfg     config.AIConfig
-	Planner   PlannerInterface
+	// Agicfg holds the autonomy settings. Read when the AGI loop starts, so
+	// changing them takes effect on the next session rather than needing a
+	// restart mid-game.
+	Agicfg  config.AGIConfig
+	Planner PlannerInterface
 
 	// Player Tracking
 	PlayerTracker
@@ -120,6 +203,7 @@ type Bot struct {
 	CombatMgr    *combat.CombatManager
 	ThreatDet    *combat.ThreatDetector
 	Gatherer     *gathering.ResourceGatherer
+	Interactor   *interact.Interactor
 	InventoryMgr *inventory.InventoryManager
 	BuilderAgent *coordinator.BuilderAgent
 	SurvivalMgr  *survival.Manager
@@ -133,6 +217,9 @@ type Bot struct {
 	TargetPos        mgl32.Vec3
 	TargetPlayerName string
 	TargetTolerance  float32 // arrival tolerance for walk_to (default 2.0; tightened for item pickup)
+	// FollowMoving is the hysteresis-latched walk/stop state for follow mode.
+	// A single distance threshold made the state flap at the boundary.
+	FollowMoving bool
 
 	// LastChatPartner is the most recent player the bot had a conversation
 	// with. Used by action status reports to know whom to address when the
@@ -143,6 +230,19 @@ type Bot struct {
 	IsOnLadder      bool // shared ladder state between movement and network systems
 	IsGrounded      bool
 	ParkourUntil    time.Time
+
+	// ServerGroundY is the last vertical position the server confirmed for the
+	// bot, together with when it was confirmed. The server is authoritative for
+	// position, so a stationary bot adopts this Y instead of free-falling.
+	//
+	// Without it the bot fell every tick whenever the local world model had no
+	// decoded floor under it, and the server snapped it back on the next
+	// CorrectPlayerMovePrediction. That fall/snap cycle made the body Y
+	// oscillate by more than a block, which the look code turned into a visible
+	// head tremor (and an upward aim bias) when watching a nearby player.
+	ServerGroundY   float32
+	ServerGroundAt  time.Time
+	LastServerPosAt time.Time
 
 	// Look angles
 	Yaw                 float32
@@ -156,7 +256,17 @@ type Bot struct {
 	NextIdleLookChange  time.Time
 
 	// World loading: true only after server sends LevelChunk in sub-chunk request mode.
+	// Since protocol 800 (1.21.100+) Bedrock never inlines sub-chunk data into
+	// LevelChunk, so this is the normal case on current servers and LAN worlds.
 	SubChunkRequestMode bool
+	// ChunkDimension is the dimension ID the server reported in LevelChunk.
+	// SubChunkRequest must echo it or the server replies
+	// SubChunkResultInvalidDimension and no terrain ever arrives.
+	ChunkDimension int32
+	// SubChunkLimit is the server's advertised cap on how many sub-chunks one
+	// SubChunkRequest may carry. Zero or negative means the server set no limit,
+	// so the full world column is requested.
+	SubChunkLimit int32
 
 	// A* Pathfinding
 	WorldModel            *pathfinder.LocalWorldModel
@@ -168,6 +278,20 @@ type Bot struct {
 	LastTickPos           mgl32.Vec3
 	LastPathRecalcTime    time.Time
 	ConsecutiveStuckCount int
+
+	// StuckWindowStart/StuckWindowPos measure net displacement over a short
+	// window instead of per tick. The per-tick counter (TicksStuck) cannot see
+	// the two failure modes that actually strand the bot: the host rubberbanding
+	// us back every few ticks, and sliding sideways along a wall. In both cases
+	// the position changes on most ticks, so the per-tick test says "moving"
+	// while the bot gains no ground at all — and no recovery ever ran.
+	StuckWindowStart time.Time
+	StuckWindowPos   mgl32.Vec3
+
+	// WalkToRepathFailures counts consecutive walk_to re-paths that produced no
+	// route, so the re-path interval can back off instead of re-running A* every
+	// tick against terrain it cannot solve.
+	WalkToRepathFailures int
 
 	// Health & Hunger tracking
 	Health int
@@ -206,6 +330,16 @@ type Bot struct {
 	pendingCrafts              map[int32]pendingCraft
 	pendingItemStackRequest    *protocol.ItemStackRequest
 	pendingItemInteractionData *protocol.UseItemTransactionData
+
+	// Server-auth block breaking state (see breaking.go). Break actions are
+	// converted to PlayerAuthInput.BlockActions when the server negotiated
+	// server-authoritative block breaking.
+	serverAuthBlockBreaking bool
+	pendingBlockActions     []protocol.PlayerBlockAction
+	miningActive            bool
+	finishing               bool
+	miningPos               protocol.BlockPos
+	miningFace              int32
 
 	// Emotes / Animations state
 	EmoteState string

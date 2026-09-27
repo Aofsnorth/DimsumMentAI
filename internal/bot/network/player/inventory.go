@@ -44,7 +44,6 @@ func heldItemStateLocked(b *bot.Bot) heldItemState {
 	state.BlockRuntimeID = item.BlockRuntimeID
 	state.Count = item.Count
 	state.StackNetworkID = b.StackNetworkIDs[state.Slot]
-	state.HasNetworkID = item.HasNetworkID
 	state.Present = true
 	return state
 }
@@ -86,13 +85,22 @@ func isPlayerInventorySlot(p *packet.InventorySlot) bool {
 	return false
 }
 
+// windowIDValue unwraps an optional window ID, reporting -1 when the server
+// left it unset (which only happens for world-sourced transactions).
+func windowIDValue(windowID protocol.Optional[int8]) int {
+	if v, ok := windowID.Value(); ok {
+		return int(v)
+	}
+	return -1
+}
+
 // isPlayerInventoryTransaction reports whether an InventoryTransaction action
 // updates the bot's own inventory (hotbar + main inventory, armor, or offhand).
 func isPlayerInventoryTransaction(action protocol.InventoryAction) bool {
 	if action.SourceType != protocol.InventoryActionSourceContainer {
 		return false
 	}
-	switch action.WindowID {
+	switch windowIDValue(action.WindowID) {
 	case protocol.WindowIDInventory, protocol.WindowIDArmour, protocol.WindowIDOffHand:
 		return true
 	}
@@ -287,7 +295,7 @@ func slotRange(start, end uint32) map[uint32]struct{} {
 // the same 0-35 hotbar+inventory layout as WindowIDInventory, but also
 // supports armor (WindowIDArmour) and offhand (WindowIDOffHand).
 func transactionSlotToGlobal(action protocol.InventoryAction) (uint32, bool) {
-	switch action.WindowID {
+	switch windowIDValue(action.WindowID) {
 	case protocol.WindowIDInventory:
 		if action.InventorySlot >= playerInvSlotCount {
 			return 0, false
@@ -336,7 +344,7 @@ func applyInventoryTransaction(b *bot.Bot, p *packet.InventoryTransaction) bool 
 		// unexpected source/window combinations for item pickups.
 		b.Logger.Debug("inventory transaction action",
 			slog.Int("source_type", int(action.SourceType)),
-			slog.Int("window_id", int(action.WindowID)),
+			slog.Int("window_id", windowIDValue(action.WindowID)),
 			slog.Uint64("slot", uint64(action.InventorySlot)),
 			slog.Int("old_count", int(action.OldItem.Stack.Count)),
 			slog.Int("old_net_id", int(action.OldItem.Stack.NetworkID)),
@@ -465,12 +473,10 @@ func applySlotUpdate(b *bot.Bot, slotInfo protocol.StackResponseSlotInfo, global
 			return
 		}
 		newItem := protocol.ItemStack{
-			Count:        uint16(slotInfo.Count),
-			HasNetworkID: true,
+			Count: uint16(slotInfo.Count),
 		}
 		if craftOutputNetID != 0 {
 			newItem.NetworkID = craftOutputNetID
-			newItem.HasNetworkID = true
 		}
 		b.InventoryMap[globalSlot] = newItem
 		return

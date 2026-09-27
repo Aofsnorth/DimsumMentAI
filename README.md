@@ -79,6 +79,8 @@ Minecraft Bedrock AI/
 ### Configuration
 1. Open the [configs/bot.yaml](configs/bot.yaml) file:
    * **`server`**: Specify your Minecraft server's host and port. Set `offline: true` if your local server does not have Xbox Live authentication enabled.
+   * For a Bedrock single-player world with **Visible to LAN Players** enabled, set `host` to the host PC's Wi-Fi IPv4 address and `port: 7551`; the bot discovers the NetherNet world automatically. Optionally add `lan_discovery: true` and `lan_world: "World name"`. RakNet remains the fallback.
+   * The bot must run the same Minecraft protocol version as the host. Check your game version under *Settings → About*, and upgrade `gophertunnel` if the log reports `client outdated`.
    * **`bot`**: Set the bot's in-game display name.
    * **`ai`**: Set `provider`, `model`, and `main_player`. API keys are **not** stored in the YAML — they live in environment variables (see step 2).
 2. Provide your API key via a `.env` file (recommended) or a shell environment variable. The config loader auto-loads `.env` from the project root on startup; existing shell env vars always take precedence.

@@ -36,9 +36,27 @@ var adminCommandHandlers = map[string]func(b *bot.Bot, param, user string){
 	"inv":        handleAdminInv,
 	"follow":     handleAdminFollow,
 	"goto":       handleAdminGoto,
+	"move":       handleAdminMove,
+	"look":       handleAdminLook,
+	"analyze":    handleAdminAnalyze,
+	"remember":   handleAdminRemember,
+	"recall":     handleAdminRecall,
+	"memories":   handleAdminRecall,
+	"forget":     handleAdminForget,
+	"sethome":    handleAdminSetHome,
+	"home":       handleAdminHome,
 	"stop":       handleAdminStop,
 	"todo":       handleAdminTodo,
 	"cancelplan": handleAdminCancelPlan,
+	"cmd":        handleAdminCmd,
+	"command":    handleAdminCmd,
+}
+
+// handleAdminCmd runs a server command from chat: "!cmd /register pass pass".
+// The leading "!" is the bot's own prefix, so the command itself keeps the
+// slash a player would type.
+func handleAdminCmd(b *bot.Bot, param, user string) {
+	action.Execute(b, "cmd", param, user)
 }
 
 func handleAdminSay(b *bot.Bot, param, user string) {
@@ -68,6 +86,42 @@ func handleAdminFollow(b *bot.Bot, param, user string) {
 func handleAdminGoto(b *bot.Bot, param, user string) {
 	action.Execute(b, "goto", param, user)
 	b.ReportActionStatus(user, event.ActionStatus{Action: "goto", Item: param, Success: true})
+}
+
+// The MinePal-parity admin commands below delegate to the action dispatch so
+// chat (!) and LLM (<action>) share one code path.
+func handleAdminMove(b *bot.Bot, param, user string) {
+	action.Execute(b, "move", param, user)
+	b.ReportActionStatus(user, event.ActionStatus{Action: "goto", Item: param, Success: true})
+}
+
+func handleAdminLook(b *bot.Bot, param, user string) {
+	action.Execute(b, "look", param, user)
+	b.ReportActionStatus(user, event.ActionStatus{Action: "lookat", Item: param, Success: true})
+}
+
+func handleAdminAnalyze(b *bot.Bot, param, user string) {
+	action.Execute(b, "analyze", param, user)
+}
+
+func handleAdminRemember(b *bot.Bot, param, user string) {
+	action.Execute(b, "remember", param, user)
+}
+
+func handleAdminRecall(b *bot.Bot, param, user string) {
+	action.Execute(b, "recall", param, user)
+}
+
+func handleAdminForget(b *bot.Bot, param, user string) {
+	action.Execute(b, "forget", param, user)
+}
+
+func handleAdminSetHome(b *bot.Bot, param, user string) {
+	action.Execute(b, "sethome", param, user)
+}
+
+func handleAdminHome(b *bot.Bot, param, user string) {
+	action.Execute(b, "home", param, user)
 }
 
 func handleAdminStop(b *bot.Bot, param, user string) {

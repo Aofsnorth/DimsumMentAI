@@ -7,7 +7,6 @@ import (
 
 	"bedrock-ai/internal/bot/entity"
 
-	"github.com/df-mc/dragonfly/server/world/chunk"
 	"github.com/go-gl/mathgl/mgl32"
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
 	"github.com/sandertv/gophertunnel/minecraft/protocol/packet"
@@ -69,8 +68,32 @@ func (b *Bot) GetBlockName(x, y, z int32) (string, bool) {
 	if !ok {
 		return "", false
 	}
-	name, _, ok := chunk.RuntimeIDToState(rid)
-	return name, ok
+	// Routed through the cache: this is the entry point every block scan uses
+	// (tree search, mining, interaction), and resolving a block state allocates a
+	// name and a properties map every time.
+	return b.WorldCache.BlockName(rid)
+}
+
+// GetBlockNetworkID returns the wire-format block ID at a position — numeric
+// runtime ID or network hash, whichever the server selected. Transactions must
+// echo this value back in UseItemTransactionData.BlockRuntimeID, where the
+// server uses it to verify the client's world is synchronised with its own.
+func (b *Bot) GetBlockNetworkID(x, y, z int32) (uint32, bool) {
+	if b.WorldCache == nil {
+		return 0, false
+	}
+	return b.WorldCache.GetBlockNetworkID(x, y, z)
+}
+
+// GetLastSentAim returns the yaw/pitch of the most recent PlayerAuthInput the
+// server received. Interactions validate the crosshair direction against the
+// target, so a click should only fire once the sent aim has actually turned
+// toward what is being clicked — the value written by LookAt is eased, not
+// instantaneous.
+func (b *Bot) GetLastSentAim() (yaw, pitch float32) {
+	b.Mu.Lock()
+	defer b.Mu.Unlock()
+	return b.LastSentInputYaw, b.LastSentInputPitch
 }
 
 // RecalculatePath computes the shortest path to targetPos using A* search.
@@ -159,6 +182,15 @@ func (b *Bot) NavigateToBlock(x, y, z int32, tolerance float32) bool {
 }
 
 func (b *Bot) WritePacket(pk packet.Packet) error {
+	// On servers that negotiated server-authoritative block breaking, break
+	// actions must ride the next PlayerAuthInput instead of going out as
+	// standalone packets — a vanilla host tears the connection down on the
+	// legacy form. See breaking.go for the mapping.
+	if b.serverAuthBlockBreaking {
+		if action, ok := pk.(*packet.PlayerAction); ok && b.routeBreakAction(action) {
+			return nil
+		}
+	}
 	return b.Conn.WritePacket(pk)
 }
 
@@ -204,14 +236,14 @@ func (b *Bot) EquipItem(slot uint32) error {
 			Actions: []protocol.InventoryAction{
 				{
 					SourceType:    protocol.InventoryActionSourceContainer,
-					WindowID:      protocol.WindowIDInventory,
+					WindowID:      protocol.Option(int8(protocol.WindowIDInventory)),
 					InventorySlot: slot,
 					OldItem:       protocol.ItemInstance{StackNetworkID: itemStackNetworkID, Stack: item},
 					NewItem:       protocol.ItemInstance{StackNetworkID: hotbarStackNetworkID, Stack: hotbarItem},
 				},
 				{
 					SourceType:    protocol.InventoryActionSourceContainer,
-					WindowID:      protocol.WindowIDInventory,
+					WindowID:      protocol.Option(int8(protocol.WindowIDInventory)),
 					InventorySlot: targetHotbarSlot,
 					OldItem:       protocol.ItemInstance{StackNetworkID: hotbarStackNetworkID, Stack: hotbarItem},
 					NewItem:       protocol.ItemInstance{StackNetworkID: itemStackNetworkID, Stack: item},

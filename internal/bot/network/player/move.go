@@ -3,6 +3,7 @@ package player
 
 import (
 	"log/slog"
+	"time"
 
 	"bedrock-ai/internal/bot"
 	"bedrock-ai/internal/debuglog"
@@ -52,6 +53,9 @@ func handleMovePlayer(b *bot.Bot, p *packet.MovePlayer) {
 			}
 			b.Pos = newPos
 			b.VelY = 0.0
+			b.ServerGroundY = newPos.Y()
+			b.ServerGroundAt = time.Now()
+			b.LastServerPosAt = b.ServerGroundAt
 		}
 	} else {
 		b.PlayerPositions[p.EntityRuntimeID] = trackedPlayerFeetPosition(p.Position)
@@ -80,20 +84,31 @@ func trackedPlayerFeetPosition(pos mgl32.Vec3) mgl32.Vec3 {
 
 func handleCorrectPrediction(b *bot.Bot, p *packet.CorrectPlayerMovePrediction) {
 	b.Mu.Lock()
-	correctedPos := p.Position.Sub(mgl32.Vec3{0, 1.62, 0})
+	correctedPos := p.Position.Sub(mgl32.Vec3{0, 1.62})
+	localY := b.Pos.Y()
 	if correctedPos.Y() <= 320 && correctedPos.Y() >= -64 {
 		posDiff := float64(b.Pos.X()-correctedPos.X())*float64(b.Pos.X()-correctedPos.X()) +
 			float64(b.Pos.Y()-correctedPos.Y())*float64(b.Pos.Y()-correctedPos.Y()) +
 			float64(b.Pos.Z()-correctedPos.Z())*float64(b.Pos.Z()-correctedPos.Z())
 
 		if posDiff > 4.0 && b.MovementState != "idle" {
+			// Our route is anchored to a position the server just rejected, so
+			// drop it. PathIndex goes with it: the tick loop treats a nil path as
+			// "no route" only when the index is also back at zero.
 			b.CurrentPath = nil
+			b.PathIndex = 0
 		}
 
 		b.Pos = correctedPos
 		if !b.IsOnLadder {
 			b.VelY = 0.0
 		}
+		// The server owns the authoritative position. Remember the Y it just
+		// confirmed so the movement loop can anchor to it instead of free-falling
+		// on a world model that may not have the floor decoded yet.
+		b.ServerGroundY = correctedPos.Y()
+		b.ServerGroundAt = time.Now()
+		b.LastServerPosAt = b.ServerGroundAt
 	}
 	b.Mu.Unlock()
 
@@ -108,6 +123,9 @@ func handleCorrectPrediction(b *bot.Bot, p *packet.CorrectPlayerMovePrediction) 
 		"prevTick":   prevTick,
 		"serverTick": p.Tick,
 		"newTick":    p.Tick + 1,
+		"srvY":       correctedPos.Y(),
+		"localY":     localY,
+		"srvRawY":    p.Position.Y(),
 		"runId":      "tick-fix-v2",
 	})
 	// #endregion

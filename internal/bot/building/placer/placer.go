@@ -116,7 +116,7 @@ func (bp *BlockPlacer) PlaceBlockAt(ctx context.Context, x, y, z int, blockName 
 		Actions: []protocol.InventoryAction{
 			{
 				SourceType:    protocol.InventoryActionSourceContainer,
-				WindowID:      protocol.WindowIDInventory,
+				WindowID:      protocol.Option(int8(protocol.WindowIDInventory)),
 				InventorySlot: slot,
 				OldItem:       protocol.ItemInstance{Stack: itemStack},
 				NewItem:       newItem,

@@ -9,6 +9,7 @@ import (
 
 	"bedrock-ai/internal/bot"
 	"bedrock-ai/internal/bot/entity"
+	"bedrock-ai/internal/bot/perception"
 	"bedrock-ai/internal/event"
 )
 
@@ -163,6 +164,9 @@ func buildChatContext(b *bot.Bot, sourceName, msg, botName string) string {
 	}
 
 	visibleMobs := VisibleMobsSummary(b, 32, 8)
+	// Grounded block sight: without it the model answers "no button here"
+	// while staring at one. Line-of-sight only, so no xray.
+	visibleBlocks := perception.BlocksSummary(b, 12.0, 6)
 	botStatusText := fmt.Sprintf("HP: %d/20, Hunger: %d/20", hp, hunger)
 	systemPrompt := b.AiClient.BuildSystemPrompt(
 		botName,
@@ -173,6 +177,7 @@ func buildChatContext(b *bot.Bot, sourceName, msg, botName string) string {
 	)
 
 	systemPrompt += "\n\n[GROUNDED PERCEPTION] Visible mobs (line-of-sight, non-item): " + visibleMobs + "."
+	systemPrompt += "\nVisible blocks nearby (line-of-sight, clickable ones can be used with interact): " + visibleBlocks + "."
 
 	// Append current plan/todo state so the LLM is always aware of any
 	// in-progress multi-step task, even when a new chat message arrives
@@ -183,6 +188,9 @@ func buildChatContext(b *bot.Bot, sourceName, msg, botName string) string {
 			systemPrompt += "\n\n" + todoStr
 		}
 	}
+
+	// Append curated long-term memories (MinePal-style Active Memory).
+	systemPrompt = appendMemoryContext(b, systemPrompt)
 
 	return systemPrompt
 }

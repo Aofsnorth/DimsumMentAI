@@ -250,10 +250,16 @@ func parseOpenAIReply(body []byte) (string, error) {
 		}
 		return "", fmt.Errorf("unmarshal response: %w", err)
 	}
-	if len(resp.Choices) == 0 {
+	choices := resp.Choices
+	// Gateways such as api.cline.bot wrap the OpenAI payload in an envelope.
+	// Without this the bot would silently produce empty replies.
+	if len(choices) == 0 && resp.Data != nil {
+		choices = resp.Data.Choices
+	}
+	if len(choices) == 0 {
 		return "", nil
 	}
-	return resp.Choices[0].Message.Content, nil
+	return choices[0].Message.Content, nil
 }
 
 // openAIStreamChunk is a single SSE delta frame from a streaming chat response.

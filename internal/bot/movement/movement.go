@@ -16,15 +16,28 @@ import (
 )
 
 type TickContext struct {
-	B                   *bot.Bot
-	Tick                uint64
-	CurrPos             mgl32.Vec3
-	MState              string
-	TPlayer             string
-	TPos                mgl32.Vec3
-	Yaw                 float32
-	Pitch               float32
-	HeadYaw             float32
+	B       *bot.Bot
+	Tick    uint64
+	CurrPos mgl32.Vec3
+	MState  string
+	TPlayer string
+	TPos    mgl32.Vec3
+	Yaw     float32
+	Pitch   float32
+	HeadYaw float32
+	// LookDriftYaw/LookDriftPitch are a purely cosmetic offset applied when the
+	// packet is written. Keeping them out of HeadYaw/Pitch means the eased gaze
+	// can converge on a stable target instead of chasing its own drift.
+	LookDriftYaw   float32
+	LookDriftPitch float32
+	// SmoothedLookYaw/SmoothedLookPitch carry the EMA of the raw stationary
+	// look target across ticks. TickContext is rebuilt every tick, so
+	// SendInputLoop passes these in and copies the updated values back out.
+	SmoothedLookYaw   float32
+	SmoothedLookPitch float32
+	// FollowWalking is the follow walk/stop latch for this tick, computed in
+	// updateShouldMoveState before steering and look run.
+	FollowWalking       bool
 	VelY                float32
 	FeetX, FeetY, FeetZ int32
 	IsLadderActive      bool
@@ -60,10 +73,13 @@ func SendInputLoop(ctx context.Context, b *bot.Bot, gd minecraft.GameData) {
 	defer ticker.Stop()
 	b.Mu.Lock()
 	initPos := b.Pos
+	initYaw := b.Yaw
+	initPitch := b.Pitch
 	b.Mu.Unlock()
 
 	var lastPredictedY float32 = initPos.Y()
 	prevPos := initPos
+	smoothLookYaw, smoothLookPitch := initYaw, initPitch
 	var connErr bool
 
 	for {
@@ -93,6 +109,8 @@ func SendInputLoop(ctx context.Context, b *bot.Bot, gd minecraft.GameData) {
 			tc.HeadYaw = b.HeadYaw
 			tc.VelY = b.VelY
 			tc.TargetTolerance = b.TargetTolerance
+			tc.SmoothedLookYaw = smoothLookYaw
+			tc.SmoothedLookPitch = smoothLookPitch
 			b.Mu.Unlock()
 
 			tc.FeetX = int32(math.Floor(float64(tc.CurrPos.X())))
@@ -122,12 +140,18 @@ func SendInputLoop(ctx context.Context, b *bot.Bot, gd minecraft.GameData) {
 			tc.updateDistanceToPlayer()
 			tc.updateTargetPositionIfFollowing()
 			tc.resolveNextTarget()
+			// A walk_to that lost its route has to re-plan here: the host clears
+			// CurrentPath on a large position correction, and nothing else would
+			// ever put one back.
+			tc.ensureWalkToHasPath()
 			venityIdle := tc.B.VenityCompat && tc.MState == "idle"
 			if !venityIdle {
 				tc.performActiveSteering()
 				tc.runPhysicsAndCollisions()
 			}
 			tc.updateLookDirection()
+			smoothLookYaw = tc.SmoothedLookYaw
+			smoothLookPitch = tc.SmoothedLookPitch
 			tc.calculateMovementSpeedAndPosition()
 			if !tc.writePlayerAuthInputPacket() {
 				connErr = true

@@ -214,6 +214,9 @@ func scheduleFollowup(b *bot.Bot, user string, delaySec int) {
 			}
 		}
 
+		// Append curated long-term memories (MinePal-style Active Memory).
+		systemPrompt = appendMemoryContext(b, systemPrompt)
+
 		followPrompt := fmt.Sprintf(
 			"[SYSTEM: Ini adalah follow-up message. Kamu tadi bilang akan mengecek sesuatu ke <%s>. "+
 				"Sekarang berikan laporan/results secara natural. Inventory: %s. HP: %d/20. "+

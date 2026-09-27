@@ -5,6 +5,8 @@ import (
 	_ "embed"
 
 	"encoding/json"
+	"image/color"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
@@ -13,6 +15,18 @@ import (
 
 //go:embed data/geometry.json
 var DefaultGeometry []byte
+
+// defaultSkinColour is the base skin colour reported to the game.
+var defaultSkinColour = color.RGBA{R: 0xb3, G: 0x7b, B: 0x62, A: 0xff}
+
+// protocolArmSize maps the configured arm size onto the protocol constant used
+// by protocol.Skin. login.ClientData keeps using the plain string form.
+func protocolArmSize(armSize string) uint8 {
+	if strings.EqualFold(strings.TrimSpace(armSize), "wide") {
+		return protocol.ArmSizeWide
+	}
+	return protocol.ArmSizeSlim
+}
 
 type resourcePatch struct {
 	Geometry struct {
@@ -66,8 +80,8 @@ func BuildAssets(img *ImageData, geometryName string, armSize string, geometryDa
 		SkinResourcePatch:         patchJSON,
 		SkinGeometry:              geometryData,
 		GeometryDataEngineVersion: []byte("1.12.0"),
-		SkinColour:                "#b37b62",
-		ArmSize:                   armSize,
+		SkinColour:                defaultSkinColour,
+		ArmSize:                   protocolArmSize(armSize),
 		Trusted:                   true,
 		PersonaPieces:             []protocol.PersonaPiece{},
 		PieceTintColours:          []protocol.PersonaPieceTintColour{},

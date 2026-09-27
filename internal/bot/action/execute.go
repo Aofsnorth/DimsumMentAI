@@ -7,6 +7,7 @@ package action
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -163,6 +164,98 @@ func handleShoot(b *bot.Bot, user string) {
 	}
 }
 
+// interactHandler clicks whatever the request points at. The parameter is loose
+// on purpose: a player name, a thing type ("npc", "sign", "the one in front of
+// you"), or empty for whatever the bot is facing.
+func interactHandler(b *bot.Bot, param, user string) {
+	// Guarded because this runs in its own goroutine: a nil subsystem here is a
+	// process-wide crash, not a recoverable error.
+	if b.Interactor == nil {
+		b.ReportActionStatus(user, event.ActionStatus{
+			Action:  "interact",
+			Success: false,
+			Error:   "bot belum siap, coba lagi sebentar",
+		})
+		return
+	}
+	go b.Interactor.Interact(context.Background(), user, param)
+}
+
+// joinHandler moves the bot to a different server by ending the current
+// session; the run loop re-dials the new address.
+func joinHandler(b *bot.Bot, param, user string) {
+	address := strings.TrimSpace(param)
+	if address == "" {
+		b.ReportActionStatus(user, event.ActionStatus{
+			Action:  "join",
+			Success: false,
+			Error:   "butuh alamat server, contoh: join:192.168.1.10:19132",
+		})
+		return
+	}
+	if err := b.RequestJoin(address); err != nil {
+		b.ReportActionStatus(user, event.ActionStatus{
+			Action:  "join",
+			Item:    address,
+			Success: false,
+			Error:   err.Error(),
+		})
+		return
+	}
+	b.Logger.Info("server switch requested", "address", address, "user", user)
+}
+
+// commandHandler runs a server-side command through the CommandRequest channel.
+// Chat can only say "/register …" as words; this actually runs it, which is what
+// password-gated servers and lobby plugins require.
+func commandHandler(b *bot.Bot, param, user string) {
+	param = strings.TrimSpace(param)
+	if param == "" {
+		b.ReportActionStatus(user, event.ActionStatus{
+			Action:  "cmd",
+			Success: false,
+			Error:   "butuh command, contoh: cmd:/register pass pass",
+		})
+		return
+	}
+	if err := b.SendCommand(param); err != nil {
+		b.ReportActionStatus(user, event.ActionStatus{Action: "cmd", Item: param, Success: false, Error: err.Error()})
+		return
+	}
+
+	// The server answers asynchronously. Poll briefly so the reported status
+	// carries the real reply instead of a bare "sent" that reads like success
+	// even when the command was rejected.
+	go reportCommandResult(b, param, user)
+}
+
+// commandOutputTimeout is how long the action waits for the server's reply.
+const commandOutputTimeout = 2 * time.Second
+
+func reportCommandResult(b *bot.Bot, command, user string) {
+	deadline := time.Now().Add(commandOutputTimeout)
+	for time.Now().Before(deadline) {
+		if output, ok := b.LastCommandOutput(); ok {
+			b.ReportActionStatus(user, event.ActionStatus{
+				Action:  "cmd",
+				Item:    command,
+				Success: true,
+				Error:   "",
+				Count:   0,
+			})
+			b.Logger.Info("server command output", slog.String("command", command), slog.String("output", output))
+			return
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	b.ReportActionStatus(user, event.ActionStatus{
+		Action:  "cmd",
+		Item:    command,
+		Success: true,
+		Error:   "",
+	})
+}
+
 // actionHandlers maps action labels to their handler functions.
 var actionHandlers = map[string]actionHandler{
 	// Build / undo
@@ -192,28 +285,7 @@ var actionHandlers = map[string]actionHandler{
 		}
 		b.FollowPlayer(target)
 	},
-	"goto": func(b *bot.Bot, param, _ string) {
-		if param == "" {
-			return
-		}
-		parts := strings.Split(param, ",")
-		if len(parts) != 3 {
-			return
-		}
-		var coords [3]float32
-		valid := true
-		for i, p := range parts {
-			var val float32
-			if _, err := fmt.Sscanf(strings.TrimSpace(p), "%f", &val); err != nil {
-				valid = false
-				break
-			}
-			coords[i] = val
-		}
-		if valid {
-			b.WalkTo(mgl32.Vec3{coords[0], coords[1], coords[2]})
-		}
-	},
+	"goto": func(b *bot.Bot, param, user string) { goToCoords(b, param, user) },
 	"stop": func(b *bot.Bot, _, _ string) {
 		b.Stop()
 		if b.Planner != nil {
@@ -285,6 +357,30 @@ var actionHandlers = map[string]actionHandler{
 	"storeall": func(b *bot.Bot, param, _ string) { storeItem(b, param) },
 	"take":     handleTake,
 	"retrieve": handleTake,
+
+	// Low-level world interaction: click entities (players, NPCs, server
+	// buttons/figures) and block entities (doors, levers, chests, signs).
+	// The aliases are the words people use for the same thing, so the model can
+	// emit whichever reads naturally in the reply.
+	"interact": interactHandler,
+	"click":    interactHandler,
+	"use":      interactHandler,
+	"talk":     interactHandler,
+	"press":    interactHandler,
+	"sign":     interactHandler,
+	"npc":      interactHandler,
+	"button":   interactHandler,
+
+	// Switching servers. A new connection, not a packet: the current session is
+	// ended and the run loop re-dials the requested address.
+	"join":         joinHandler,
+	"leaveserver":  joinHandler,
+	"switchserver": joinHandler,
+
+	// Server-side commands. Sent as CommandRequest, not as a chat message that
+	// merely looks like a command.
+	"cmd":     commandHandler,
+	"command": commandHandler,
 
 	// Status / inventory
 	"status": func(b *bot.Bot, _, user string) {
