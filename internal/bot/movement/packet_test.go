@@ -74,7 +74,7 @@ func TestItemStackRequestEmbeddedInNextPlayerAuthInput(t *testing.T) {
 		t.Fatal("PerformItemStackRequest input flag is not set")
 	}
 
-	inputPacket := tc.buildPlayerAuthInputPacket(inputData, nil, queuedRequest)
+	inputPacket := tc.buildPlayerAuthInputPacket(inputData, nil, queuedRequest, nil)
 	if !inputPacket.InputData.Load(packet.InputFlagPerformItemStackRequest) {
 		t.Fatal("PlayerAuthInput is missing PerformItemStackRequest flag")
 	}
@@ -107,7 +107,7 @@ func TestItemInteractionDataEmbeddedInNextPlayerAuthInput(t *testing.T) {
 		t.Fatal("PerformItemInteraction input flag is not set")
 	}
 
-	inputPacket := tc.buildPlayerAuthInputPacket(inputData, queuedData, nil)
+	inputPacket := tc.buildPlayerAuthInputPacket(inputData, queuedData, nil, nil)
 	if !inputPacket.InputData.Load(packet.InputFlagPerformItemInteraction) {
 		t.Fatal("PlayerAuthInput is missing PerformItemInteraction flag")
 	}

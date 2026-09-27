@@ -130,23 +130,33 @@ func (b *Bot) TakeBlockTickActions() []protocol.PlayerBlockAction {
 	}
 
 	started := false
-	finished := false
-	for _, a := range actions {
+	finishIdx := -1
+	for i, a := range actions {
 		switch a.Action {
 		case protocol.PlayerActionStartBreak:
 			started = true
 		case protocol.PlayerActionPredictDestroyBlock, protocol.PlayerActionAbortBreak:
-			finished = true
+			if finishIdx < 0 {
+				finishIdx = i
+			}
 		}
 	}
 	if b.miningActive && !started {
-		actions = append(actions, protocol.PlayerBlockAction{
+		cont := protocol.PlayerBlockAction{
 			Action:   protocol.PlayerActionContinueDestroyBlock,
 			BlockPos: b.miningPos,
 			Face:     b.miningFace,
-		})
+		}
+		if finishIdx >= 0 {
+			// Final tick: the vanilla client pairs ContinueDestroy with the
+			// finish action and sends it first — Geyser processes them in that
+			// order, so keep it.
+			actions = append(actions[:finishIdx], append([]protocol.PlayerBlockAction{cont}, actions[finishIdx:]...)...)
+		} else {
+			actions = append(actions, cont)
+		}
 	}
-	if finished {
+	if finishIdx >= 0 {
 		b.miningActive = false
 		b.finishing = false
 	}

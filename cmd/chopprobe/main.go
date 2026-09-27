@@ -96,7 +96,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "load config: %v\n", err)
 		os.Exit(1)
 	}
-	fmt.Printf("target=%s host=%s chop=%v sabd=%v\n", target, cfg.Server.Address(), !*skipChop, *sabd)
+	fmt.Printf("target=%v host=%s chop=%v sabd=%v\n", target, cfg.Server.Address(), !*skipChop, *sabd)
 
 	dialer := connection.NewDialer(
 		cfg.Server,
