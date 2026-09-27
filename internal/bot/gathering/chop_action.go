@@ -137,42 +137,106 @@ func sortLogBlocks(logs []protocol.BlockPos) []protocol.BlockPos {
 }
 
 func (tc *TreeChopper) chopLogBlocks(ctx context.Context, logBlocks []protocol.BlockPos) {
-	for _, pos := range logBlocks {
-		select {
-		case <-ctx.Done():
-			return
-		default:
+	// Two passes. A trunk's far side is occluded by the near logs while they
+	// still stand, so a log skipped for line of sight in the first pass often
+	// becomes visible once the lower logs are gone. Never break blind to work
+	// around it — that is the through-the-trunk mining a player would never do.
+	remaining := logBlocks
+	for pass := 0; pass < 2 && len(remaining) > 0; pass++ {
+		var deferred []protocol.BlockPos
+		for _, pos := range remaining {
+			select {
+			case <-ctx.Done():
+				return
+			default:
+			}
+			if !tc.chopLogBlock(ctx, pos) {
+				deferred = append(deferred, pos)
+			}
+			time.Sleep(20 * time.Millisecond)
 		}
-		tc.chopLogBlock(ctx, pos)
-		time.Sleep(20 * time.Millisecond)
+		if len(deferred) > 0 {
+			tc.logger.Debug("logs deferred after pass", "count", len(deferred), "pass", pass+1)
+		}
+		remaining = deferred
 	}
 }
 
-func (tc *TreeChopper) chopLogBlock(ctx context.Context, pos protocol.BlockPos) {
-	bot := tc.rg.bot
+// breakReach is how far the eye may be from a log centre for the log to still
+// be breakable. Measured from the eye (feet + 1.62) in 3D, because the old
+// feet-dy>4 trigger sent the bot towering — and mining dirt for the tower —
+// for upper logs that were comfortably within reach all along.
+const breakReach = 4.2
 
+// withinBreakReach reports whether the eye is close enough to the block centre
+// to break it.
+func withinBreakReach(botPos mgl32.Vec3, pos protocol.BlockPos) bool {
+	eye := botPos.Add(mgl32.Vec3{0, mineEyeHeight, 0})
+	center := mgl32.Vec3{float32(pos.X()) + 0.5, float32(pos.Y()) + 0.5, float32(pos.Z()) + 0.5}
+	return eye.Sub(center).Len() <= breakReach
+}
+
+func (tc *TreeChopper) chopLogBlock(ctx context.Context, pos protocol.BlockPos) bool {
+	bot := tc.rg.bot
 	botPos := bot.GetCoords()
-	if float32(pos.Y())-botPos.Y() > 4.0 {
-		tc.rg.scaffold.TowerUpTo(ctx, float32(pos.Y())-1.0)
-		// Stocking the scaffold mine is a detour: the bot may now be standing
-		// several blocks from the trunk it came for. Get back within reach
-		// before swinging, otherwise the server just rejects the break and the
-		// logs stay put.
-		tc.returnToReach(ctx, pos)
+
+	if !withinBreakReach(botPos, pos) {
+		tc.repositionForLog(ctx, pos)
+		botPos = bot.GetCoords()
 	}
 
-	tc.clearObstructions(ctx, pos)
+	// Plan the break the way the miner does: an exposed face the bot can
+	// actually see, with the face matching the aim. The old code claimed face 1
+	// (top) for every log while aiming at a side, and never checked sight —
+	// so it mined through the trunk with no line of sight.
+	world := botMineWorld{bot: bot, model: bot.GetLocalWorldModel()}
+	step, visible := planMineStep(world, botPos, pos)
+	if !visible {
+		tc.logger.Debug("log not visible from current spot, deferring", "pos", pos)
+		return false
+	}
 
-	targetCenter := mgl32.Vec3{float32(pos.X()) + 0.5, float32(pos.Y()) + 0.5, float32(pos.Z()) + 0.5}
-	bot.LookAt(targetCenter)
-	time.Sleep(60 * time.Millisecond)
+	tc.clearObstructions(ctx, step)
 
-	tc.logger.Debug("Chopping log block", "pos", pos)
-	tc.startBreakBlock(pos)
-	tc.swingUntilBreak(ctx, targetCenter, sabdBreakDuration(serverAuthBreaking(bot), "oak_log", tc.equippedAxeName()))
-	tc.finishBreakBlock(pos)
+	tc.logger.Debug("Chopping log block", "pos", pos, "face", step.Face)
+	bot.LookAt(step.Aim)
+	if !sleepContext(ctx, 60*time.Millisecond) {
+		return false
+	}
+
+	tc.startBreakBlock(step)
+	tc.swingUntilBreak(ctx, step.Aim, sabdBreakDuration(serverAuthBreaking(bot), "oak_log", tc.equippedAxeName()))
+	tc.finishBreakBlock(step)
 
 	bot.GetLocalWorldModel().SetSolid(pos.X(), pos.Y(), pos.Z(), false)
+	return true
+}
+
+// repositionForLog gets the bot back within breaking reach of a log. Tall logs
+// get a minimal tower — just high enough that the eye reaches the log centre —
+// instead of the old climb-to-one-below-the-log that towered far more than the
+// trunk needed; far logs get a walk back.
+func (tc *TreeChopper) repositionForLog(ctx context.Context, pos protocol.BlockPos) {
+	bot := tc.rg.bot
+	botPos := bot.GetCoords()
+	eyeY := botPos.Y() + mineEyeHeight
+	centerY := float32(pos.Y()) + 0.5
+
+	if centerY-eyeY > breakReach-2.0 {
+		// The log is too high to reach from here. Tower just enough that the
+		// eye lands within reach of the centre (leaving a little horizontal
+		// budget), so upper trunk logs stay reachable without re-towering
+		// every single block.
+		targetFeet := centerY - (breakReach - 2.0) - mineEyeHeight
+		tc.logger.Debug("towering up to log", "log_y", pos.Y(), "tower_to_y", targetFeet)
+		tc.rg.scaffold.TowerUpTo(ctx, targetFeet)
+	} else {
+		tc.returnToReach(ctx, pos)
+		return
+	}
+	// After towering the bot may be several blocks out horizontally; walk
+	// back before swinging or the break is rejected for range.
+	tc.returnToReach(ctx, pos)
 }
 
 // chopReachLimit is how far the bot may stand from a log and still break it.
@@ -195,26 +259,35 @@ func (tc *TreeChopper) returnToReach(ctx context.Context, pos protocol.BlockPos)
 	}
 }
 
-func (tc *TreeChopper) startBreakBlock(pos protocol.BlockPos) {
+// startBreakBlock begins the server-auth break of the planned step, using the
+// face the plan chose (the old code always claimed face 1/top regardless of
+// which side the bot was actually aiming at).
+func (tc *TreeChopper) startBreakBlock(step mineStep) {
 	_ = tc.rg.bot.WritePacket(&packet.PlayerAction{
 		EntityRuntimeID: tc.rg.bot.GetEntityRuntimeID(),
 		ActionType:      protocol.PlayerActionStartBreak,
-		BlockPosition:   pos,
-		BlockFace:       1,
+		BlockPosition:   step.Position,
+		BlockFace:       step.Face,
 	})
 }
 
-// Swing rhythm. A fixed 100 ms tick between swings is the single most obvious
-// tell that a bot is working: a human raises the tool, accelerates into a burst
-// of a few swings, recovers, and repeats — and their aim drifts a little inside
-// the block instead of being welded to its centre.
+// Swing rhythm. Two tells made the old swing look automated:
+//
+//  1. Pace faster than the animation. Every Animate packet makes the viewer's
+//     client replay the full arm-swing cycle (~300 ms). Swinging again every
+//     70-110 ms restarts that cycle before it finishes, so viewers saw the arm
+//     vibrate instead of swinging. A human swinging an tool lands around
+//     2.5-4 swings per second — 260-400 ms.
+//  2. A metronome. The pauses must vary so the beat is organic: quick inside a
+//     burst, a longer recovery between bursts, and the aim drifts a little
+//     inside the block instead of being welded to its centre.
 const (
-	chopWindUpMin   = 60 * time.Millisecond
-	chopWindUpMax   = 140 * time.Millisecond
-	chopSwingMin    = 70 * time.Millisecond
-	chopSwingMax    = 110 * time.Millisecond
-	chopRecoveryMin = 140 * time.Millisecond
-	chopRecoveryMax = 220 * time.Millisecond
+	chopWindUpMin   = 100 * time.Millisecond
+	chopWindUpMax   = 220 * time.Millisecond
+	chopSwingMin    = 260 * time.Millisecond
+	chopSwingMax    = 400 * time.Millisecond
+	chopRecoveryMin = 460 * time.Millisecond
+	chopRecoveryMax = 760 * time.Millisecond
 	chopBurstLength = 3
 	chopAimJitter   = 0.12
 )
@@ -267,13 +340,13 @@ func (tc *TreeChopper) swingUntilBreak(ctx context.Context, targetCenter mgl32.V
 	}
 }
 
-func (tc *TreeChopper) finishBreakBlock(pos protocol.BlockPos) {
+func (tc *TreeChopper) finishBreakBlock(step mineStep) {
 	bot := tc.rg.bot
 	_ = bot.WritePacket(&packet.PlayerAction{
 		EntityRuntimeID: bot.GetEntityRuntimeID(),
 		ActionType:      protocol.PlayerActionCrackBreak,
-		BlockPosition:   pos,
-		BlockFace:       1,
+		BlockPosition:   step.Position,
+		BlockFace:       step.Face,
 	})
 	// StopBreak MUST be the last packet in the sequence. Sending
 	// PredictDestroyBlock here leaves the server in a half-broken state and
@@ -281,16 +354,19 @@ func (tc *TreeChopper) finishBreakBlock(pos protocol.BlockPos) {
 	_ = bot.WritePacket(&packet.PlayerAction{
 		EntityRuntimeID: bot.GetEntityRuntimeID(),
 		ActionType:      protocol.PlayerActionStopBreak,
-		BlockPosition:   pos,
-		BlockFace:       1,
+		BlockPosition:   step.Position,
+		BlockFace:       step.Face,
 	})
 }
 
-func (tc *TreeChopper) clearObstructions(ctx context.Context, targetPos protocol.BlockPos) {
+// clearObstructions removes a non-log block sitting on top of the log being
+// chopped (moss, scaffolding, leaves the tower left behind). The obstruction
+// is planned through the same visibility check as the log itself.
+func (tc *TreeChopper) clearObstructions(ctx context.Context, step mineStep) {
 	bot := tc.rg.bot
 	world := bot.GetLocalWorldModel()
 
-	checkPos := protocol.BlockPos{targetPos.X(), targetPos.Y() + 1, targetPos.Z()}
+	checkPos := protocol.BlockPos{step.Position.X(), step.Position.Y() + 1, step.Position.Z()}
 	if !world.IsSolid(checkPos.X(), checkPos.Y(), checkPos.Z()) {
 		return
 	}
@@ -300,21 +376,34 @@ func (tc *TreeChopper) clearObstructions(ctx context.Context, targetPos protocol
 		return
 	}
 
+	// Same sight-line discipline as the log itself: pick an exposed face the
+	// bot can see. If the obstruction is not visible from here, the tower will
+	// pass through it on the way up anyway — do not mine blind.
+	obstructionStep, visible := planMineStep(botMineWorld{bot: bot, model: world}, bot.GetCoords(), checkPos)
+	if !visible {
+		return
+	}
+
 	_ = bot.UnequipItem()
 	time.Sleep(50 * time.Millisecond)
 
-	bot.LookAt(mgl32.Vec3{float32(checkPos.X()) + 0.5, float32(checkPos.Y()) + 0.5, float32(checkPos.Z()) + 0.5})
+	bot.LookAt(obstructionStep.Aim)
+	if !sleepContext(ctx, 50*time.Millisecond) {
+		return
+	}
 
 	_ = bot.WritePacket(animation.MineSwing(bot.GetEntityRuntimeID()))
 	_ = bot.WritePacket(&packet.PlayerAction{
 		EntityRuntimeID: bot.GetEntityRuntimeID(),
 		ActionType:      protocol.PlayerActionStartBreak,
 		BlockPosition:   checkPos,
-		BlockFace:       1,
+		BlockFace:       obstructionStep.Face,
 	})
 
-	time.Sleep(300 * time.Millisecond)
-	tc.finishBreakBlock(checkPos)
+	if !sleepContext(ctx, sabdBreakDuration(serverAuthBreaking(bot), name, "")) {
+		return
+	}
+	tc.finishBreakBlock(obstructionStep)
 
 	world.SetSolid(checkPos.X(), checkPos.Y(), checkPos.Z(), false)
 	time.Sleep(100 * time.Millisecond)

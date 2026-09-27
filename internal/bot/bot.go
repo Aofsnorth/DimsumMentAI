@@ -274,6 +274,7 @@ type Bot struct {
 	CurrentPath           []pathfinder.Node
 	PathIndex             int
 	LastJumpPathIndex     int
+	LastJumpTime          time.Time
 	TicksStuck            int
 	LastTickPos           mgl32.Vec3
 	LastPathRecalcTime    time.Time

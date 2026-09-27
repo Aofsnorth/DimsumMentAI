@@ -59,7 +59,7 @@ func BenchmarkIsSolid(b *testing.B) {
 
 	b.ReportAllocs()
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for i := range b.N {
 		w.IsSolid(int32(i%64), 1, int32(i%64/64))
 	}
 }
@@ -76,7 +76,7 @@ func BenchmarkIsSolidWithOverrides(b *testing.B) {
 
 	b.ReportAllocs()
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for i := range b.N {
 		w.IsSolid(int32(i%8), 1, int32(i%8/8))
 	}
 }
@@ -88,7 +88,7 @@ func BenchmarkIsHazardWithQuerier(b *testing.B) {
 
 	b.ReportAllocs()
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for i := range b.N {
 		w.IsHazard(int32(i%32), 1, int32(i%32/32))
 	}
 }
@@ -100,7 +100,7 @@ func BenchmarkBodyClearanceTick(b *testing.B) {
 
 	b.ReportAllocs()
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		w.ClearBodyClearance()
 		w.SetBodyClearance(0, 1, 0)
 		w.SetBodyClearance(0, 2, 0)
@@ -113,7 +113,7 @@ func BenchmarkBodyClearanceTick(b *testing.B) {
 func BenchmarkPackBlockKey(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for i := range b.N {
 		_ = packBlockKey(int32(i%128)-64, int32(i%16), int32(i%64)-32)
 	}
 }
@@ -156,7 +156,7 @@ func BenchmarkIsSolidSprintfBaseline(b *testing.B) {
 
 	b.ReportAllocs()
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for i := range b.N {
 		w.IsSolid(int32(i%64), 1, int32(i%64/64))
 	}
 }

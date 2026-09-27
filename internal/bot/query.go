@@ -288,12 +288,38 @@ func (b *Bot) EquipItem(slot uint32) error {
 	return b.Conn.WritePacket(pk)
 }
 
+// emptyHotbarSlotLocked returns the lowest empty hotbar slot, or 9 when the
+// hotbar is full. Callers hold b.Mu.
+func (b *Bot) emptyHotbarSlotLocked() uint32 {
+	for slot := uint32(0); slot < 9; slot++ {
+		if item, ok := b.InventoryMap[slot]; !ok || item.Count == 0 {
+			return slot
+		}
+	}
+	return 9
+}
+
 func (b *Bot) UnequipItem() error {
+	b.Mu.Lock()
+	// A vanilla client cannot hold "nothing": the hand shows the selected
+	// hotbar slot's content. Unequipping therefore means switching to an
+	// actually empty hotbar slot. Faking it with HotBarSlot 0 (the old
+	// behaviour) desyncs the server-side selection from b.HeldSlot: the next
+	// MobEquipment echo re-broadcast the old slot's item and the hand flickered
+	// back (ghost item).
+	emptySlot := b.emptyHotbarSlotLocked()
+	if emptySlot >= 9 {
+		b.Mu.Unlock()
+		return fmt.Errorf("unequip: no empty hotbar slot available")
+	}
+	b.HeldSlot = emptySlot
+	b.Mu.Unlock()
+
 	pk := &packet.MobEquipment{
 		EntityRuntimeID: b.Conn.GameData().EntityRuntimeID,
 		NewItem:         protocol.ItemInstance{},
-		InventorySlot:   0,
-		HotBarSlot:      0,
+		InventorySlot:   byte(emptySlot),
+		HotBarSlot:      byte(emptySlot),
 		WindowID:        0,
 	}
 	return b.Conn.WritePacket(pk)

@@ -249,6 +249,12 @@ const (
 	stuckPenaltyMaxWindow  = 12 * time.Second
 	stuckPenaltyMaxSteps   = 2
 
+	// parkourRejumpCooldown is how long the bot waits before re-attempting a gap
+	// jump for the same path node after a missed first jump. Long enough that a
+	// landing that simply has not settled yet does not double-fire; short enough
+	// that a failed jump recovers in well under the stuck-escalation window.
+	parkourRejumpCooldown = 600 * time.Millisecond
+
 	// walkToRepathInterval / walkToRepathMaxInterval bound how often a walk_to
 	// that lost its route re-plans. The lower bound keeps the freeze from being
 	// noticeable; the backoff keeps an unsolvable target from re-running A* every
@@ -640,7 +646,17 @@ func (tc *TickContext) handleParkourLinkJump(nextNode pathfinder.Node, pathIndex
 	}
 
 	if lastJumpPathIndex == pathIndex {
-		return
+		// This node already got one jump. If it missed (lag-clip, corner catch),
+		// the old guard refused a second attempt for the same node index, so the
+		// bot walked into the gap lip until the stuck ladder escalated seconds
+		// later — the visible "ngestuck" during gather walks. Once the bot has
+		// landed and a beat has passed, allow one fresh attempt.
+		tc.B.Mu.Lock()
+		elapsed := time.Since(tc.B.LastJumpTime)
+		tc.B.Mu.Unlock()
+		if !tc.IsGrounded || elapsed < parkourRejumpCooldown {
+			return
+		}
 	}
 	if tc.Dist > jumpTriggerDist+0.25 || tc.Dist < 0.2 {
 		return
@@ -652,6 +668,7 @@ func (tc *TickContext) handleParkourLinkJump(nextNode pathfinder.Node, pathIndex
 	tc.ShouldJump = true
 	tc.B.Mu.Lock()
 	tc.B.LastJumpPathIndex = pathIndex
+	tc.B.LastJumpTime = time.Now()
 	tc.B.Mu.Unlock()
 	tc.JumpReason = fmt.Sprintf("Parkour Gap (%s): dist %.2f, gap %.2f", nextNode.LinkType, tc.Dist, horizDistance)
 }

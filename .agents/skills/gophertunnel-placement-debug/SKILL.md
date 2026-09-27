@@ -45,6 +45,8 @@ Do not use for crafting recipe rejection, pathfinding target selection, generic 
 - An LLM may choose `drop` if the registered `place` action is absent from the system prompt.
 - Persistent E2E worlds must reset the platform, air space, position, and inventory between runs.
 - Do not accept an initial empty-hand event as proof. Require an observed non-empty state followed by the expected transition.
+- Picking a drop/equip slot from raw `InventoryMap` iteration is non-deterministic: with several matching stacks the action can hit a slot nobody is watching while the held item stays rendered (ghost item). Prefer the held slot, then the lowest matching slot (`dropTargetSlotLocked`).
+- A client cannot hold "nothing": an unequip that fakes `MobEquipment{HotBarSlot: 0, NewItem: empty}` without updating `b.HeldSlot` desyncs the server-side selection from local state, and the next held-equipment echo flips the hand back to the old slot's item. Always switch to a genuinely empty hotbar slot and update `b.HeldSlot` (`emptyHotbarSlotLocked`).
 
 ## Verification
 

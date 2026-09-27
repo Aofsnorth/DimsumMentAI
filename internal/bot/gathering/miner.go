@@ -227,13 +227,18 @@ func (bm *BlockMiner) mineSingle(ctx context.Context, step mineStep, blockName s
 
 	breakTime := sabdBreakDuration(serverAuthBreaking(bot), blockName, bm.equippedToolName())
 
-	elapsed := time.Duration(0)
-	swingInterval := 150 * time.Millisecond
-	for elapsed < breakTime {
+	// Same human rhythm as the chopper (chopWindUp/chopCadence live in
+	// chop_action.go): a fixed 150 ms tick restarts the viewer's arm-swing
+	// animation before it finishes, which reads as machine twitching.
+	if !sleepContext(ctx, chopWindUp()) {
+		return false
+	}
+	elapsed := time.Duration(chopWindUpMin) // conservative: never overrun the break time
+	for swing := 0; elapsed < breakTime; swing++ {
 		_ = bot.WritePacket(animation.MineSwing(bot.GetEntityRuntimeID()))
 		bot.LookAt(step.Aim)
 
-		wait := swingInterval
+		wait := chopCadence(swing)
 		if elapsed+wait > breakTime {
 			wait = breakTime - elapsed
 		}

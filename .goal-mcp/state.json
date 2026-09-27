@@ -10,9 +10,9 @@
       "Control run vs play.hansprojects.my.id:19132 stays silent-warning-free"
     ],
     "constraints": [],
-    "status": "active",
+    "status": "done",
     "created_at": "2026-09-27T05:51:39.160Z",
-    "updated_at": "2026-09-27T06:19:40.078Z",
+    "updated_at": "2026-09-27T07:22:32.349Z",
     "checkpoints": 1,
     "max_checkpoints": 20,
     "progress_log": [
@@ -21,6 +21,12 @@
         "checkpoint": 1,
         "summary": "Found NexusOne drop root cause (bot echoed server-pushed GeyserHash item back via MobEquipment after inventory sync) and gated the echo behind new GeyserNoHeldItemEcho profile flag; also verified gophertunnel already sends SetLocalPlayerAsInitialised.",
         "validation_result": "go build ./... OK; go test ./... all packages pass; live NexusOne run 60s: 3172 S2C, last S2C at 59.9s, 0 watchdog warnings (previously died at ~8.4s); control HansProjects run 95s: 10776 S2C, last S2C at 94.9s, 'Login successful.', 0 watchdog warnings."
+      },
+      {
+        "at": "2026-09-27T07:22:32.349Z",
+        "checkpoint": 1,
+        "summary": "goal_control:complete — NexusOne silent-disconnect fix (GeyserNoHeldItemEcho gate) verified live: 60s capture run with continuous S2C (previously died ~8.4s), 95s control run on HansProjects clean, full Go suite green. User's later sessions on Geyser servers remained stable.",
+        "validation_result": "-"
       }
     ],
     "evidence": [

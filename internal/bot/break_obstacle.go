@@ -43,7 +43,10 @@ func (b *Bot) BreakObstacleAt(pos protocol.BlockPos) {
 		if strings.Contains(lower, "stone") || strings.Contains(lower, "ore") || strings.Contains(lower, "cobble") || strings.Contains(lower, "deepslate") {
 			breakMs = 1800
 		}
-		swingInterval := 150 * time.Millisecond
+		// Swing at a human pace (~300 ms): a 150 ms metronome restarts the
+		// viewer's arm-swing cycle before it finishes, so the arm reads as
+		// vibrating rather than swinging.
+		swingInterval := 300 * time.Millisecond
 		elapsed := time.Duration(0)
 		total := time.Duration(breakMs) * time.Millisecond
 		for elapsed < total {

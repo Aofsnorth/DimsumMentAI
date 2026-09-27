@@ -112,6 +112,7 @@ func RecalculatePath(b *bot.Bot) {
 		b.LastPathRecalcTime = time.Now()
 		b.ConsecutiveStuckCount = 0
 		b.LastJumpPathIndex = -1
+		b.LastJumpTime = time.Time{}
 		// Fresh route from a fresh position: the no-progress window must restart
 		// too, or a re-plan triggered by an old stall reports as a new one.
 		b.StuckWindowStart = time.Time{}

@@ -14,24 +14,36 @@ import (
 	"github.com/sandertv/gophertunnel/minecraft/protocol/packet"
 )
 
-func (b *Bot) DropItem(name string, count int) error {
-	b.Mu.Lock()
-
-	var targetSlot uint32
-	var foundItem protocol.ItemStack
-	found := false
-	for slot, item := range b.InventoryMap {
-		if item.Count <= 0 {
-			continue
-		}
-		itemName := b.ItemNames[item.NetworkID]
-		if strings.Contains(strings.ToLower(itemName), strings.ToLower(name)) {
-			targetSlot = slot
-			foundItem = item
-			found = true
-			break
+// dropTargetSlotLocked picks which inventory slot to drop from for a request.
+// The held slot wins when it matches — dropping from a random matching stack
+// (map iteration order) leaves the held item rendered in the hand after the
+// drop, which viewers read as a ghost item — otherwise the lowest numbered
+// matching slot, so repeated drops are deterministic. Callers hold b.Mu.
+func (b *Bot) dropTargetSlotLocked(name string) (uint32, protocol.ItemStack, bool) {
+	if held, ok := b.InventoryMap[b.HeldSlot]; ok && held.Count > 0 {
+		if itemMatchesName(b.ItemNames[held.NetworkID], name) {
+			return b.HeldSlot, held, true
 		}
 	}
+	for slot := uint32(0); slot < 36; slot++ {
+		item, ok := b.InventoryMap[slot]
+		if !ok || item.Count <= 0 {
+			continue
+		}
+		if itemMatchesName(b.ItemNames[item.NetworkID], name) {
+			return slot, item, true
+		}
+	}
+	return 0, protocol.ItemStack{}, false
+}
+
+func itemMatchesName(itemName, want string) bool {
+	return strings.Contains(strings.ToLower(itemName), strings.ToLower(want))
+}
+
+func (b *Bot) DropItem(name string, count int) error {
+	b.Mu.Lock()
+	targetSlot, foundItem, found := b.dropTargetSlotLocked(name)
 	if !found {
 		b.Mu.Unlock()
 		return fmt.Errorf("item %q not found in inventory", name)
