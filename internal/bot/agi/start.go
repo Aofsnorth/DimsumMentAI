@@ -29,6 +29,16 @@ func StartLoop(ctx context.Context, b *bot.Bot) {
 		slog.Bool("wander", b.Agicfg.Wander),
 		slog.Bool("vision", b.Agicfg.Vision),
 	)
+	// Take ownership of unprompted speech. The proactive chat loop asks the LLM
+	// directly on a timer, with none of the guards this brain has: a danger
+	// check, a goal, a social cooldown. Running both means the bot answers to
+	// two disagreeing opinions about whether it wants to talk, which is how a
+	// companion turns into a spammer.
+	if !b.ClaimUnpromptedSpeech(bot.SpeechOwnerAGI) {
+		b.Logger.Debug("another loop already owns unprompted speech; AGI will not speak unprompted")
+	} else {
+		b.Logger.Info("unprompted speech is now owned by the AGI brain")
+	}
 	go runner.Run(ctx)
 }
 

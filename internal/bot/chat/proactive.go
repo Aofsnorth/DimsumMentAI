@@ -23,6 +23,10 @@ import (
 // something. The LLM can respond with chat text, actions, <followup> for
 // chained messages, or <silent/> to stay quiet.
 func StartProactiveLoop(ctx context.Context, b *bot.Bot) {
+	// Validate before claiming. A loop that is switched off should not take
+	// ownership it is never going to use: the claim would then need to be
+	// revoked, and a disabled feature owning a decision is a confusing state to
+	// read in a log.
 	intervalSec := b.AiCfg.ProactiveIntervalSec
 	if intervalSec <= 0 {
 		b.Logger.Debug("proactive loop disabled (interval=0)")
@@ -30,6 +34,19 @@ func StartProactiveLoop(ctx context.Context, b *bot.Bot) {
 	}
 	if b.AiClient == nil {
 		b.Logger.Debug("proactive loop disabled (no AI client)")
+		return
+	}
+
+	// The AGI brain outranks this loop for unprompted speech. It has the danger
+	// check, the goal, and the social cooldown; this loop has none of them, so
+	// running both means the bot talks to itself on two disagreeing rule sets.
+	// Stepping aside is not a downgrade: when AGI is on, this loop would be a
+	// strictly worse version of the same behaviour.
+	if !b.ClaimUnpromptedSpeech(bot.SpeechOwnerProactive) {
+		b.Logger.Info("proactive chat loop standing down",
+			"owner", b.UnpromptedSpeechOwner(),
+			"reason", "another loop owns unprompted speech",
+		)
 		return
 	}
 
@@ -62,6 +79,17 @@ func StartProactiveLoop(ctx context.Context, b *bot.Bot) {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
+				// Ownership can change while this loop is running: the AGI brain
+				// outranks it and may start later in the same session. Checking
+				// only at startup would leave two loops talking after the claim
+				// was supposed to have resolved the conflict.
+				if b.UnpromptedSpeechOwner() != bot.SpeechOwnerProactive {
+					b.Logger.Info("proactive chat loop standing down mid-session",
+						"owner", b.UnpromptedSpeechOwner(),
+						"reason", "a higher-priority loop took over unprompted speech",
+					)
+					return
+				}
 				// Roll the dice — don't query LLM every single tick.
 				if rand.Float64() > chance {
 					continue

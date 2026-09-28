@@ -312,6 +312,9 @@ type Bot struct {
 	// so the multi-chest search does not re-open the same silent window in a
 	// tight loop. Keyed by "x,y,z" with the time it was recorded.
 	UnreadableContainers map[string]time.Time
+	// SpeechOwner is whichever loop is entitled to start unprompted
+	// conversations. See speech_owner.go for why exactly one may hold it.
+	SpeechOwner string
 
 	// storageSvc is the container search/open service, built on first use.
 	storageSvc *storage.Service
