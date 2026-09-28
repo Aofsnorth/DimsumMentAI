@@ -58,6 +58,12 @@ const (
 	KindShieldPlan   Kind = "combat.shield"
 	KindDimension    Kind = "dimension.change"
 	KindRecovery     Kind = "inventory.recover"
+	KindEpisodeStart Kind = "episode.start"
+	KindEpisodeEnd   Kind = "episode.end"
+	KindEpisodeWrap  Kind = "episode.wrap_up"
+	KindIdle         Kind = "idle"
+	KindWatchdog     Kind = "watchdog"
+	KindDiscovery    Kind = "discovery"
 	KindError        Kind = "error"
 )
 

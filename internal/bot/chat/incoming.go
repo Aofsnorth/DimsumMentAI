@@ -48,6 +48,19 @@ func HandleIncomingChat(ctx context.Context, b *bot.Bot, evt event.ChatEvent) {
 		return
 	}
 
+	// A recording brief arrives as a chat message, exactly like a plan does. It
+	// is handled before the AI client check below because starting a recording
+	// must work even on a bot that cannot chat — that configuration is exactly
+	// the one where somebody drops the bot in a world and walks away.
+	if handled := handleEpisodeCommand(b, evt, msg); handled {
+		return
+	}
+
+	// noteHumanPresence goes before the AI check on purpose. A person standing
+	// there has the bot's attention whether or not the bot can answer, and the
+	// episode waits either way.
+	noteHumanPresence(b, evt.SourceName)
+
 	if b.AiClient == nil {
 		b.Logger.Info("chat ignored: AI client not configured")
 		return

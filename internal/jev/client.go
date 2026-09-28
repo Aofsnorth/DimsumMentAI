@@ -56,24 +56,32 @@ const evaluatePath = "/v1/systemone"
 // defaultTimeout is the fallback when no timeout is configured.
 const defaultTimeout = 5 * time.Second
 
-// Environment variables. The model name and the key are read from the
-// environment rather than the config file: one is a secret that must never be
-// committed, and the other changes per gateway (Vercel AI Gateway serves this
-// model as "typesafe-ai/jev", OpenRouter as "typesafe/jev-1.13", the native API
-// as "jev-latest"). Switching gateway is therefore a change to .env rather than
-// to a file that is shared or checked in.
+// Environment variables. Only the API key is read from the environment.
+//
+// The model name used to live here too, on the reasoning that it "changes per
+// gateway". That conflated two different things: the key is a secret and must
+// never reach a file, while the model is a public name like "jev-latest" and is
+// exactly the sort of thing a config file is for. The cost of the old rule was
+// that switching gateway was invisible in the file that actually describes the
+// bot — you changed .env and nothing in bot.yaml said so.
+//
+// Keys: the key used by the bot depends on the `ai.provider` setting.
 const (
 	// EnvAPIKey holds the bearer key. Absent means Jev stays off.
 	EnvAPIKey = "TYPESAFE_API_KEY"
-	// EnvModel overrides the model alias. Absent falls back to DefaultModel.
-	EnvModel = "JEV_MODEL"
 )
 
-// FromEnv builds a client from the environment. Returns a client with
-// Available=false when no key is set, which is a supported configuration: the
-// bot runs on its hardcoded thresholds and Jev is simply not in the loop.
-func FromEnv(endpoint string) *Client {
-	return New(endpoint, os.Getenv(EnvModel), os.Getenv(EnvAPIKey))
+// FromEnv builds a client, taking the key from the environment.
+//
+// Returns a client with Available=false when no key is set, which is a
+// supported configuration: the bot runs on its hardcoded thresholds and Jev is
+// simply not in the loop.
+//
+// The model is a parameter rather than an environment read because it is
+// configuration, not a secret. New() still falls back to DefaultModel when it
+// is empty, so a config that omits it keeps working.
+func FromEnv(endpoint, model string) *Client {
+	return New(endpoint, model, os.Getenv(EnvAPIKey))
 }
 
 // QuestionType names one of Jev's three primitives.

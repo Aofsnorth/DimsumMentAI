@@ -4,7 +4,7 @@
 
 # --- Server Settings ---
 server:
-  host: "10.10.21.69"
+  host: "192.168.1.18"
   port: 7551
   offline: true # true = no Xbox Live auth (local server)
   lan_discovery: true # auto-discover the single-player world opened to LAN (direct RakNet to a client-hosted world is rejected with invalidSkin — the host requires the Nonce from its advertisement)
@@ -108,9 +108,12 @@ bot:
 #     Cek baris "AGI loop started" di log untuk mode yang benar-benar jalan.
 agi:
   enabled: true
-  # "default" | "planning". Alias yang diterima: plan, long_horizon, long-horizon.
-  # Typo jatuh ke "default" — lebih aman daripada bot half-configured.
-  mode: "default"
+  # "default" | "planning" | "natural". Alias: plan, long_horizon, natural_mode,
+  # episode, record. Typo jatuh ke "default".
+  #
+  # "natural" = mode rekaman. Bot main sendiri tanpa perintah, dan kalau ada
+  # brief dia kerjakan sampai waktu habis. Dijelaskan panjang di bawah.
+  mode: "natural"
   # Ballast rencana: berapa lama satu rencana boleh hidup sebelum dianggap basi,
   # dan seberapa sering planner boleh menyela selama itu. Yang kedua inilah yang
   # mencegah planner lambat membekukan otak — aksi tetap jalan terhadap rencana
@@ -138,6 +141,33 @@ agi:
   # 10 detik cukup panjang buat bot menyeberangi terowongan BANJIR tanpa panik,
   # dan cukup pendek buat dia sudah mulai naik sebelum damage mulai.
   low_air_seconds: 10
+  # --- Natural mode (mode rekaman) ---
+  #
+  # Dipakai kalau mode: "natural". Botnya main sendiri, dan operator kasih
+  # brief lewat chat:
+  #     /episode 1 24m build a house
+  #     /episode 2 45m dig down and find copper
+  # Format: /episode <nomor> <durasi> <objective>. Durasi pakai notasi Go
+  # (24m, 90s, 1h30m), dan angka polos artinya menit.
+  #
+  # Deadline-nya KERAS. Bot tidak boleh menambah waktunya sendiri, dan sekali
+  # lewat dia berhenti — bukan lanjut ngerjain. Kalau Remaining() dihitung ulang
+  # dari config tiap tick, brief-nya bakal geser terus dan rekamannya nggak
+  # pernah selesai. Itu jebakan yang paling gampang masuk.
+  #
+  # Aturan yang bikin mode ini bisa dipandang bukan sekadar bot:
+  #   - Orang SELALU menang. Kalau ada yang ngomong, bot jawab, dan episode
+  #     nunggu. Clock-nya tetap jalan — rekaman tetep jalan — tapi kerjanya
+  #     berhenti. Bot yang ngabaikin orang di satu room karena ada jadwal itu
+  #     bukan companion.
+  #   - Boleh diem. idle_alive (gaze + gerak kecil) dan idle_still (diam
+  #     beneran) dua-duanya kepake. Bot yang nggak pernah diam kelihatan kayak
+  #     screensaver kalau ditonton tiga jam.
+  idle_still_bias: 0.35 # 0..1, share dari waktu idle yang benar-benar diam total
+                     # Default condong ke "hidup": bot yang geser & lihat
+                     # sekeliling While mikir kelihatan kayak orang.
+                     # Naikin kalau rekamanmu panjang dan penonton sudah
+                     # belajar bahwa nggak ada yang rusak.
   wander: true
   wander_duration_sec: 20
   social: true
@@ -184,13 +214,40 @@ agi:
   # Kunci dibaca dari env TYPESAFE_API_KEY (lihat .env / .env.example).
   # Tanpa kunci: bot tetap jalan pakai threshold biasa. Ini fitur tambahan,
   # bukan syarat.
-  # Kunci DAN nama model dibaca dari .env (TYPESAFE_API_KEY, JEV_MODEL) — bukan
-  # dari YAML, supaya tidak ada yang bisa ke-commit. Config cuma pegang endpoint
-  # (policy) dan dua ambang probabilitas (kebijakan).
+  # Kunci API dibaca dari .env (TYPESAFE_API_KEY) — bukan dari YAML, supaya
+  # tidak ada yang bisa ke-commit. Config cuma pegang endpoint, nama model, dan
+  # tiga ambang probabilitas (kebijakan).
   # Tanpa kunci: bot tetap jalan pakai threshold biasa. Fitur tambahan, bukan syarat.
   jev:
     enabled: true
-    base_url: "https://api.typesafe.ai"
+    # PENTING: tulis HOST SAJA, jangan tamper /v1.
+    #
+    # Client menambah path "/v1/systemone" sendiri (internal/jev/client.go:179),
+    # dan dia cuma melompat append kalau URL sudah BERAKHIRAN dengan
+    # "/v1/systemone" — dia tidak mendeteksi bahwa kamu sudah nulis "/v1".
+    # Jadi:
+    #   https://api.experientiallabs.ai            -> /v1/systemone           ✅
+    #   https://api.experientiallabs.ai/v1         -> /v1/v1/systemone        ❌ 404
+    #   https://api.experientiallabs.ai/v1/systemone -> tetap apa adanya      ✅
+    #
+    # Kalau ganti domain, pakai bentuk pertama. Bentuk "/v1" berakhir sebagai
+    # 404 tanpa sebab yang jelas, dan yang lebih buruk: consult() cuma log WARN
+    # lalu lanjut pakai threshold lokal, jadi Jev mati tanpa terasa.
+    base_url: "https://api.experientiallabs.ai"
+    # Nama model. INI BUKAN RAHASIA — cuma string publik, jadi dia tinggal di
+    # di sini. Yang rahasia cuma API key, itu tetap di .env.
+    # Dulu JEV_MODEL dibaca dari .env, alasan "berganti gateway = ganti nama
+    # model". Itu mencampur dua hal: key memang rahasia dan tidak boleh masuk
+    # file, tapi nama model justru persis hal yang harus ditulis di file
+    # config. Akibatnya ganti gateway tidak kelihatan di file yang menjelaskan
+    # si-bot.
+    # Bentuk per gateway: "typesafe-ai/jev" (Vercel), "typesafe/jev-1.13"
+    # (OpenRouter), atau "jev-latest" untuk API native.
+    # Kosongkan = jev-latest, jadi baris ini boleh dihapus tanpa merusak apa pun.
+    model: "jev-latest"
+    # Namanya masih TYPESAFE_API_KEY walau domainnya sudah diganti (client.go:65).
+    # Kalau provider punya key sendiri, taruh key itu di variable itu — jalan,
+    # tapi Variable-nya menyesatkan. Mengganti nama variable = perubahan kode.
     danger_threshold: 0.6 # di atas ini = bahaya
     speak_threshold: 0.75 # sengaja tinggi; bot yang terlalu gampang ngomong lebih buruk dari yang diam
     engage_threshold: 0.4 # "harus sibuk?" di bawah ini bot boleh diem — diam terus juga kelihatan robot
@@ -209,10 +266,10 @@ skin:
 #   - none                → disable AI
 ai:
   provider: "openai_compatible"
-  model: "stealth/space-bunny-alpha" # must match /v1/models exactly: "<provider>/<name>"
+  model: "mysterious" # must match /v1/models exactly: "<provider>/<name>"
   #kc/inclusionai/ling-3.0-flash:free
   # API key is loaded from .env (NVIDIA_API_KEY). See .env.example.
-  base_url: "https://api.cline.bot/api/v1" # leave empty to use provider default (nvidia). Required for openai_compatible/anthropic_compatible/google_compatible.
+  base_url: "http://localhost:20128/v1" # leave empty to use provider default (nvidia). Required for openai_compatible/anthropic_compatible/google_compatible.
   main_player: "Arthenyxx"
   respond_only_to_linked_player: false
   respond_only_when_tagged: false # true = only respond when tagged/named in chat (e.g. Luna or @Luna)

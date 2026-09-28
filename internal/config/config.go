@@ -52,6 +52,16 @@ type AGIConfig struct {
 	// gone, which is far too late to react to.
 	LowAirSeconds int `yaml:"low_air_seconds"`
 
+	// IdleStillBias is what share of the bot's rest periods are fully
+	// motionless, as a fraction from 0 to 1.
+	//
+	// The default leans towards "alive": a bot that shifts and looks around
+	// while it thinks reads as a person, and a bot that freezes for a minute
+	// reads on stream as a crash. Raising it gives a bot that is willing to sit
+	// properly still, which is what a long recording needs once the viewer has
+	// learned to trust that nothing is wrong.
+	IdleStillBias float64 `yaml:"idle_still_bias"`
+
 	// Wander makes the bot go somewhere when it has nothing to do, the way a
 	// player idles around a world. Exploration is local and cheap; it never
 	// leaves loaded chunks.
@@ -156,6 +166,21 @@ const (
 	// is the same whatever the objective happens to be. Hardcoding a target into
 	// the brain is what turns an agent back into a script.
 	ModePlanning = "planning"
+
+	// ModeNatural is the bot playing for its own sake with nobody instructing
+	// it. It is the mode a recording is made in.
+	//
+	// The difference from planning is not ambition — it is who started it and
+	// what happens when nobody is around. Planning waits for an objective to
+	// arrive from a player or a model. Natural either has an episode brief with
+	// a hard deadline, or has nothing to do, and keeps playing anyway: an idle
+	// that still looks alive, exploration, and whatever it has discovered it can
+	// find.
+	//
+	// A human always wins. Talking to the bot mid-episode suspends the episode
+	// rather than being queued behind it, because the alternative is a bot that
+	// looks past the person in the room because it has a schedule to keep.
+	ModeNatural = "natural"
 )
 
 // NormalizeMode maps a configured mode to a known one, falling back to default.
@@ -167,6 +192,8 @@ func NormalizeMode(mode string) string {
 	switch strings.ToLower(strings.TrimSpace(mode)) {
 	case ModePlanning, "plan", "long_horizon", "long-horizon":
 		return ModePlanning
+	case ModeNatural, "natural_mode", "episode", "record":
+		return ModeNatural
 	default:
 		return ModeDefault
 	}
@@ -196,8 +223,9 @@ type PerceptionConfig struct {
 // Deliberately holds no model name and no key. Both are environment concerns:
 // the key is a secret that must never reach a committed file, and the model
 // changes per gateway (Vercel AI Gateway wants "typesafe-ai/jev", OpenRouter
-// wants "typesafe/jev-1.13"). They are read from the environment — see
-// jev.EnvAPIKey and jev.EnvModel — so switching gateway is a change to .env,
+// wants "typesafe/jev-1.13"). The key is read from the environment — see
+// jev.EnvAPIKey — so switching gateway is a change to .env,
+// while the model name is configuration and lives in bot.yaml.
 // not to the config.
 //
 // What stays here is policy, which is a decision rather than a secret: which
@@ -205,6 +233,13 @@ type PerceptionConfig struct {
 type JevConfig struct {
 	Enabled bool   `yaml:"enabled"`
 	BaseURL string `yaml:"base_url"`
+	// Model is the model alias to ask for. It lives here rather than in the
+	// environment because it is a public name, not a secret: the key is what
+	// must never reach a checked-in file, and lumping the model in with it made
+	// switching gateway invisible in the one file that describes the bot.
+	//
+	// Empty falls back to jev.DefaultModel, so omitting it is not an error.
+	Model string `yaml:"model"`
 	// DangerThreshold is the probability above which the bot treats a situation
 	// as dangerous. It stays in your hands on purpose — Jev returns a
 	// probability, and where to cut is a policy decision, not a model output.

@@ -5,6 +5,7 @@ package agi
 import (
 	"context"
 	"log/slog"
+	"time"
 
 	"bedrock-ai/internal/bot"
 	"bedrock-ai/internal/config"
@@ -40,6 +41,27 @@ func StartLoop(ctx context.Context, b *bot.Bot) {
 		b.Logger.Info("unprompted speech is now owned by the AGI brain")
 	}
 	go runner.Run(ctx)
+	installEpisodeHooks(b, runner)
+}
+
+// installEpisodeHooks wires the chat layer to the brain.
+//
+// A brief arrives as a chat message, so without this the parser exists and
+// nothing ever calls it — which is the shape of a feature that gets described,
+// built, tested, and then quietly does nothing.
+func installEpisodeHooks(b *bot.Bot, r *Runner) {
+	b.BeginEpisodeFunc = func(line string, now time.Time) (int, time.Duration, string, bool) {
+		ep, ok := r.BeginEpisode(line, now)
+		if !ok {
+			return 0, 0, "", false
+		}
+		return ep.Number, ep.EndsAt.Sub(ep.StartedAt), ep.Objective, true
+	}
+	b.SuspendFunc = r.Suspend
+	b.EndEpisodeFunc = r.EndEpisode
+	b.OneBlockFunc = func(nearBlocks string) string {
+		return r.oneBlockStyle(nearBlocks)
+	}
 }
 
 // From builds a runner directly, for callers that want to drive a tick

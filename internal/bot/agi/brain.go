@@ -60,8 +60,15 @@ type Snapshot struct {
 	// a full inventory swings at a tree and then has nowhere to put the wood,
 	// which looks worse than never offering the activity.
 	FreeSlots int
-	// GoalSummary describes the active goal in the model's own terms. It goes
-	// into the state text so the model can judge whether the goal still makes
+	// Goals and PlanSummary are the bot's intentions; Vocabulary is what the
+	// server this bot happens to be on is made of. The third is what makes the
+	// brain portable: a fixed goal list is a survival list, and on a server with
+	// different blocks in it that list is a list of things that are not there.
+	// Keeping the menu to what has actually been observed is what stops the
+	// bot offering to gather oak_log in a world with no wood in it.
+	Vocabulary *Vocabulary
+	// GoalSummary describes the active goal in the model's own terms. It goes into
+	// the state text so the model can judge whether the goal still makes
 	// sense — a bot that is told "currently working towards stock_up (progress
 	// 0, 4 min left)" can reason about abandoning it, which a bot that is only
 	// shown the present moment cannot.
@@ -83,6 +90,12 @@ type Snapshot struct {
 	// preconditions the curriculum reasons about are literally the same scan the
 	// block summary used a moment earlier.
 	Features perception.Features
+	// EpisodeText is the recording brief with its remaining time, when one is
+	// running. It goes into the model's context because a bot told to think
+	// about what to do while holding a 24 minute episode has to know how much
+	// of it is left; without that it proposes something that cannot possibly
+	// finish in the time it has.
+	EpisodeText string
 	// Underwater and SecondsUnderwater drive the breath reflex. They are derived
 	// from the world rather than from an air-supply packet, because the bot
 	// cannot see one: knowing that water is where the head is and counting the

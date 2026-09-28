@@ -86,11 +86,22 @@ const (
 	ActivityCraft = "craft"
 )
 
+// MustNoul builds a noul question as its raw JSON, for a caller assembling a
+// batch by hand.
+//
+// It exists so the AGI layer can ask something of its own without a second
+// marshalling path, and without exporting the whole map builder. A model that
+// lives in a different package should not have to reimplement the wire shape to
+// add one question.
+func MustNoul(instructions string) json.RawMessage {
+	return mustMarshal(NoulQuestion{Type: TypeNoul, Instructions: instructions})
+}
+
 // BuildReflexQuestions asks the survival and pacing judgements in one call.
 // They travel together because Jev answers a whole set in a single parallel
 // pass — splitting them would cost extra round trips for no benefit.
 func BuildReflexQuestions() map[string]json.RawMessage {
-	return map[string]json.RawMessage{
+	questions := map[string]json.RawMessage{
 		QDanger: mustMarshal(NoulQuestion{
 			Type:         TypeNoul,
 			Instructions: "Is the bot in immediate danger right now — a hostile mob close by, badly hurt, or standing somewhere it could die? Answer yes only if acting now would clearly be safer than doing nothing.",
@@ -116,6 +127,7 @@ func BuildReflexQuestions() map[string]json.RawMessage {
 			Instructions: "Is it worth starting to gather a resource it can see right now, judging by whether it looks reachable, useful, and safe to stop for?",
 		}),
 	}
+	return questions
 }
 
 // Goal options. These are larger than activities: a goal spans many ticks and

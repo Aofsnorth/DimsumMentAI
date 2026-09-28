@@ -123,6 +123,14 @@ func applyAGIDefaults(cfg *Config) {
 	if agi.LowAirSeconds <= 0 {
 		agi.LowAirSeconds = 10
 	}
+	// Outside 0-1 it is clamped rather than rejected: a typo should still leave
+	// a bot that works, and both ends of the range are survivable settings.
+	if agi.IdleStillBias < 0 {
+		agi.IdleStillBias = 0
+	}
+	if agi.IdleStillBias > 1 {
+		agi.IdleStillBias = 1
+	}
 	if agi.WanderDurationSec <= 0 {
 		agi.WanderDurationSec = 20
 	}

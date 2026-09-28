@@ -187,3 +187,44 @@ func indexOf(h, n string) int {
 	}
 	return -1
 }
+
+// TestTheModelComesFromConfigAndNotTheEnvironment pins the move of the model
+// name out of .env and into bot.yaml.
+//
+// The model is a public string, not a secret, so it belongs in the file that
+// describes the bot. It used to be read from JEV_MODEL, on the reasoning that
+// it "changes per gateway" — which conflated the model with the API key. The
+// key is a secret and must never reach a checked-in file; the model is exactly
+// the sort of thing a config file is for.
+//
+// The cost of the old rule was that switching gateway was invisible in the one
+// file anyone would think to look at. Setting the environment variable here and
+// asserting it is ignored is what keeps it that way.
+func TestTheModelComesFromConfigAndNotTheEnvironment(t *testing.T) {
+	// Not parallel: it mutates the process environment.
+	t.Setenv("JEV_MODEL", "should-be-ignored")
+
+	c := jev.New("https://example.test", "jev-latest", "key")
+	if got := c.ModelName(); got != "jev-latest" {
+		t.Errorf("ModelName = %q, want the model passed in", got)
+	}
+
+	// Even when the environment still holds the old variable, the client must
+	// not consult it. FromEnv takes the model as a parameter for exactly this
+	// reason, and this is the assertion that keeps it that way.
+	fromEnv := jev.FromEnv("https://example.test", "from-config")
+	if got := fromEnv.ModelName(); got != "from-config" {
+		t.Errorf("FromEnv ModelName = %q, want the config value; JEV_MODEL is being read again", got)
+	}
+}
+
+// TestAnEmptyModelFallsBackRatherThanFailing keeps the YAML line optional.
+// Someone who deletes the model key should not get a broken client.
+func TestAnEmptyModelFallsBackRatherThanFailing(t *testing.T) {
+	t.Parallel()
+
+	c := jev.New("https://example.test", "", "key")
+	if c.ModelName() == "" {
+		t.Error("an empty model produced an empty request; it should fall back to the default")
+	}
+}

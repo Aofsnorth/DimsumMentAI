@@ -83,6 +83,45 @@ type Runner struct {
 	// breathing. The breath reflex reads the gap between this and now, which is
 	// the only air warning this bot actually has: there is no air bar to read.
 	sinceSubmerged time.Time
+	// episode is the recording brief: an objective with a hard wall-clock
+	// deadline. Empty is the normal state for hours at a time and is not a gap.
+	episode Episode
+	// vocabulary is what this server has been observed to contain. It replaces
+	// a hardcoded survival list as the bot's working vocabulary, which is what
+	// lets the same brain play a survival world, a one-block world and a server
+	// full of blocks it has never heard of.
+	vocabulary *Vocabulary
+	// oneBlockSeen, oneBlockReading and oneBlockConfirmed carry the two-reading
+	// test. A hint is not a conclusion, and a world that looks empty twice from
+	// the same spot is a different thing from one that looked empty once.
+	oneBlockSeen      bool
+	oneBlockReading   OneBlockConfidence
+	oneBlockConfirmed bool
+	// lastPosition is the previous tick's coordinates, for the stuck check. The
+	// clock alone is not enough: a server that applies a freeze still answers
+	// ticks, so a motionless bot and a healthy idle look identical on time.
+	lastPosition string
+	// lastMoved is when the bot last actually changed position.
+	lastMoved time.Time
+	// faultRepeats counts consecutive ticks of the same fault, so the watchdog
+	// can insist on seeing something twice before acting on the ambiguous one.
+	faultRepeats int
+	lastFault    Fault
+	// disconnected is the connection state, fed in from the network layer. The
+	// watchdog is the only reader, and a connection that is down is the one
+	// fault nothing else can be tried against.
+	disconnected bool
+	// suspendedUntil and suspendedBy are the human-holds-the-bot's-attention
+	// window. The episode clock keeps running through it — the recording is
+	// still going whether anyone is talking or not — but the bot stops working
+	// until the attention lapses.
+	suspendedUntil time.Time
+	suspendedBy    string
+	// idleUntil and idleMode hold the rest period currently in progress. Kept on
+	// the runner rather than recomputed, so a duration is decided once instead
+	// of sliding forward by a tick every time the clock is read.
+	idleUntil time.Time
+	idleMode  IdleMode
 	// activityLog is a short history of the activities the brain has already
 	// chosen. It exists so the loop can notice it is repeating itself: a model
 	// that keeps picking the same activity is not deciding, and the caller
@@ -131,10 +170,17 @@ type Config struct {
 	VisionHoldSec     int
 	VisionCooldownSec int
 
-	// Mode selects the brain: default (reactive) or planning (long-horizon).
-	// It is normalised on the way in, so a typo lands on default rather than
-	// leaving the bot half-configured.
+	// Mode selects the brain: default (reactive), planning (long-horizon) or
+	// natural (playing for its own sake). It is normalised on the way in, so a
+	// typo lands on default rather than leaving the bot half-configured.
 	Mode string
+
+	// IdleStillBias is the share of rest periods that are fully motionless.
+	//
+	// It is a taste knob, so it is config rather than a constant: the right
+	// number for a five-minute clip is not the right number for a three-hour
+	// stream, and neither of those should need a recompile.
+	IdleStillBias float64
 
 	// PlanLifetimeMin bounds how long one plan is pursued before the planner is
 	// consulted again, and PlanReplanMin is how often within that the planner
@@ -204,6 +250,7 @@ func ConfigFrom(c config.AGIConfig) Config {
 		EngageThreshold:   c.Jev.EngageThreshold,
 
 		Mode:            config.NormalizeMode(c.Mode),
+		IdleStillBias:   c.IdleStillBias,
 		PlanLifetimeMin: c.PlanLifetimeMin,
 		PlanReplanMin:   c.PlanReplanMin,
 		PlanMaxSteps:    c.PlanMaxSteps,
@@ -222,7 +269,7 @@ func ConfigFrom(c config.AGIConfig) Config {
 	if c.Jev.Enabled {
 		// Key and model come from the environment; only the endpoint, the
 		// timeout and the thresholds are configuration.
-		if client := jev.FromEnv(c.Jev.BaseURL); client.Available {
+		if client := jev.FromEnv(c.Jev.BaseURL, c.Jev.Model); client.Available {
 			client.SetTimeout(time.Duration(c.Jev.TimeoutSec) * time.Second)
 			cfg.Jev = client
 		}
@@ -236,7 +283,12 @@ func New(b *bot.Bot, cfg Config) *Runner {
 	if !cfg.Enabled {
 		return nil
 	}
-	return &Runner{b: b, cfg: cfg, seed: rand.Intn(360)}
+	return &Runner{
+		b:          b,
+		cfg:        cfg,
+		seed:       rand.Intn(360),
+		vocabulary: NewVocabulary(),
+	}
 }
 
 // Run drives the loop until the session ends. It is started as a goroutine by
@@ -324,6 +376,14 @@ func (r *Runner) Tick(ctx context.Context) {
 	// by dying has not finished anything.
 	if r.cfg.Mode == config.ModePlanning {
 		r.planningTick(ctx, snap, judgement)
+		return
+	}
+
+	// Natural mode plays for its own sake. It is checked last of the three
+	// because it is the broadest: it is the one that has to cope with having no
+	// objective at all.
+	if r.modeIsNatural() {
+		r.naturalTick(ctx, snap, judgement)
 		return
 	}
 
@@ -671,6 +731,11 @@ type Judgement struct {
 	WorthSpeak bool
 	// Activity is Jev's pick for what to do, empty when Jev is absent.
 	Activity string
+	// Escalate is Jev's read on whether this is a moment the big model is worth
+	// calling. It is a probability, like Danger, and the program decides what
+	// likely means — Jev never gets to spend the expensive tier on its own
+	// judgement about whether the expensive tier is needed.
+	Escalate float64
 	// Engaged is Jev's read on whether the bot should be visibly busy. A calm
 	// answer here is what lets the bot choose to stand still, which is the
 	// behaviour that separates a companion from a task runner.
@@ -742,6 +807,9 @@ func (r *Runner) consult(ctx context.Context, snap Snapshot) Judgement {
 		j.Activity = choice
 		j.ActivityConfidence = confidence
 	}
+	if p, ok := resp.Noul(EscalateQuestion); ok {
+		j.Escalate = p
+	}
 	if choice, confidence, ok := resp.Choice(jev.QGoal); ok {
 		if r.considerGoal(choice, confidence, snap.Now) {
 			j.Goal = choice
@@ -768,6 +836,12 @@ func (r *Runner) consult(ctx context.Context, snap Snapshot) Judgement {
 // round trip that can only ever answer "that one".
 func (r *Runner) questions(s Snapshot) map[string]json.RawMessage {
 	questions := jev.BuildReflexQuestions()
+	// The escalation question is asked every tick, but it is cheap: it rides
+	// along in the same parallel pass as everything else rather than being a
+	// second round trip. Jev is the only thing allowed to ask for the big
+	// model, so its opinion has to be in the batch or the gate never opens.
+	questions[EscalateQuestion] = jev.MustNoul(EscalateInstructions)
+
 	if s.Busy || s.Exploring {
 		return questions
 	}
@@ -807,6 +881,11 @@ func describeState(s Snapshot) string {
 	fmt.Fprintf(&sb, "Health %d/20. Hunger %d/20. Position %s.\n", s.HP, s.Hunger, s.Coords)
 	fmt.Fprintf(&sb, "Time: %s. Free inventory slots: %d.\n", timeOfDay(s), s.FreeSlots)
 	fmt.Fprintf(&sb, "Current goal: %s.\n", s.GoalSummary)
+	// The vocabulary goes in right after the goal, because the two are read
+	// together: the goal says what the bot is trying to do and this says what it
+	// could possibly do it with. A model reasoning about "build a house" is
+	// useless unless it also knows there is no wood.
+	fmt.Fprintf(&sb, "This world: %s.\n", s.Vocabulary.Describe())
 	if s.PlanSummary != "" && s.PlanSummary != "no plan" {
 		fmt.Fprintf(&sb, "Active plan:\n%s", s.PlanSummary)
 	}
@@ -869,7 +948,17 @@ func (r *Runner) Observe() Snapshot {
 	hp, hunger, coords := b.GetStatusDetails()
 
 	b.Mu.Lock()
-	busy := b.IsBusy()
+	// IsBusy() is a Bot method that takes b.Mu itself, so it must NOT be
+	// called from inside this critical section. sync.Mutex is not reentrant:
+	// the second Lock waits for the first to be released by the very goroutine
+	// that is now blocked waiting for it.
+	//
+	// That is not a theoretical hazard. It presents as a bot that connects,
+	// answers chat, and then never takes a single AGI tick — the loop starts,
+	// calls Observe, and wedges silently on the first tick with nothing in the
+	// log to say why. The whole autonomy layer looked "enabled but inert" and
+	// the only visible symptom was a bot standing still.
+	moving := b.MovementState != "idle"
 	pos := b.Pos
 	lookTarget := b.LookTargetName
 	actors := make(map[uint64]*entity.Info, len(b.Actors))
@@ -881,6 +970,10 @@ func (r *Runner) Observe() Snapshot {
 		actors[id] = &copied
 	}
 	b.Mu.Unlock()
+
+	// The planner half of IsBusy needs no lock — it is the bot's own field and
+	// the planner guards its own state.
+	busy := moving || (b.Planner != nil && b.Planner.IsRunning())
 
 	// Grounded perception, the same line-of-sight view the chat prompt uses.
 	// Jev is deciding from this text, so anything it is told has to be true.
@@ -925,6 +1018,21 @@ func (r *Runner) Observe() Snapshot {
 		Underwater:        underwater,
 		SecondsUnderwater: secondsUnder,
 	}
+
+	// Fold what is in view into the vocabulary, then hand the same pointer to
+	// the snapshot. The state text, the curriculum and the planner all read it
+	// in this tick, and a vocabulary that lags a tick behind the world is a
+	// vocabulary that describes where the bot used to be.
+	r.vocabulary.Merge(snap)
+	snap.Vocabulary = r.vocabulary
+
+	// The episode description carries the time left, which is the part the
+	// model needs: a brief without a clock is a wish, and the model will happily
+	// propose a build that takes two hours inside a 24 minute recording.
+	if ep := r.currentEpisode(); ep.Objective != "" {
+		snap.EpisodeText = ep.Describe(snap.Now)
+	}
+
 	return snap
 }
 

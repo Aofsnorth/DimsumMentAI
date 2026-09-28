@@ -74,7 +74,6 @@ var (
 	// StartAGILoopFunc starts the autonomy brain. bot/agi imports bot for the
 	// same reason bot/chat does, so it is injected rather than imported.
 	StartAGILoopFunc func(ctx context.Context, b *Bot)
-
 	// RequestChunkRadiusFunc asks the server to stream chunks around the bot.
 	// Injected because bot imports network, so network cannot import bot back.
 	RequestChunkRadiusFunc func(b *Bot)
@@ -101,7 +100,26 @@ type PlannerInterface interface {
 }
 
 type Bot struct {
-	Logger            *slog.Logger
+	Logger *slog.Logger
+
+	// BeginEpisodeFunc, SuspendFunc and EndEpisodeFunc let the chat layer drive
+	// a recording brief without importing the brain, for the same reason as
+	// StartAGILoopFunc: the brain imports the bot, so a field of the brain's own
+	// type on the bot would close the cycle.
+	//
+	// All of them are nil whenever AGI is off or never started, and every caller
+	// must read nil as "autonomy is not running" rather than as a failure — a
+	// bot with no brain is a perfectly ordinary configuration.
+	//
+	// BeginEpisodeFunc answers with primitives rather than the brain's own
+	// Episode type for the same reason, and with just enough of it for the chat
+	// layer to confirm out loud what it has just started.
+	BeginEpisodeFunc func(line string, now time.Time) (number int, budget time.Duration, objective string, ok bool)
+	SuspendFunc      func(who string)
+	EndEpisodeFunc   func(reason string)
+	// OneBlockFunc reports how the brain reads the world, so a caller outside
+	// the brain can ask the same question it asks itself.
+	OneBlockFunc      func(nearBlocks string) string
 	Conn              *minecraft.Conn
 	Dialer            DialerFunc
 	Registry          *handler.Registry
