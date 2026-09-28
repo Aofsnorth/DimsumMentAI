@@ -469,11 +469,18 @@ func (i *Interactor) Resolve(request Request) (Target, error) {
 	// Scanned once and shared: a named-block lookup, the raw-name fallback and
 	// the "in front" fallback all need the same neighbourhood walk, and each one
 	// is ~1000 cell queries.
+	//
+	// The visibility filter is applied here, once, rather than inside each
+	// path's own filter. Named lookup used to be distance-only, so a door on
+	// the far side of a wall was as clickable as the one in front — the one
+	// action in this bot that could reach through geometry. Filtering the
+	// candidates at the source is what keeps the named path and the in-front
+	// path from disagreeing about what the bot can see.
 	var blocks []Target
 	blocksScanned := false
 	scanBlocks := func() []Target {
 		if !blocksScanned {
-			blocks = scanBlockTargets(i.bot, botPos, searchRadius, request)
+			blocks = onlyVisible(i.bot, botPos, scanBlockTargets(i.bot, botPos, searchRadius, request))
 			blocksScanned = true
 		}
 		return blocks

@@ -62,6 +62,18 @@ func (cm *CombatManager) Tick(ctx context.Context) {
 		return
 	}
 
+	// What to hold, decided before anything else in the tick. Doing it here
+	// rather than on engage means the bot reconsiders as the fight changes: a
+	// creeper that backs off gets met with a bow instead of the sword it was
+	// holding two seconds ago.
+	situation := cm.situation(dist)
+	if choice := ChooseWeapon(cm.slotNames(), situation); choice.Kind == WeaponNone {
+		cm.logger.Warn("Combat with nothing to fight with")
+	} else {
+		cm.holdWeapon(choice)
+	}
+	cm.applyShield(situation)
+
 	targetCenter := target.Position.Add(mgl32.Vec3{0, 1.2, 0})
 	cm.bot.LookAt(targetCenter)
 
@@ -78,6 +90,130 @@ func (cm *CombatManager) Tick(ctx context.Context) {
 		}
 		cm.attack(targetID, target.Position)
 		cm.lastAttack = time.Now()
+		// Every swing costs the held tool a point of life. Counting it here is
+		// the only place durability is actually consumed, which is what makes
+		// the count mean anything.
+		cm.durability.Record(cm.bot.GetHeldItemSlot())
+	}
+}
+
+// slotNames is the inventory as a plain slot-to-name map, which is the shape
+// the pure decision functions take.
+func (cm *CombatManager) slotNames() map[uint32]string {
+	inv := cm.bot.GetInventorySlots()
+	names := cm.bot.GetItemNames()
+	out := make(map[uint32]string, len(inv))
+	for slot, stack := range inv {
+		if stack.Count <= 0 {
+			continue
+		}
+		if name, ok := names[stack.NetworkID]; ok {
+			out[slot] = name
+		}
+	}
+	return out
+}
+
+// situation reads the fight into the shape the decisions take.
+func (cm *CombatManager) situation(dist float32) Situation {
+	botPos := cm.bot.GetCoords()
+	s := Situation{TargetDistance: dist, NearbyHostiles: 1, MeleeHostiles: 1}
+
+	entities := cm.bot.GetEntities()
+	for id, ent := range entities {
+		if id == cm.targetID || ent.Health <= 0 || !isHostileEntity(ent) {
+			continue
+		}
+		s.NearbyHostiles++
+		if cm.distance(botPos, ent.Position) <= meleeRange {
+			s.MeleeHostiles++
+		}
+	}
+
+	inventory := cm.slotNames()
+	s.HasArrows = hasArrows(inventory)
+	s.Health, s.MaxHealth = cm.botHealth()
+	return s
+}
+
+// hasArrows looks for ammunition rather than assuming a bow implies one.
+//
+// A bow with nothing to shoot is a stick, and a bot that switches to it because
+// the target moved out of range and then stands there holding it is worse than
+// one that never switched.
+func hasArrows(inventory map[uint32]string) bool {
+	for _, name := range inventory {
+		short := name
+		if i := strings.LastIndexByte(short, ':'); i >= 0 {
+			short = short[i+1:]
+		}
+		short = strings.ToLower(strings.TrimSpace(short))
+		if short == "arrow" || strings.HasSuffix(short, "_arrow") {
+			return true
+		}
+	}
+	return false
+}
+
+// healthReader is the optional view of the bot that carries its vitals.
+//
+// It is an optional assertion rather than a method on combat.Bot because the
+// combat package has three test doubles to keep in step, and a health number
+// that is only meaningful for the shield decision does not justify pushing that
+// change through all of them. A bot that does not expose health simply never
+// gets the desperate case, which is a safe default.
+type healthReader interface {
+	GetStatusDetails() (health, hunger int, coords string)
+}
+
+// botHealth reads the bot's health, defaulting to full when it is not available.
+func (cm *CombatManager) botHealth() (health, maxHealth int) {
+	reader, ok := cm.bot.(healthReader)
+	if !ok {
+		return 20, 20
+	}
+	health, _, _ = reader.GetStatusDetails()
+	return health, 20
+}
+
+// holdWeapon equips the chosen item, unless the bot is already holding it.
+//
+// The reason is logged on a change and not on every tick: a combat tick runs
+// many times a second, and a log line per tick is how a log becomes unreadable.
+func (cm *CombatManager) holdWeapon(choice WeaponChoice) {
+	if cm.bot.GetHeldItemSlot() == choice.Slot {
+		return
+	}
+	if err := cm.bot.EquipItem(choice.Slot); err != nil {
+		cm.logger.Warn("Failed to equip chosen weapon", "slot", choice.Slot, "error", err)
+		return
+	}
+	cm.logger.Info("Combat: changed weapon",
+		"weapon", choice.Name,
+		"kind", choice.Kind.String(),
+		"reason", choice.Reason,
+	)
+}
+
+// applyShield raises or lowers the shield to match the plan.
+//
+// The combat manager already had a RaiseShield it never called, and a shieldUp
+// flag it wrote and never read. Both are live now, which is the smallest change
+// that makes the defensive half of combat exist at all.
+func (cm *CombatManager) applyShield(s Situation) {
+	cm.mu.Lock()
+	up := cm.shieldUp
+	cm.mu.Unlock()
+
+	switch PlanShield(cm.slotNames(), s, up) {
+	case ShieldRaise:
+		if !up {
+			cm.RaiseShield()
+		}
+	case ShieldLower:
+		if up {
+			cm.LowerShield()
+		}
 	}
 }
 

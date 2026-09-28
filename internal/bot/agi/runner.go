@@ -14,9 +14,11 @@ import (
 	"bedrock-ai/internal/bot"
 	"bedrock-ai/internal/bot/action"
 	"bedrock-ai/internal/bot/entity"
+	"bedrock-ai/internal/bot/pathfinder"
 	"bedrock-ai/internal/bot/perception"
 	"bedrock-ai/internal/bot/rand"
 	"bedrock-ai/internal/config"
+	"bedrock-ai/internal/evidence"
 	"bedrock-ai/internal/jev"
 
 	"github.com/go-gl/mathgl/mgl32"
@@ -57,6 +59,30 @@ type Runner struct {
 	// empty when the bot has no goal, which is a supported state (and the
 	// correct one at the start of a session): the brain then just wanders.
 	goal Goal
+	// plan is the long-horizon objective used by planning mode. It is separate
+	// from goal on purpose: a goal is what the bot wants for the next few
+	// minutes and is chosen by Jev, while a plan is what it is trying to achieve
+	// over a whole expedition and is chosen by the planner. The two nest — a
+	// plan's current step is what the current goal should be serving.
+	plan Plan
+	// planSeq numbers generated plan IDs so a replan is distinguishable from the
+	// plan it replaced in the log.
+	planSeq int
+	// plannerInFlight and lastPlanAttempt throttle the planner. Without them a
+	// planner that is down — or a bot that keeps finishing plans — would be
+	// asked again on every single tick, and the log would fill with the same
+	// failure while the brain did nothing.
+	plannerInFlight bool
+	lastPlanAttempt time.Time
+	// busy is true while a plan step is executing. Planning mode runs one
+	// action at a time on purpose: two steps in flight would be two sets of
+	// instructions fighting over the same body, and the second one would be
+	// reported as progress the first had already undone.
+	busy bool
+	// sinceSubmerged is when the bot's head last went under. Zero means it is
+	// breathing. The breath reflex reads the gap between this and now, which is
+	// the only air warning this bot actually has: there is no air bar to read.
+	sinceSubmerged time.Time
 	// activityLog is a short history of the activities the brain has already
 	// chosen. It exists so the loop can notice it is repeating itself: a model
 	// that keeps picking the same activity is not deciding, and the caller
@@ -87,12 +113,15 @@ const goalConfidenceFloor = 0.5
 // rather than importing the config package so agi can be tested with a plain
 // struct literal, and so the config surface does not leak into the loop.
 type Config struct {
-	Enabled           bool
-	TickIntervalSec   int
-	LLMChance         float64
-	SelfPreservation  bool
-	LowHPThreshold    int
-	LowHunger         int
+	Enabled          bool
+	TickIntervalSec  int
+	LLMChance        float64
+	SelfPreservation bool
+	LowHPThreshold   int
+	LowHunger        int
+	// LowAirSeconds is how long the head can be under before the breath reflex
+	// takes over from whatever the bot was doing.
+	LowAirSeconds     int
 	Wander            bool
 	WanderDurationSec int
 	Social            bool
@@ -101,6 +130,21 @@ type Config struct {
 	VisionRadius      float32
 	VisionHoldSec     int
 	VisionCooldownSec int
+
+	// Mode selects the brain: default (reactive) or planning (long-horizon).
+	// It is normalised on the way in, so a typo lands on default rather than
+	// leaving the bot half-configured.
+	Mode string
+
+	// PlanLifetimeMin bounds how long one plan is pursued before the planner is
+	// consulted again, and PlanReplanMin is how often within that the planner
+	// gets a look in. The second is what keeps a slow planner from stalling the
+	// brain: actions continue against the current plan while a replan is pending.
+	PlanLifetimeMin int
+	PlanReplanMin   int
+	// PlanMaxSteps bounds a generated plan. An unbounded plan is a wishlist, and
+	// a wishlist cannot be finished.
+	PlanMaxSteps int
 
 	// Jev is the optional System One model. Nil means the hardcoded thresholds
 	// are in charge, which is a supported configuration rather than a degraded
@@ -146,6 +190,7 @@ func ConfigFrom(c config.AGIConfig) Config {
 		SelfPreservation:  c.SelfPreservation,
 		LowHPThreshold:    c.LowHPThreshold,
 		LowHunger:         c.LowHunger,
+		LowAirSeconds:     c.LowAirSeconds,
 		Wander:            c.Wander,
 		WanderDurationSec: c.WanderDurationSec,
 		Social:            c.Social,
@@ -157,6 +202,11 @@ func ConfigFrom(c config.AGIConfig) Config {
 		DangerThreshold:   c.Jev.DangerThreshold,
 		SpeakThreshold:    c.Jev.SpeakThreshold,
 		EngageThreshold:   c.Jev.EngageThreshold,
+
+		Mode:            config.NormalizeMode(c.Mode),
+		PlanLifetimeMin: c.PlanLifetimeMin,
+		PlanReplanMin:   c.PlanReplanMin,
+		PlanMaxSteps:    c.PlanMaxSteps,
 
 		MobScanDistance:   c.Perception.MobScanDistance,
 		BlockScanDistance: c.Perception.BlockScanDistance,
@@ -199,6 +249,7 @@ func (r *Runner) Run(ctx context.Context) {
 	interval := time.Duration(r.cfg.TickIntervalSec) * time.Second
 	r.b.Logger.Info("AGI loop started",
 		slog.Int("interval_sec", r.cfg.TickIntervalSec),
+		slog.String("mode", r.cfg.Mode),
 		slog.Float64("llm_chance", r.cfg.LLMChance),
 		slog.Bool("social", r.cfg.Social),
 		slog.Bool("wander", r.cfg.Wander),
@@ -264,6 +315,15 @@ func (r *Runner) Tick(ctx context.Context) {
 		r.runReflex(ctx, reflex)
 		// A reflex consumed this tick. Acting and deliberating in the same
 		// breath is how a bot ends up eating while it flees.
+		return
+	}
+
+	// Planning mode replaces the open-ended half of the loop with plan
+	// execution. It sits below the reflex layer and above Jev's activity pick:
+	// survival still outranks a plan, because a bot that finishes an objective
+	// by dying has not finished anything.
+	if r.cfg.Mode == config.ModePlanning {
+		r.planningTick(ctx, snap, judgement)
 		return
 	}
 
@@ -747,6 +807,9 @@ func describeState(s Snapshot) string {
 	fmt.Fprintf(&sb, "Health %d/20. Hunger %d/20. Position %s.\n", s.HP, s.Hunger, s.Coords)
 	fmt.Fprintf(&sb, "Time: %s. Free inventory slots: %d.\n", timeOfDay(s), s.FreeSlots)
 	fmt.Fprintf(&sb, "Current goal: %s.\n", s.GoalSummary)
+	if s.PlanSummary != "" && s.PlanSummary != "no plan" {
+		fmt.Fprintf(&sb, "Active plan:\n%s", s.PlanSummary)
+	}
 	fmt.Fprintf(&sb, "Holding: %s.\n", s.HeldItem)
 	fmt.Fprintf(&sb, "Visible mobs: %s.\n", s.VisibleMob)
 	fmt.Fprintf(&sb, "Nearby blocks: %s.\n", s.NearBlocks)
@@ -788,7 +851,11 @@ func describeSigns(s Snapshot) string {
 }
 
 func (r *Runner) thresholds() Thresholds {
-	return Thresholds{LowHP: r.cfg.LowHPThreshold, LowHunger: r.cfg.LowHunger}
+	return Thresholds{
+		LowHP:         r.cfg.LowHPThreshold,
+		LowHunger:     r.cfg.LowHunger,
+		LowAirSeconds: r.cfg.LowAirSeconds,
+	}
 }
 
 // agiIsNight is the package's own night check, aliased so the runner reads
@@ -798,6 +865,7 @@ func agiIsNight(ticks, start, end int64) bool { return IsNightTime(ticks, start,
 // Observe builds an immutable reading of the world for one decision.
 func (r *Runner) Observe() Snapshot {
 	b := r.b
+	now := time.Now()
 	hp, hunger, coords := b.GetStatusDetails()
 
 	b.Mu.Lock()
@@ -831,8 +899,10 @@ func (r *Runner) Observe() Snapshot {
 		}
 	}
 
+	underwater, secondsUnder := r.observeSubmersion(now)
+
 	snap := Snapshot{
-		Now:          time.Now(),
+		Now:          now,
 		Coords:       coords,
 		HP:           hp,
 		Hunger:       hunger,
@@ -848,8 +918,12 @@ func (r *Runner) Observe() Snapshot {
 		Nearby:       r.nearbyPeople(pos, lookTarget),
 		VisibleSigns: r.visibleSignText(),
 		GoalSummary:  describeGoal(r.currentGoal()),
+		PlanSummary:  renderPlan(r.currentPlan()),
 		Features:     perception.VisibleFeatures(b, r.cfg.BlockScanDistance),
 		Craftable:    r.craftableCount(),
+
+		Underwater:        underwater,
+		SecondsUnderwater: secondsUnder,
 	}
 	return snap
 }
@@ -972,6 +1046,15 @@ func sortPeople(people []Person) {
 
 // runReflex executes one local reaction.
 func (r *Runner) runReflex(ctx context.Context, reflex Reflex) {
+	// Recorded before the action, not after. "The reflex fired" and "the reflex
+	// did what it was supposed to" are different claims, and a log that only
+	// records the second one is a log that cannot tell you why the bot did not
+	// eat, or did not surface, or did not run.
+	r.b.Evidence.Record(evidence.KindReflex, reflex.Kind.String(), map[string]any{
+		"person": reflex.Person,
+		"hp":     r.snapshotHP(),
+	})
+
 	switch reflex.Kind {
 	case ReflexFlee:
 		r.b.Logger.Info("AGI: fleeing", slog.Int("hp", r.snapshotHP()))
@@ -989,7 +1072,130 @@ func (r *Runner) runReflex(ctx context.Context, reflex Reflex) {
 	case ReflexShelter:
 		r.b.Logger.Info("AGI: nightfall, seeking shelter")
 		action.Execute(r.b, "shelter", "", r.audience())
+	case ReflexSurface:
+		seconds := r.secondsUnderwater()
+		r.b.Logger.Warn("AGI: out of air, surfacing", slog.Int("seconds_under", seconds))
+		r.surface()
 	}
+}
+
+// waterWorld is the narrow view of the world that submersion needs.
+//
+// The bot hands out its world model as a three-method interface, and water is
+// not one of them. Widening that interface for one reflex would push the change
+// through every implementer in the tree; narrowing here, the way the pathfinder
+// already does with loadAwareWorld and nameAwareQuerier, keeps the cost on the
+// one place that wants it. A model that cannot answer is treated as dry, which
+// is the safe direction: the breath reflex simply never fires.
+type waterWorld interface {
+	IsWater(x, y, z int32) bool
+}
+
+// waterWorldOf returns the bot's world model as something that can answer
+// questions about water, or nil when it cannot.
+func (r *Runner) waterWorldOf() waterWorld {
+	model := r.b.GetLocalWorldModel()
+	if model == nil {
+		return nil
+	}
+	water, ok := model.(waterWorld)
+	if !ok {
+		return nil
+	}
+	return water
+}
+
+// headUnderwater reports whether the bot's head is currently in water.
+//
+// The head is the whole answer, not a sample of the body. A bot can stand
+// waist-deep and breathe; it drowns when the air runs out. Testing the cell at
+// the head is the difference between "reflexively swims to the surface in a
+// shallow puddle" and "keeps working", and only one of those is a person.
+func (r *Runner) headUnderwater() bool {
+	world := r.waterWorldOf()
+	if world == nil {
+		return false
+	}
+	pos := r.b.GetCoords()
+	hx, hy, hz := pathfinder.HeadCell(
+		int32(math.Floor(float64(pos.X()))),
+		int32(math.Floor(float64(pos.Y()))),
+		int32(math.Floor(float64(pos.Z()))),
+	)
+	return world.IsWater(hx, hy, hz)
+}
+
+// secondsUnderwater is how long the bot's head has been under, counting from
+// the last time it was not.
+//
+// It resets on the surface rather than decaying, so surfacing for one tick and
+// ducking back down does not hand the bot a fresh air supply it never had.
+func (r *Runner) secondsUnderwater() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.sinceSubmerged.IsZero() {
+		return 0
+	}
+	return int(time.Since(r.sinceSubmerged) / time.Second)
+}
+
+// observeSubmersion updates the submersion clock and reports the two facts the
+// breath reflex reads.
+func (r *Runner) observeSubmersion(now time.Time) (underwater bool, seconds int) {
+	underwater = r.headUnderwater()
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if underwater {
+		if r.sinceSubmerged.IsZero() {
+			r.sinceSubmerged = now
+		}
+		seconds = int(now.Sub(r.sinceSubmerged) / time.Second)
+		return underwater, seconds
+	}
+	r.sinceSubmerged = time.Time{}
+	return false, 0
+}
+
+// maxSurfaceClimb bounds how far the surfacing reflex will look for air above
+// the bot. A flooded mine shaft is a handful of blocks; a hundred is a
+// pathological column, and searching for one is a bot standing at the bottom of
+// it doing nothing while the air runs out.
+const maxSurfaceClimb int32 = 24
+
+// surface sends the bot up.
+//
+// It goes through the pathfinder rather than reaching into the movement input
+// loop. Holding the jump key is what a player does, but jump state is owned by
+// the movement agent and is rebuilt every tick from the steering solution, so
+// setting it from outside would be overwritten on the next frame. Navigating to
+// the first cell above with air at head height is the same instruction expressed
+// in the vocabulary the bot already has: a reachable destination.
+//
+// If no air is found within the search window the bot stays where it is rather
+// than climbing blindly. That is a real failure, and it is logged as one.
+func (r *Runner) surface() {
+	world := r.waterWorldOf()
+	if world == nil {
+		return
+	}
+	pos := r.b.GetCoords()
+	bx := int32(math.Floor(float64(pos.X())))
+	by := int32(math.Floor(float64(pos.Y())))
+	bz := int32(math.Floor(float64(pos.Z())))
+
+	for climb := int32(1); climb <= maxSurfaceClimb; climb++ {
+		_, headY, _ := pathfinder.HeadCell(bx, by+climb, bz)
+		if world.IsWater(bx, headY, bz) {
+			continue
+		}
+		r.b.NavigateToBlock(bx, by+climb, bz, 1.0)
+		return
+	}
+	r.b.Logger.Warn("AGI: no air found above the bot",
+		slog.Int("searched_blocks", int(maxSurfaceClimb)),
+		slog.Int("y", int(by)),
+	)
 }
 
 func (r *Runner) snapshotHP() int {

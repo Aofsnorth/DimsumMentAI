@@ -39,7 +39,11 @@ func (bp *BlockPlacer) PlaceBlockAt(ctx context.Context, x, y, z int, blockName 
 	blockName = strings.ReplaceAll(blockName, "minecraft:", "")
 	bp.logger.Info("Attempting to place block", "block", blockName, "x", x, "y", y, "z", z)
 
-	bp.clearObstructions(ctx, x, y, z)
+	// A site the bot is not willing to clear is a site it must not build into
+	// either. Placing anyway would put a block inside somebody's chest.
+	if !bp.clearObstructions(ctx, x, y, z) {
+		return false
+	}
 
 	if !bp.navigateAndTowerToTarget(ctx, x, y, z, cx, cz) {
 		return false

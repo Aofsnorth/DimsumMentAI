@@ -148,3 +148,104 @@ func actionFor(activity string) bool {
 	}
 	return false
 }
+
+// --- Breath reflex ---
+
+// TestDrowningOutranksEverythingElse is the claim that makes the reflex worth
+// having. Health only starts falling once the air is nearly gone, so a reflex
+// layer that ranks by health bars always finds out too late — the bot surfaces
+// with a health bar already draining, or does not surface at all.
+//
+// Hunger and an approaching player are both real and both survivable, which is
+// exactly why they must lose.
+func TestDrowningOutranksEverythingElse(t *testing.T) {
+	t.Parallel()
+
+	thresholds := Thresholds{LowHP: 8, LowHunger: 6, LowAirSeconds: 10}
+
+	// Everything else is also true at once: starving, someone walking up, and
+	// about to run out of air.
+	snap := Snapshot{
+		HP:                20,
+		Hunger:            1,
+		Nearby:            []Person{{Name: "Steve", Distance: 3}},
+		Underwater:        true,
+		SecondsUnderwater: 30,
+	}
+
+	if got := DecideReflex(snap, thresholds); got.Kind != ReflexSurface {
+		t.Errorf("reflex = %v, want ReflexSurface; the bot is drowning with 30s under", got.Kind)
+	}
+}
+
+// TestAirReflexWaitsUntilTheThreshold is the other half. Surfacing the instant
+// the bot touches water would be worse than never surfacing: it would break the
+// bot out of every shallow crossing, every fishing spot and every underwater
+// structure it had a reason to be in.
+func TestAirReflexWaitsUntilTheThreshold(t *testing.T) {
+	t.Parallel()
+
+	thresholds := Thresholds{LowHP: 8, LowHunger: 6, LowAirSeconds: 10}
+
+	fresh := Snapshot{HP: 20, Hunger: 20, Underwater: true, SecondsUnderwater: 3}
+	if got := DecideReflex(fresh, thresholds); got.Kind == ReflexSurface {
+		t.Error("surfaced after 3 seconds; the bot would break out of every puddle it wades through")
+	}
+
+	spent := Snapshot{HP: 20, Hunger: 20, Underwater: true, SecondsUnderwater: 10}
+	if got := DecideReflex(spent, thresholds); got.Kind != ReflexSurface {
+		t.Errorf("reflex = %v at exactly the threshold, want ReflexSurface", got.Kind)
+	}
+}
+
+// TestDryLandNeverTriggersTheBreathReflex is the false-positive guard. The
+// counter is a count of seconds, and a stale one would drown a bot standing in
+// a field.
+func TestDryLandNeverTriggersTheBreathReflex(t *testing.T) {
+	t.Parallel()
+
+	thresholds := Thresholds{LowHP: 8, LowHunger: 6, LowAirSeconds: 10}
+
+	dry := Snapshot{HP: 20, Hunger: 20, Underwater: false, SecondsUnderwater: 0}
+	if got := DecideReflex(dry, thresholds); got.Kind == ReflexSurface {
+		t.Error("surfaced on dry land")
+	}
+
+	// A stale counter with Underwater false is the specific bug this guards: the
+	// bot has to clear the clock when it breaks the surface, not just stop
+	// reading it.
+	stale := Snapshot{HP: 20, Hunger: 20, Underwater: false, SecondsUnderwater: 999}
+	if got := DecideReflex(stale, thresholds); got.Kind == ReflexSurface {
+		t.Error("a stale submersion count sent a bot on dry land to the surface")
+	}
+}
+
+// TestEveryReflexRemainsReachable is a regression guard on the new branch. The
+// breath check runs first and returns early, so the reflexes after it are only
+// ever reached when the bot is breathing. This walks each of them to prove the
+// early return did not swallow one.
+func TestEveryReflexRemainsReachable(t *testing.T) {
+	t.Parallel()
+
+	thresholds := Thresholds{LowHP: 8, LowHunger: 6, LowAirSeconds: 10}
+
+	cases := []struct {
+		name string
+		snap Snapshot
+		want ReflexKind
+	}{
+		{"critical health", Snapshot{HP: 2, Hunger: 20}, ReflexFlee},
+		{"hunger", Snapshot{HP: 20, Hunger: 1}, ReflexEat},
+		{"a player appears", Snapshot{HP: 20, Hunger: 20, Nearby: []Person{{Name: "Steve", Distance: 3, HasLineOf: true}}}, ReflexLook},
+		{"nothing at all", Snapshot{HP: 20, Hunger: 20}, ReflexNone},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := DecideReflex(tc.snap, thresholds); got.Kind != tc.want {
+				t.Errorf("reflex = %v, want %v", got.Kind, tc.want)
+			}
+		})
+	}
+}

@@ -4,6 +4,8 @@ import (
 	"math"
 	"strings"
 
+	"bedrock-ai/internal/bot/durability"
+
 	"github.com/go-gl/mathgl/mgl32"
 )
 
@@ -84,15 +86,30 @@ func (bm *BlockMiner) equipToolByType(requiredType string) bool {
 	}
 
 	for _, toolName := range priority {
-		for slot, item := range inv {
-			if item.Count <= 0 {
+		// Slots are walked in index order rather than map order, so two picks
+		// of the same tier always resolve to the same one. A bot that alternates
+		// between two identical picks looks like it is thinking.
+		for slot := uint32(0); slot < 64; slot++ {
+			item, held := inv[slot]
+			if !held || item.Count <= 0 {
 				continue
 			}
 			name := names[item.NetworkID]
-			if strings.Contains(strings.ToLower(name), toolName) {
-				_ = bot.EquipItem(slot)
-				return true
+			if !strings.Contains(strings.ToLower(name), toolName) {
+				continue
 			}
+			// A tool that is nearly spent is skipped in favour of the next tier
+			// down. Grinding the best pickaxe to breaking and then mining nothing
+			// for the rest of the vein is the failure this exists to prevent —
+			// and the gather still reports success, because nothing in the
+			// pipeline knows the block never came out.
+			if tracker, ok := any(bot).(interface{ DurabilityTracker() *durability.Tracker }); ok {
+				if tracker.DurabilityTracker().ShouldReplace(slot, name) {
+					continue
+				}
+			}
+			_ = bot.EquipItem(slot)
+			return true
 		}
 	}
 	return false

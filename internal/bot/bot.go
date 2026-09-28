@@ -10,6 +10,8 @@ import (
 	"bedrock-ai/internal/ai"
 	"bedrock-ai/internal/bot/building/coordinator"
 	"bedrock-ai/internal/bot/combat"
+	"bedrock-ai/internal/bot/dimension"
+	"bedrock-ai/internal/bot/durability"
 	"bedrock-ai/internal/bot/entity"
 	"bedrock-ai/internal/bot/exploration"
 	"bedrock-ai/internal/bot/farming"
@@ -24,6 +26,7 @@ import (
 	"bedrock-ai/internal/bot/world"
 	"bedrock-ai/internal/config"
 	"bedrock-ai/internal/event"
+	"bedrock-ai/internal/evidence"
 	"bedrock-ai/internal/handler"
 	"bedrock-ai/internal/memory"
 
@@ -264,6 +267,28 @@ type Bot struct {
 	// SubChunkRequest must echo it or the server replies
 	// SubChunkResultInvalidDimension and no terrain ever arrives.
 	ChunkDimension int32
+	// Dimension is the same thing in words: which of the three worlds the bot is
+	// standing in. Kept alongside the raw ID because the ID only ever appears in
+	// packet plumbing, and a brain that has to translate 1 into "the Nether"
+	// every time it asks a question will eventually ask it wrong.
+	Dimension dimension.Dimension
+	// Durability is the shared count of how much life the bot's tools have left.
+	// It lives on the bot rather than inside the combat manager because two
+	// subsystems wear the same tools — the miner breaks pickaxes and combat
+	// breaks swords — and a pickaxe that tracked its life in one place and was
+	// ignored in the other would be a pickaxe that breaks mid-vein.
+	Durability *durability.Tracker
+	// Evidence is the durable, structured record of what the bot actually did.
+	//
+	// It is separate from the console logger because a console line is gone when
+	// the process ends, and the questions worth asking afterwards are all about
+	// sequence: which plan was it on, which steps had already completed, how many
+	// times did this one fail. Those need a file, and they need a sequence
+	// number, and neither is something slog gives you.
+	//
+	// It may be nil, and every method on it tolerates that, so a bot that never
+	// opened a log behaves exactly like one that did — with nothing recorded.
+	Evidence *evidence.Logger
 	// SubChunkLimit is the server's advertised cap on how many sub-chunks one
 	// SubChunkRequest may carry. Zero or negative means the server set no limit,
 	// so the full world column is requested.
@@ -544,6 +569,8 @@ func newBot(opts ...Option) (*Bot, error) {
 		UniqueIDToRuntimeID: make(map[int64]uint64),
 		VelY:                0.0,
 		LastJumpPathIndex:   -1,
+		Durability:          durability.NewTracker(),
+		Evidence:            evidence.Open("logs/events.jsonl"),
 	}
 
 	for _, opt := range opts {
@@ -571,4 +598,15 @@ func (b *Bot) validate() error {
 		return fmt.Errorf("event bus is required")
 	}
 	return nil
+}
+
+// DurabilityTracker exposes the shared tool-life counter.
+//
+// The combat manager and the gatherer both wear tools and both need to know how
+// much life is left in them, but neither of them owns them. This is the seam:
+// an optional method on the bot, rather than a field on either subsystem's
+// interface, because a subsystem that has to be handed a tracker it does not use
+// is a subsystem coupled to a concern that is not its own.
+func (b *Bot) DurabilityTracker() *durability.Tracker {
+	return b.Durability
 }

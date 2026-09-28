@@ -117,6 +117,12 @@ func applyAGIDefaults(cfg *Config) {
 	if agi.LowHunger < 0 || agi.LowHunger > 20 {
 		agi.LowHunger = 6
 	}
+	// Ten seconds is roughly the vanilla air supply's margin: long enough that
+	// a bot crossing a flooded tunnel does not panic, short enough that it is
+	// already climbing before the damage starts.
+	if agi.LowAirSeconds <= 0 {
+		agi.LowAirSeconds = 10
+	}
 	if agi.WanderDurationSec <= 0 {
 		agi.WanderDurationSec = 20
 	}
@@ -181,6 +187,21 @@ func applyAGIDefaults(cfg *Config) {
 	}
 	if agi.IdleNudgeReach <= 0 {
 		agi.IdleNudgeReach = 6
+	}
+	// The mode is normalised here rather than only where the runner reads it,
+	// so that everything asking the config what mode the bot is in — a status
+	// line, a test, a future CLI — gets the same answer the runner will. A
+	// config that reports "plan" while the bot is in planning mode is a config
+	// that lies about itself.
+	agi.Mode = NormalizeMode(agi.Mode)
+	if agi.PlanLifetimeMin <= 0 {
+		agi.PlanLifetimeMin = 60
+	}
+	if agi.PlanReplanMin <= 0 {
+		agi.PlanReplanMin = 10
+	}
+	if agi.PlanMaxSteps <= 0 {
+		agi.PlanMaxSteps = 12
 	}
 }
 

@@ -5,6 +5,7 @@ import (
 	"sync"
 	"time"
 
+	"bedrock-ai/internal/bot/durability"
 	"bedrock-ai/internal/bot/entity"
 	"bedrock-ai/internal/event"
 
@@ -52,14 +53,29 @@ type CombatManager struct {
 	mu           sync.Mutex
 	lastAttack   time.Time
 	recentKills  map[uint64]time.Time
+	// durability counts swings per held slot so a tool can be swapped before
+	// it breaks mid-vein. It is shared with the gatherer through the bot, so
+	// one pickaxe has one life whether it is used on a skeleton or on stone.
+	durability *durability.Tracker
 }
 
 func NewCombatManager(bot Bot, logger *slog.Logger) *CombatManager {
-	return &CombatManager{
+	cm := &CombatManager{
 		bot:         bot,
 		logger:      logger,
 		recentKills: make(map[uint64]time.Time),
 	}
+	// The shared tracker lives on the bot, because the miner wears the same
+	// tools. It is picked up through an optional assertion rather than added to
+	// the interface: a bot that does not carry one simply gets a local tracker,
+	// which is the old behaviour and still correct on its own.
+	if carrier, ok := bot.(interface{ DurabilityTracker() *durability.Tracker }); ok {
+		cm.durability = carrier.DurabilityTracker()
+	}
+	if cm.durability == nil {
+		cm.durability = durability.NewTracker()
+	}
+	return cm
 }
 
 func (cm *CombatManager) SetFriendlyMode(enabled bool) {

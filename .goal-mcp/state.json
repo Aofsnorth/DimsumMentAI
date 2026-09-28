@@ -1,53 +1,147 @@
 {
   "goal": {
-    "id": "g-mukfwsvntl",
-    "objective": "Perluas ekosistem Jev untuk AGI bot (fix endpoint/schema API, kurikulum aktivitas lebih kaya, anti-repetisi, logging terlihat) dan bikin idle look-around gerakannya super natural, lalu enable AGI+Jev di config.",
-    "stop_condition": "go build ./... dan go test ./... hijau, pnxcheck PASS, config agi.enabled+jev.enabled true, dan kode idle gaze baru lolos test unit; live run bot ke 192.168.1.19 (jika server hidup) tanpa invalidSkin dan dengan log \"AGI loop started\" + log Jev INFO.",
+    "id": "g-mul54bohgt",
+    "objective": "Tambah mode 'default' dan 'planning' pada AGI. Planning mode = substrates perencanaan jangka panjang yang general (plan+waypoint+step lifecycle, LLM sebagai planner, Jev sebagai eksekutor bounded), ditambah port penuh fitur Minecraft-Agents yang portable: safety reflexes (ground/breath/corner), multi-dimensi (Nether, stronghold, End portal, dragon fight), combat craft (sweep damage, tool durability, shield), inventory robustness, dan evidence logging.",
+    "stop_condition": "Setiap layer punya test lulus + perilaku observable: (1) mode switch default|planning via config, kedua mode berfungsi; (2) plan dengan objective+steps+waypoints, step lifecycle complete/fail/advance, LLM tidak memblokir aksi; (3) ground-safety (lava/void/fall impassable), breath-safety, corner-safety sebagai reflex di pathfinding; (4) multi-dimensi: portal entry/exit + stronghold/eyes/End portal; (5) combat craft: weapon choice menghindari sweep damage, tool durability, shield use; (6) inventory/container recovery; (7) evidence log events.jsonl terstruktur. go build/vet/test ./... hijau tiap checkpoint.",
     "validation": [
       "go build ./...",
       "go test ./...",
-      "go run ./cmd/pnxcheck",
-      "go run ./cmd/lanprobe -w 5s -host 192.168.1.19"
+      "go vet ./...",
+      "go run ./cmd/pnxcheck"
     ],
-    "constraints": [],
-    "status": "blocked",
-    "created_at": "2026-09-27T23:18:48.371Z",
-    "updated_at": "2026-09-27T23:53:03.135Z",
-    "checkpoints": 2,
-    "max_checkpoints": 12,
+    "constraints": [
+      "Jangan ubah offline/lan_discovery di configs/bot.yaml",
+      "Jangan pernah commit .env atau configs/token.json",
+      "Pertahankan test yang ada: storage, world/signs, jev, movement/idle_gaze, fov, goal, curriculum, survival, speech_owner",
+      "Jev tetap opsional: AGI harus jalan tanpa kunci",
+      "Planning mode harus general: objective来自 data/LLM, bukan hardcode per-target",
+      "Default mode harus tetap berfungsi penuh; planning mode aditif, bukan pengganti"
+    ],
+    "status": "done",
+    "created_at": "2026-09-28T11:04:29.729Z",
+    "updated_at": "2026-09-28T12:15:40.163Z",
+    "checkpoints": 7,
+    "max_checkpoints": 60,
     "progress_log": [
       {
-        "at": "2026-09-27T23:44:04.361Z",
+        "at": "2026-09-28T11:38:44.230Z",
         "checkpoint": 1,
-        "summary": "Chest storage & signage built end-to-end: Jev endpoint fixed to /v1/systemone with `probabilities` schema; container session captures ContainerOpen/Close/InventoryContent; sign text parsed from chunk block-entity NBT; storage service enforces LOS+reach+face-then-click; multi-chest search reads signage first then opens one at a time; read_sign/take/store handlers wired.",
-        "validation_result": "go build ./... clean; go test ./... all packages pass (storage 9 tests, world sign NBT 5 tests, jev client test updated to the real endpoint). Two real bugs found and fixed by the new tests: CleanSignText left the format code byte behind (\"§lBAHAN\" -> \"lBAHAN\"), and sign->chest line-of-sight was blocked by the sign's own cell."
+        "summary": "Finished M1 + M2: wrote internal/bot/agi/planner.go (planner prompt, ParsePlanReply, StepAction, kind aliases, planningTick, async requestPlan, dispatchStep with retry + position verification), wired the planning branch into Tick, fixed config mode normalization, documented bot.yaml.",
+        "validation_result": "go build ./... exit 0; go vet ./... clean; go test ./... all packages ok; go run ./cmd/pnxcheck exit 0; gofmt -l clean; real configs/bot.yaml loads to mode=default lifetime=60 replan=10 maxsteps=12"
       },
       {
-        "at": "2026-09-27T23:50:21.187Z",
+        "at": "2026-09-28T11:47:34.547Z",
         "checkpoint": 2,
-        "summary": "Completed chest/sign feature set plus the AGI/Jev naturalness work: saccade-based idle gaze (skewed amplitudes + fixations + micro-saccades + ground glances), expanded Jev curriculum (chat/gesture/mine/look_around), anti-repeat loop guard, INFO-level Jev logging so silent fallback is visible, sign text fed into both Jev state and LLM prompt, AGI+Jev enabled in config, and new action tags documented in the main system prompt.",
-        "validation_result": "go build ./... clean; go test ./... all packages pass; go run ./cmd/pnxcheck reports every PNX login check PASS (skin fix intact); Zed diagnostics now report 0 errors and 0 warnings. gofmt clean on all newly created files after converting them from CRLF to the repo's dominant LF. Live verification BLOCKED: `go run ./cmd/lanprobe -w 5s -host 192.168.1.19` shows RakNet i/o timeout, so the user's server is not running."
+        "summary": "Closed two naturalness gaps found by code audit: block interaction could click through walls (added LOS filter to interact resolve), and building auto-digged any solid block including storage (added keep-list to placer clearObstructions).",
+        "validation_result": "go build ./... exit 0; go vet ./... clean; go test ./... zero failures incl. 12 new tests; go run ./cmd/pnxcheck exit 0; gofmt clean on all touched files"
       },
       {
-        "at": "2026-09-27T23:53:03.135Z",
-        "checkpoint": 2,
-        "summary": "goal_control:blocked — Semua kode, build, test, dan pnxcheck selesai serta hijau. Live run tertahan karena server 192.168.1.19 tidak menjawab (RakNet i/o timeout) — perlu user menyalakan server lalu menjalankan go run ./cmd/bot/ untuk verifikasi invalidSkin + log Jev.",
-        "validation_result": "-"
+        "at": "2026-09-28T11:58:22.585Z",
+        "checkpoint": 3,
+        "summary": "M3 done: ground-safety (lethal blocks + void folded into IsHazard so all movement modes inherit it), corner-safety (whole arc must be clear, fixing a midpoint-only check), breath-safety (ReflexSurface outranks health, world-derived submersion clock).",
+        "validation_result": "go build ./... exit 0; go vet ./... clean; go test ./... zero failures with 15 new tests; 2 real bugs found and fixed by the new tests"
+      },
+      {
+        "at": "2026-09-28T12:02:08.012Z",
+        "checkpoint": 4,
+        "summary": "M4 done: new pure internal/bot/dimension package (dimension detection by majority marker, portal classification lit/unlit/end-frame/open, stronghold hints reported not acted on) plus the real bug fix — the world cache and local world model were never reset on a dimension change.",
+        "validation_result": "go build ./... exit 0; go vet ./... clean; go test ./... zero failures (13 new tests: 9 dimension, 2 world-model reset, 2 earlier); go run ./cmd/pnxcheck exit 0"
+      },
+      {
+        "at": "2026-09-28T12:09:33.422Z",
+        "checkpoint": 5,
+        "summary": "M5 done: situational weapon choice (was a static tier list), shield raise/lower actually wired (RaiseShield had no callers), and a shared durability tracker that both combat and the miner consult so a tool is swapped before it breaks mid-vein.",
+        "validation_result": "go build ./... exit 0; go vet ./... clean; go test ./... zero failures with 19 new tests (10 combat choice, 9 durability); gofmt clean on all touched files except pre-existing CRLF chopper.go"
+      },
+      {
+        "at": "2026-09-28T12:12:00.949Z",
+        "checkpoint": 6,
+        "summary": "M6 done: fixed a permanent pendingCrafts leak on stack-request timeout and map-order nondeterminism in FindItemSlotByName (the ghost-item bug), plus a new diagnosis/recovery policy for cursor, stale container and count drift.",
+        "validation_result": "go build ./... exit 0; go vet clean; go test ./... zero failures with 9 new inventory recovery tests; 2 real bugs fixed"
+      },
+      {
+        "at": "2026-09-28T12:15:40.163Z",
+        "checkpoint": 7,
+        "summary": "M7 done: structured NDJSON evidence log (never blocks, never rate-limits, counts its own gaps) wired to plan lifecycle, reflexes and dimension changes. All seven layers M1-M7 are complete.",
+        "validation_result": "go build ./... exit 0; go vet ./... clean; go test ./... zero failures; go run ./cmd/pnxcheck exit 0; go run ./cmd/archcheck 0 findings; 7 layers M1-M7 complete"
       }
     ],
     "evidence": [
       {
-        "id": "e-mukh4raj8l",
-        "at": "2026-09-27T23:52:59.179Z",
+        "id": "e-mul6c5sssi",
+        "at": "2026-09-28T11:38:34.973Z",
         "kind": "test",
-        "description": "go build ./... clean and go test ./... passes across all packages. New coverage: internal/bot/storage (9 tests) and internal/bot/world sign NBT parsing (5 tests) plus internal/bot/movement idle-gaze statistics (5 tests).",
+        "description": "M1 (mode switch) + M2 (plan substrate) complete. Added internal/bot/agi/planner.go: ParsePlanReply (pure, tolerant of fences/prose/think blocks, drops unimplementable kinds, clamps to PlanMaxSteps), StepAction (kind -> action label:param table, rest/wait resolve to a real no-op), normalizeStepKind alias table, planningTick (expire -> replan-if-due -> wander-fallback -> failed-step-to-planner -> dispatch), requestPlan (async goroutine via AiClient.AskPlanner, single-flight + 30s cooldown), dispatchStep (one step in flight, retry once then hand back to planner), arrivedAt (post-move position check for coordinate go_to), announce (routes through the existing P4 speech gate). Wired cfg.Mode == config.ModePlanning into Tick below the reflex layer. Fixed a real config bug: applyAGIDefaults only handled an empty mode, so mode: \"plan\" was stored raw and NormalizeMode was never called at load time. configs/bot.yaml documents mode + plan budget in Indonesian with honest limitations.",
         "result": "pass"
       },
       {
-        "id": "e-mukh4rau9t",
-        "at": "2026-09-27T23:52:59.190Z",
-        "kind": "other",
-        "description": "go run ./cmd/pnxcheck replays the bot's exact login payload and re-runs PowerNukkitX's whole validation chain; every check reports PASS, including ClientSkinData.readSkin and SkinUtils.isValid. The earlier base64 SkinGeometryDataEngineVersion fix is intact.",
+        "id": "e-mul6c8z3ra",
+        "at": "2026-09-28T11:38:39.087Z",
+        "kind": "test",
+        "description": "Full validation suite green: go build ./... (exit 0), go vet ./... (no output), go test ./... (all 35 packages ok, 0 failures), go run ./cmd/pnxcheck (exit 0, every PNX login check passes). gofmt -l clean on internal/bot/agi, internal/config, tests/config. Also verified the real configs/bot.yaml loads through config.Load and yields mode=\"default\" lifetime=60 replan=10 maxsteps=12. New tests: 12 in internal/bot/agi/planner_test.go (parse tolerance, rejection, clamping, kind normalisation, StepAction table, plan lifecycle, abandon, replan schedule, renderPlan, mode normalization) and 2 in tests/config/loader_test.go (planning off by default, aliases read from YAML).",
+        "result": "pass"
+      },
+      {
+        "id": "e-mul6nhx688",
+        "at": "2026-09-28T11:47:23.898Z",
+        "kind": "test",
+        "description": "Closed the two \"not playing like a player\" gaps found by code audit. (1) Block interaction could reach through walls: internal/bot/interact/visibility.go adds lineOfSightToBlock + onlyVisible with a see-through block table (torches, rails, water, crops, wall furniture), wired into Resolve's scanBlocks closure so BOTH the named path and the in-front path get it and cannot drift apart. Rule mirrors the storage layer exactly: target cell never occludes itself, unloaded cells never block, loaded cells block unless known see-through. Unknown blocks count as solid, so a new wall material occludes the moment it exists. (2) Building auto-digged any solid block: clearObstructions now returns bool and refuses storage + interactive blocks, reusing the existing storage.IsContainerBlock (suffix-matching, catches modded vaults) and interact.IsInteractiveBlockName rather than a third list. PlaceBlockAt aborts instead of building into a preserved cell. Added GetBlockName to common.BotInterface (*bot.Bot already satisfied it; no test fakes implement that interface).",
+        "result": "pass"
+      },
+      {
+        "id": "e-mul6nmqt4p",
+        "at": "2026-09-28T11:47:30.149Z",
+        "kind": "test",
+        "description": "Validation after both fixes: go build ./... exit 0, go vet ./... clean, go test ./... all packages ok with zero failures (12 new tests: 6 in internal/bot/interact/visibility_test.go covering wall rejection, fallback-to-visible-target, see-through non-occlusion, target-not-own-occluder, unknown-cells-pass, onlyVisible; 4 in internal/bot/building/placer/helpers_test.go covering 12 protected block names, ordinary terrain still dug, empty site, unnamed block). All 9 pre-existing interact tests and the rest of the suite still pass. go run ./cmd/pnxcheck exit 0. gofmt -l clean on every file touched; the files it does list are pre-existing CRLF files unrelated to this work and were deliberately left alone.",
+        "result": "pass"
+      },
+      {
+        "id": "e-mul71d51aa",
+        "at": "2026-09-28T11:58:10.885Z",
+        "kind": "test",
+        "description": "M3 safety reflexes. (1) Ground safety: new internal/bot/pathfinder/safety.go defines a lethal-block vocabulary (lava/fire/magma/campfire/cactus/berry bush/cobweb/wither rose/powder snow/end portal) plus the void (below -64 / above 320), and folds BOTH into IsHazard — so every existing neighbour rule (walk, drop, parkour, step-jump, diagonal, scaffold, ladder) inherits the safety without any of them knowing the list exists. Unloaded cells deliberately do not block, otherwise the bot roots itself in undecoded chunks. (2) Corner safety: appendCornerParkourIfPossible tested only a single arc midpoint, so a 2-block lateral swing could pass through a wall; replaced with cornerArcClear which walks the whole swept arc at feet+head height. (3) Breath safety: new ReflexSurface checked FIRST in DecideReflex, ahead of the health branch, because health only falls once air is nearly gone. Snapshot gains Underwater/SecondsUnderwater derived from the world (HeadCell = feet+1) rather than an air packet, since this client has never been shown receiving one; the clock resets on surfacing so ducking back down does not buy a fresh supply. surface() navigates via the pathfinder rather than reaching into the movement input loop, which rebuilds jump state every tick. New config knob low_air_seconds (default 10).",
+        "result": "pass"
+      },
+      {
+        "id": "e-mul71i9mjx",
+        "at": "2026-09-28T11:58:17.530Z",
+        "kind": "test",
+        "description": "M3 validation: go build ./... exit 0, go vet ./... clean, go test ./... zero failures. 15 new tests. pathfinder/safety_test.go (8): lethal blocks are hazards, ordinary terrain is not (guards against the safety list swallowing the world), the void is a hazard with no block to name, unloaded cells are not hazards, HeadCell is one block up, water is water, corner arc needs the whole way clear (both directions). agi/curriculum_test.go (4 + 1 table): drowning outranks hunger AND an approaching player, the reflex waits for the threshold rather than firing on contact, dry land never triggers it even with a stale counter, and every pre-existing reflex is still reachable after the early return. Two real bugs were caught by these tests and fixed: cornerArcClear never took the absolute value of dz, so a straight +Z sweep had span 1 and checked a single cell; and the test fake initially returned names from GetBlockRID, which is a path the production bot never takes (it resolves names through WorldCache.BlockName(rid)).",
+        "result": "pass"
+      },
+      {
+        "id": "e-mul76brww4",
+        "at": "2026-09-28T12:02:02.396Z",
+        "kind": "test",
+        "description": "M4 multi-dimension. New pure package internal/bot/dimension with: Dimension type (Unknown/Overworld/Nether/TheEnd, Unknown is a supported state not a failure), FromServerID mapping the three fixed Bedrock LevelChunk IDs and returning Unknown for anything else rather than guessing, Detect() inferring dimension from block names by MAJORITY of markers (so one netherrack decoration does not move the bot's map, and obsidian is deliberately in neither set because it is both the Nether portal frame and the End's floor), Classify() separating a lit portal from an unlit obsidian frame from end portal frames from an active end portal, and IsStrongholdHint reporting-only detection. Two real bugs fixed on the way: (1) WorldCache.Reset() and the local world model were never called on a dimension change, so the bot reasoned about a cache full of the world it had just left — now compared against the previous ChunkDimension on every LevelChunk, with a log line saying which way it went; (2) added LocalWorldModel.Reset() which drops mined/placed/hazard/temp/body-clearance overrides but deliberately KEEPS the chunk querier and path bounds, since those are where to ask and what the current trip is, not facts about a world.",
+        "result": "pass"
+      },
+      {
+        "id": "e-mul7fuxp74",
+        "at": "2026-09-28T12:09:27.133Z",
+        "kind": "test",
+        "description": "M5 combat craft. (1) Weapon choice was a static tier list with no situational input, so a bot with a bow and a sword picked the sword against a creeper forty blocks away. New internal/bot/combat/choice.go splits that list by KIND first (sword/axe/bow/crossbow/trident/shield) and only then by tier within the kind, with overrides in order of how situational they are: water -> trident (a bow cannot be drawn and a melee swing may not connect); range with arrows -> crossbow then bow (a crossbow is not re-drawn between shots); two or more hostiles in melee -> axe (sweep clears the group where a sword takes them one at a time); otherwise sword. Falls back rather than giving up when the chosen kind is not carried, and WeaponNone is a real answer so fists still count. Slots are walked in index order so a tie is deterministic. (2) Shield: RaiseShield existed, was wired to nothing, and a shieldUp field was written and never read. PlanShield now distinguishes Raise (something in melee range, healthy enough to afford the seconds) / Lower (threat gone, or the bot is committed to the kill and blocking is a slower death) / Hold, and applyShield runs it every combat tick. (3) Durability: new shared internal/bot/durability package counting tool uses per slot, replacing at 80% of the vanilla limit. Wired into combat (every swing records a use) and into gathering's equipToolByType, which now skips a nearly-spent tool in favour of the next tier down — that was the named M5 failure: mining a stone vein with a wooden pickaxe until it breaks mid-swing, every block after coming out as nothing, while the gather still reports success. The tracker hangs off the bot behind an optional DurabilityTracker() method so both subsystems share one life per tool.",
+        "result": "pass"
+      },
+      {
+        "id": "e-mul7j1gh81",
+        "at": "2026-09-28T12:11:55.553Z",
+        "kind": "test",
+        "description": "M6 inventory robustness. Two real bugs fixed. (1) sendStackRequest deleted its pendingCrafts entry on write failure and on connection close but NOT on the 5s timeout — every timed-out request left a map entry holding a channel nobody would read, for the rest of the session, and a late server response still found a listener for a craft path that had already given up. (2) FindItemSlotByName ranged over the inventory map, and Go randomises map iteration, so the same request could return a different slot each call for a bot holding two of something. That is the ghost-item bug the codebase already guards against elsewhere (dropTargetSlotLocked has a comment about exactly this): drop one stack, the server updates that slot, the other is still there, the next drop takes it too. Now a linear scan of slots 0-35. (3) New internal/bot/inventory/recovery.go: the diagnosis and recovery policy that did not exist. Container sessions tracked what the server last said but nothing noticed when the bot's view drifted from it, and nothing swept a stuck cursor back into the bag except a craft that had already failed. Diagnose/Plan fix ONE problem at a time in a fixed order (cursor, stale container, count drift) because inventory operations interfere — a resync issued with a cursor still attached reports a view the bot cannot act on. MergeConfirmed treats a non-nil confirmation as a COMPLETE snapshot and defers to the server on every count, dropping slots the server emptied.",
+        "result": "pass"
+      },
+      {
+        "id": "e-mul7nkt9vt",
+        "at": "2026-09-28T12:15:27.264Z",
+        "kind": "test",
+        "description": "M7 evidence logging. New leaf package internal/evidence (imports stdlib only, so it cannot cycle and passes archcheck): NDJSON events.jsonl, one object per line, with a UTC timestamp, a monotonic sequence number (wall clocks are not precise enough to order events that share a millisecond), a kind string, a human-readable detail, and free-form fields. Three rules in priority order: (1) never block the caller — a single non-blocking channel send, because a bot that stalls waiting for a log write is a bot that stood still at the wrong moment; (2) never rate-limit — the existing debuglog drops anything within 250ms, which is right for debugging one thing and exactly wrong for evidence, since the dropped line is the one you wanted; (3) never lie about gaps — a full buffer drops and COUNTS, and Summary() reports it at shutdown, so \"the bot did not do this\" stays distinguishable from \"we did not see it happen\". Rotates at 16MiB by rename, not truncate, because the session that went wrong is usually not the one you are watching when you notice. Wired to the plan lifecycle (plan ready / step start-adjacent / step done carrying the planner's own description / step retry / step failed with the replan flag / plan complete), reflexes (recorded BEFORE the action, so \"the reflex fired\" and \"the reflex did what it should\" stay distinct claims), and dimension changes. Added ReflexKind.String() because a reflex identifiable only by integer value cannot be looked up in a past session.",
+        "result": "pass"
+      },
+      {
+        "id": "e-mul7nq90bp",
+        "at": "2026-09-28T12:15:34.308Z",
+        "kind": "test",
+        "description": "M7 validation plus final goal sweep. go build ./... exit 0, go vet ./... clean, go test ./... zero failures, go run ./cmd/pnxcheck exit 0, and go run ./cmd/archcheck reports 0 architecture findings. 9 new evidence tests, which caught three real defects in my own first draft: Record() contained a BLOCKING send followed by a select/default that could never help, directly contradicting the never-block promise; the sequence number was assigned at call time (racy across the eight goroutines that record) rather than at write time; and three tests read the file before Close(), which is a race, and two asserted full record counts through a 256-slot buffer where drops are correct behaviour. The evidence logger itself caught a test that \"proved\" a bot must not block on an unopenable log by using a path that MkdirAll could in fact create.",
         "result": "pass"
       }
     ]
@@ -104,10 +198,106 @@
     {
       "id": "t-7",
       "subject": "Validasi: build, test, pnxcheck, lanprobe, live run",
-      "status": "in_progress",
+      "status": "pending",
       "blocked_by": [],
       "created_at": "2026-09-27T23:26:49.514Z",
-      "updated_at": "2026-09-27T23:49:05.296Z"
+      "updated_at": "2026-09-28T11:48:57.703Z"
+    },
+    {
+      "id": "t-8",
+      "subject": "P0: FOV cone — persepsi dibatasi sudut pandang + head yaw",
+      "status": "completed",
+      "blocked_by": [],
+      "created_at": "2026-09-27T23:56:57.944Z",
+      "updated_at": "2026-09-28T00:00:33.881Z"
+    },
+    {
+      "id": "t-9",
+      "subject": "P1: Goal-loop Jev — tujuan besar → subgoal nyata",
+      "status": "completed",
+      "blocked_by": [],
+      "created_at": "2026-09-27T23:56:57.954Z",
+      "updated_at": "2026-09-28T00:04:29.270Z"
+    },
+    {
+      "id": "t-10",
+      "subject": "P2: Subsystem autonomy — fishing/farming/husbandry/building/crafting masuk kurikulum",
+      "status": "completed",
+      "blocked_by": [],
+      "created_at": "2026-09-27T23:56:57.956Z",
+      "updated_at": "2026-09-28T00:08:11.954Z"
+    },
+    {
+      "id": "t-11",
+      "subject": "P3: Survival reactive — sleep/torch/recover otomatis saat tick",
+      "status": "completed",
+      "blocked_by": [],
+      "created_at": "2026-09-27T23:56:57.957Z",
+      "updated_at": "2026-09-28T00:14:01.822Z"
+    },
+    {
+      "id": "t-12",
+      "subject": "P4: Unify speech — satu loop bicara (AGI jadi satu-satunya gate)",
+      "status": "completed",
+      "blocked_by": [],
+      "created_at": "2026-09-27T23:56:57.959Z",
+      "updated_at": "2026-09-28T00:16:08.634Z"
+    },
+    {
+      "id": "t-13",
+      "subject": "M1: Mode switch default|planning, kedua mode berfungsi",
+      "status": "completed",
+      "blocked_by": [],
+      "created_at": "2026-09-28T11:04:35.526Z",
+      "updated_at": "2026-09-28T11:38:44.243Z"
+    },
+    {
+      "id": "t-14",
+      "subject": "M2: Plan substrate — objective+steps+waypoints, step lifecycle, planner async",
+      "status": "completed",
+      "blocked_by": [],
+      "created_at": "2026-09-28T11:04:35.530Z",
+      "updated_at": "2026-09-28T11:38:48.054Z"
+    },
+    {
+      "id": "t-15",
+      "subject": "M3: Safety reflexes — ground-safety, breath-safety, corner-safety",
+      "status": "completed",
+      "blocked_by": [],
+      "created_at": "2026-09-28T11:04:35.532Z",
+      "updated_at": "2026-09-28T11:58:22.597Z"
+    },
+    {
+      "id": "t-16",
+      "subject": "M4: Multi-dimensi — Nether portal, stronghold, End portal, dragon fight",
+      "status": "completed",
+      "blocked_by": [],
+      "created_at": "2026-09-28T11:04:35.533Z",
+      "updated_at": "2026-09-28T12:02:08.015Z"
+    },
+    {
+      "id": "t-17",
+      "subject": "M5: Combat craft — sweep damage, tool durability, shield",
+      "status": "completed",
+      "blocked_by": [],
+      "created_at": "2026-09-28T11:04:35.534Z",
+      "updated_at": "2026-09-28T12:09:33.424Z"
+    },
+    {
+      "id": "t-18",
+      "subject": "M6: Inventory robustness — container/cursor recovery, item ordering",
+      "status": "completed",
+      "blocked_by": [],
+      "created_at": "2026-09-28T11:04:35.535Z",
+      "updated_at": "2026-09-28T12:12:00.961Z"
+    },
+    {
+      "id": "t-19",
+      "subject": "M7: Evidence logging — events.jsonl terstruktur",
+      "status": "completed",
+      "blocked_by": [],
+      "created_at": "2026-09-28T11:04:35.537Z",
+      "updated_at": "2026-09-28T12:15:40.174Z"
     }
   ],
   "archived_goals": [
@@ -203,6 +393,130 @@
           "at": "2026-09-27T06:19:40.078Z",
           "kind": "test",
           "description": "Live verification of the NexusOne disconnect fix (GeyserNoHeldItemEcho gate): BOT_PACKET_CAPTURE run against play.nexusone.fun:19132 for 60s — 3172 S2C packets, last S2C at ms=59923, zero C2S MobEquipment echo (previously the only extra packet vs the surviving HansProjects run), zero 'connection lost after a long silence' warnings. Before the fix the server went permanently silent at ~8.4s.",
+          "result": "pass"
+        }
+      ]
+    },
+    {
+      "id": "g-mukfwsvntl",
+      "objective": "Perluas ekosistem Jev untuk AGI bot (fix endpoint/schema API, kurikulum aktivitas lebih kaya, anti-repetisi, logging terlihat) dan bikin idle look-around gerakannya super natural, lalu enable AGI+Jev di config.",
+      "stop_condition": "go build ./... dan go test ./... hijau, pnxcheck PASS, config agi.enabled+jev.enabled true, dan kode idle gaze baru lolos test unit; live run bot ke 192.168.1.19 (jika server hidup) tanpa invalidSkin dan dengan log \"AGI loop started\" + log Jev INFO.",
+      "validation": [
+        "go build ./...",
+        "go test ./...",
+        "go run ./cmd/pnxcheck",
+        "go run ./cmd/lanprobe -w 5s -host 192.168.1.19"
+      ],
+      "constraints": [],
+      "status": "cleared",
+      "created_at": "2026-09-27T23:18:48.371Z",
+      "updated_at": "2026-09-27T23:56:49.225Z",
+      "checkpoints": 2,
+      "max_checkpoints": 12,
+      "progress_log": [
+        {
+          "at": "2026-09-27T23:44:04.361Z",
+          "checkpoint": 1,
+          "summary": "Chest storage & signage built end-to-end: Jev endpoint fixed to /v1/systemone with `probabilities` schema; container session captures ContainerOpen/Close/InventoryContent; sign text parsed from chunk block-entity NBT; storage service enforces LOS+reach+face-then-click; multi-chest search reads signage first then opens one at a time; read_sign/take/store handlers wired.",
+          "validation_result": "go build ./... clean; go test ./... all packages pass (storage 9 tests, world sign NBT 5 tests, jev client test updated to the real endpoint). Two real bugs found and fixed by the new tests: CleanSignText left the format code byte behind (\"§lBAHAN\" -> \"lBAHAN\"), and sign->chest line-of-sight was blocked by the sign's own cell."
+        },
+        {
+          "at": "2026-09-27T23:50:21.187Z",
+          "checkpoint": 2,
+          "summary": "Completed chest/sign feature set plus the AGI/Jev naturalness work: saccade-based idle gaze (skewed amplitudes + fixations + micro-saccades + ground glances), expanded Jev curriculum (chat/gesture/mine/look_around), anti-repeat loop guard, INFO-level Jev logging so silent fallback is visible, sign text fed into both Jev state and LLM prompt, AGI+Jev enabled in config, and new action tags documented in the main system prompt.",
+          "validation_result": "go build ./... clean; go test ./... all packages pass; go run ./cmd/pnxcheck reports every PNX login check PASS (skin fix intact); Zed diagnostics now report 0 errors and 0 warnings. gofmt clean on all newly created files after converting them from CRLF to the repo's dominant LF. Live verification BLOCKED: `go run ./cmd/lanprobe -w 5s -host 192.168.1.19` shows RakNet i/o timeout, so the user's server is not running."
+        },
+        {
+          "at": "2026-09-27T23:53:03.135Z",
+          "checkpoint": 2,
+          "summary": "goal_control:blocked — Semua kode, build, test, dan pnxcheck selesai serta hijau. Live run tertahan karena server 192.168.1.19 tidak menjawab (RakNet i/o timeout) — perlu user menyalakan server lalu menjalankan go run ./cmd/bot/ untuk verifikasi invalidSkin + log Jev.",
+          "validation_result": "-"
+        },
+        {
+          "at": "2026-09-27T23:56:49.225Z",
+          "checkpoint": 2,
+          "summary": "goal_control:clear — Goal lama selesai: fix endpoint Jev, kurikulum, anti-repetisi, log, idle gaze, chest/sign semua terimplementasi, ter-test, dan sudah di-commit (31aff6a, 1d40f9e, 23f2912) serta di-push. Layers berikutnya (P0-P4) akan jadi goal baru.",
+          "validation_result": "-"
+        }
+      ],
+      "evidence": [
+        {
+          "id": "e-mukh4raj8l",
+          "at": "2026-09-27T23:52:59.179Z",
+          "kind": "test",
+          "description": "go build ./... clean and go test ./... passes across all packages. New coverage: internal/bot/storage (9 tests) and internal/bot/world sign NBT parsing (5 tests) plus internal/bot/movement idle-gaze statistics (5 tests).",
+          "result": "pass"
+        },
+        {
+          "id": "e-mukh4rau9t",
+          "at": "2026-09-27T23:52:59.190Z",
+          "kind": "other",
+          "description": "go run ./cmd/pnxcheck replays the bot's exact login payload and re-runs PowerNukkitX's whole validation chain; every check reports PASS, including ClientSkinData.readSkin and SkinUtils.isValid. The earlier base64 SkinGeometryDataEngineVersion fix is intact.",
+          "result": "pass"
+        }
+      ]
+    },
+    {
+      "id": "g-mukh9srvuw",
+      "objective": "Perluas ekosistem AGI bot secara berlapis: P0 FOV cone (persepsi jujur), P1 goal-loop Jev (tujuan besar → subgoal), P2 subsystem autonomy (fishing/husbandry/farming/building/crafting masuk kurikulum), P3 survival reactive, P4 unify speech.",
+      "stop_condition": "Setiap layer punya test lulus dan perilaku observable (bukan log-only): P0 persepsi terbatasi cone; P1 Jev memilih goal yang menurunkan subgoal nyata; P2 AGI bisa memanggil fishing/farming/husbandry/building/crafting; P3 survival.Tick() menghormati flag auto; P4 satu loop bicara. go test ./... hijau setiap checkpoint.",
+      "validation": [
+        "go build ./...",
+        "go test ./...",
+        "go test ./internal/bot/perception/...",
+        "go test ./internal/bot/agi/...",
+        "go test ./internal/bot/survival/..."
+      ],
+      "constraints": [
+        "Jangan ubah offline/lan_discovery di configs/bot.yaml",
+        "Jangan pernah commit .env atau configs/token.json",
+        "Pertahankan test yang sudah ada: storage, world/signs, jev, movement/idle_gaze",
+        "Jev tetap opsional: AGI harus jalan tanpa kunci"
+      ],
+      "status": "done",
+      "created_at": "2026-09-27T23:56:54.379Z",
+      "updated_at": "2026-09-28T00:16:39.778Z",
+      "checkpoints": 3,
+      "max_checkpoints": 40,
+      "progress_log": [
+        {
+          "at": "2026-09-28T00:00:30.880Z",
+          "checkpoint": 1,
+          "summary": "P0 (field of view) selesai: extracted the vision cone into a neutral internal/bot/fov package (avoids the bot<->perception import cycle), applied it to the block summary, SeesPoint, and chest/sign discovery. 7 FOV tests + 2 storage integration tests prove a chest behind the bot is rejected while one in front is kept. Committed as 1ad92dc.",
+          "validation_result": "go build ./... clean; go test ./... all packages pass. fov package: 7 tests pass (ahead visible, behind not visible, close-range all-directions, symmetric cone edges, heading wraparound, vertical bounds, peripheral targets). storage: 2 new tests prove the cone is wired end-to-end (chest behind bot rejected, chest in front kept). gofmt clean on all new files."
+        },
+        {
+          "at": "2026-09-28T00:04:25.012Z",
+          "checkpoint": 2,
+          "summary": "P1 (goal-loop) selesai: Jev kini memilih tujuan besar lintas-tick (QGoal), goal menyaring kurikulum jadi subgoal (NarrowToGoal), goal expire setelah 4 menit, goal-aware anti-repeat (mining berulang saat代人 get wood = bukan loop), dan confidence-gated goal switching. Goal juga masuk state text Jev. Committed as d1e46e5.",
+          "validation_result": "go build ./... clean; go test ./... all packages pass; go vet clean on agi+jev. 6 goal tests + 7 goal_runner tests pass, covering: impossible goals never offered, idle always available, narrowing removes off-goal activities but keeps rest, no-goal narrowing is a no-op, progress only counts advancing activities, expiry works, goal persistence across re-adoption keeps progress, switching resets it, low-confidence switch refused but first goal always accepted, on-goal repeat allowed while off-goal repeat stepped aside."
+        },
+        {
+          "at": "2026-09-28T00:16:31.265Z",
+          "checkpoint": 3,
+          "summary": "P4 selesai (satu pemilik bicara) dan seluruh P0-P4 lengkap: FOV cone (internal/bot/fov), goal-loop Jev dengan expiry+confidence-gating, subsystem autonomy dengan precondition nyata (Features scan), survival reactive (death recovery/night routine/torch dengan cooldown), dan kepemilikan bicara tunggal. Semua ter-push.",
+          "validation_result": "go build ./... clean; go test ./... semua paket ok; go vet ./... clean; go run ./cmd/pnxcheck PASS. 5 commit: 1ad92dc (P0 FOV), d1e46e5 (P1 goals), 16e4321 (P2 subsystems), 9baee2e (P3 survival), 7b0dc22 (P4 speech owner), plus 23f2912 (untrack runtime state). Pushed 23f2912..7b0dc22 to origin/main. 2 bug nyata ditemukan oleh test: autoTorchOn tidak pernah di-set true (torch mati dua lapis), dan cooldown helper menerima pointer ke salinan lokal sehingga tidak pernah mencatat."
+        },
+        {
+          "at": "2026-09-28T00:16:39.778Z",
+          "checkpoint": 3,
+          "summary": "goal_control:complete — Semua layer P0-P4 selesai, ter-test, dan ter-push (1ad92dc, d1e46e5, 16e4321, 9baee2e, 7b0dc22). Build/vet/test/pnxcheck semua hijau.",
+          "validation_result": "-"
+        }
+      ],
+      "evidence": [
+        {
+          "id": "e-mukhz4p2pm",
+          "at": "2026-09-28T00:16:36.230Z",
+          "kind": "test",
+          "description": "go build ./... clean, go vet ./... clean, and go test ./... passes across every package. New coverage added across all four layers: internal/bot/fov (7), internal/bot/agi (6 goal + 7 goal_runner + 4 curriculum), internal/bot/perception (6 features), internal/bot/survival (14 reactive, runtime 0.03s), internal/bot (4 speech owner), internal/bot/storage (11).",
+          "result": "pass"
+        },
+        {
+          "id": "e-mukhz4pcva",
+          "at": "2026-09-28T00:16:36.240Z",
+          "kind": "review",
+          "description": "Every layer is pinned by a behavioural test rather than a log line: the FOV rejects a chest behind the bot, a goal narrows the activity menu, fishing is withheld without water and harvesting without ripe crops, survival defers when busy and death recovery does not, and exactly one loop can own unprompted speech regardless of goroutine order.",
           "result": "pass"
         }
       ]

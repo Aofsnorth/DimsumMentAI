@@ -4,8 +4,8 @@
 
 # --- Server Settings ---
 server:
-  host: "192.168.1.19"
-  port: 19132
+  host: "10.10.21.69"
+  port: 7551
   offline: true # true = no Xbox Live auth (local server)
   lan_discovery: true # auto-discover the single-player world opened to LAN (direct RakNet to a client-hosted world is rejected with invalidSkin — the host requires the Nonce from its advertisement)
   lan_world: "A" # optional: only join a world with this exact name
@@ -80,13 +80,64 @@ bot:
 #
 # social_cooldown_sec is the number that matters most. Without it the bot
 # greets someone on every tick and reads as a spammer rather than a friend.
+#
+# --- mode: dua otak, satu bot ---
+# "default"  : refleks + tujuan pendek. Tiap tick bot tanya "sekarang apa?" dan
+#              dijawab dari keadaan seketika.
+# "planning" : ditambah rencana jangka panjang. Planner (LLM) menulis satu
+#              objective + langkah-langkah; otak menjalankan SATU langkah per
+#              tick dan melaporkannya balik. Perbedaannya bukan berapa lama bot
+#              bergerak, tapi apakah ia tahu apa yang sedang ia kerjakan.
+#
+# Yang bikin planning mode general (bukan "mode naga" atau "mode nether"):
+# objective dan langkah datang dari DATA, bukan dari kode. Kinds langkah
+# (gather/mine/go_to/craft/equip/combat/storage/shelter/rest/observe/enter/wait)
+# adalah satu-satunya kosakata bersama. Menambah kemampuan = menambah KIND,
+# bukan menambah mode.
+#
+# Catatan jujur soal batasnya:
+#   - Planner jalan ASYNC. Aksi tidak pernah menunggu planner; kalau planner
+#     lambat atau mati, bot tetap bergerak seperti mode default.
+#   - Langkah yang GAGAL tidak dilewati. Dia dikembalikan ke planner untuk
+#     direvisi. Bot yang melompati kegagalan lalu melapor "selesai" adalah bot
+#     yang berbohong tentang progresnya.
+#   - go_to ke KOORDINAT diverifikasi (jarak dicek setelah aksi selesai). go_to
+#     ke NAMA blok tidak bisa diverifikasi dari luar lapisan navigasi — itu
+#     batas yang diketahui, bukan hal yang disembunyikan.
+#   - Butuh AI provider aktif. Tanpa itu planning mode diam-diam jadi default.
+#     Cek baris "AGI loop started" di log untuk mode yang benar-benar jalan.
 agi:
   enabled: true
+  # "default" | "planning". Alias yang diterima: plan, long_horizon, long-horizon.
+  # Typo jatuh ke "default" — lebih aman daripada bot half-configured.
+  mode: "default"
+  # Ballast rencana: berapa lama satu rencana boleh hidup sebelum dianggap basi,
+  # dan seberapa sering planner boleh menyela selama itu. Yang kedua inilah yang
+  # mencegah planner lambat membekukan otak — aksi tetap jalan terhadap rencana
+  # sekarang SELAMA planner berpikir.
+  plan_lifetime_min: 60
+  plan_replan_min: 10
+  # Batas panjang rencana. Rencana tanpa batas = wishlist, dan wishlist tidak
+  # bisa diselesaikan. Angka ini juga dikirim ke prompt planner, jadi prompt dan
+  # kode tidak bisa berbeda pendapat soal berapa panjang yang sah.
+  plan_max_steps: 12
   tick_interval_sec: 30
   llm_chance: 0.35
   self_preservation: true
   low_hp_threshold: 8
   low_hunger_threshold: 6
+  # Breath reflex: berapa detik kepala boleh tenggelam sebelum bot berhenti
+  # melakukan apa pun dan naik ke permukaan.
+  #
+  # Kenapa pakai hitungan detik, bukan bar udara? Karena bot ini memang tidak
+  # punya bar udara untuk dibaca — paket air supply Bedrock tidak pernah terlihat
+  # sampai ke client ini. Jadi jujur saja: "am-I-sedang-tenggelam" dijawab dengan
+  # "berapa lama kepalaku di air". HP baru turun setelah udara hampir habis, jadi
+  # refleks yang berbasis HP selalu terlalu lambat.
+  #
+  # 10 detik cukup panjang buat bot menyeberangi terowongan BANJIR tanpa panik,
+  # dan cukup pendek buat dia sudah mulai naik sebelum damage mulai.
+  low_air_seconds: 10
   wander: true
   wander_duration_sec: 20
   social: true

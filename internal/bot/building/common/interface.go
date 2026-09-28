@@ -12,6 +12,7 @@ import (
 // BotInterface defines the methods required by the building subsystem from the main Bot struct.
 type BotInterface interface {
 	GetCoords() mgl32.Vec3
+	GetBlockName(x, y, z int32) (string, bool)
 	GetInventorySlots() map[uint32]protocol.ItemStack
 	GetItemNames() map[int32]string
 	GetEntities() map[uint64]*entity.Info

@@ -274,3 +274,79 @@ server:
 		t.Fatal("Load should error for invalid YAML")
 	}
 }
+
+// TestLoad_AGIPlanningModeDefaultsToOff pins the M1 switch. Planning mode is
+// additive: a config that never mentions it must produce a bot that behaves
+// exactly as it did before planning existed. A default of "planning" would
+// change the bot's behaviour for anyone who merely upgraded, which is a
+// different thing from adding a capability.
+func TestLoad_AGIPlanningModeDefaultsToOff(t *testing.T) {
+	t.Parallel()
+	path := writeTempConfig(t, `
+server:
+  host: "localhost"
+  port: 19132
+bot:
+  name: "TestBot"
+skin:
+  image_path: "skins/test.png"
+  arm_size: "wide"
+`)
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("Load error: %v", err)
+	}
+	if cfg.AGI.Mode != config.ModeDefault {
+		t.Errorf("AGI.Mode = %q, want %q", cfg.AGI.Mode, config.ModeDefault)
+	}
+	// The plan budget has to arrive with real numbers, or the planner is asked
+	// for a plan under a budget of zero.
+	if cfg.AGI.PlanLifetimeMin != 60 {
+		t.Errorf("AGI.PlanLifetimeMin = %d, want 60", cfg.AGI.PlanLifetimeMin)
+	}
+	if cfg.AGI.PlanReplanMin != 10 {
+		t.Errorf("AGI.PlanReplanMin = %d, want 10", cfg.AGI.PlanReplanMin)
+	}
+	if cfg.AGI.PlanMaxSteps != 12 {
+		t.Errorf("AGI.PlanMaxSteps = %d, want 12", cfg.AGI.PlanMaxSteps)
+	}
+}
+
+// TestLoad_AGIPlanningModeIsRead checks the switch is actually wired to the
+// config file, including the aliases. A mode that is normalised on the way in
+// but never read would leave the feature permanently off with nothing to
+// indicate why.
+func TestLoad_AGIPlanningModeIsRead(t *testing.T) {
+	t.Parallel()
+	for _, raw := range []string{"planning", "plan", "long_horizon", "PLANNING"} {
+		t.Run(raw, func(t *testing.T) {
+			t.Parallel()
+			path := writeTempConfig(t, `
+server:
+  host: "localhost"
+  port: 19132
+bot:
+  name: "TestBot"
+skin:
+  image_path: "skins/test.png"
+  arm_size: "wide"
+agi:
+  mode: "`+raw+`"
+  plan_lifetime_min: 45
+  plan_replan_min: 7
+  plan_max_steps: 9
+`)
+			cfg, err := config.Load(path)
+			if err != nil {
+				t.Fatalf("Load error: %v", err)
+			}
+			if cfg.AGI.Mode != config.ModePlanning {
+				t.Errorf("AGI.Mode = %q, want %q", cfg.AGI.Mode, config.ModePlanning)
+			}
+			if cfg.AGI.PlanLifetimeMin != 45 || cfg.AGI.PlanReplanMin != 7 || cfg.AGI.PlanMaxSteps != 9 {
+				t.Errorf("plan budget = %d/%d/%d, want 45/7/9",
+					cfg.AGI.PlanLifetimeMin, cfg.AGI.PlanReplanMin, cfg.AGI.PlanMaxSteps)
+			}
+		})
+	}
+}

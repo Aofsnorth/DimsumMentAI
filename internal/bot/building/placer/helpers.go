@@ -1,26 +1,73 @@
 package placer
 
 import (
-	"bedrock-ai/internal/bot/movement/animation"
-	"bedrock-ai/internal/safecast"
 	"context"
 	"strings"
 	"time"
+
+	"bedrock-ai/internal/bot/interact"
+	"bedrock-ai/internal/bot/movement/animation"
+	"bedrock-ai/internal/bot/storage"
+	"bedrock-ai/internal/safecast"
 
 	"github.com/go-gl/mathgl/mgl32"
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
 	"github.com/sandertv/gophertunnel/minecraft/protocol/packet"
 )
 
-func (bp *BlockPlacer) clearObstructions(ctx context.Context, x, y, z int) {
+// clearObstructions makes room at a build site by breaking whatever is in the
+// way, and reports whether it did.
+//
+// The default used to be "dig anything solid", which is how a bot ends up
+// silently destroying a chest of somebody's storage because a schematic wanted
+// that cell. A player clears a site for the things in their way; they do not
+// quarry their own furniture. Storage, signage and anything else with a real
+// interaction is therefore left alone, and the placement is abandoned instead —
+// failing a build is a visible annoyance, quietly deleting someone's storage is
+// a betrayal.
+//
+// A cell the bot has solidity data for but no name for is still dug, because
+// that is ordinary terrain in a chunk whose names have not been decoded yet.
+// The trade is deliberate: refusing every unnamed block would make building
+// fail constantly, and the classifiers below already cover the blocks that
+// actually hold anything worth keeping.
+func (bp *BlockPlacer) clearObstructions(ctx context.Context, x, y, z int) bool {
 	world := bp.bot.GetLocalWorldModel()
-	pos := protocol.BlockPos{safecast.To[int32](x), safecast.To[int32](y), safecast.To[int32](z)}
+	px, py, pz := safecast.To[int32](x), safecast.To[int32](y), safecast.To[int32](z)
 
-	if world.IsSolid(safecast.To[int32](x), safecast.To[int32](y), safecast.To[int32](z)) {
-		bp.logger.Info("Clearing block obstruction at placement site", "x", x, "y", y, "z", z)
-		bp.digBlock(ctx, pos)
-		world.SetSolid(safecast.To[int32](x), safecast.To[int32](y), safecast.To[int32](z), false)
+	if !world.IsSolid(px, py, pz) {
+		return true
 	}
+
+	if name, known := bp.bot.GetBlockName(px, py, pz); known {
+		if blockIsWorthKeeping(name) {
+			bp.logger.Warn("Refusing to clear a build site: the block there is worth keeping",
+				"x", x, "y", y, "z", z, "block", name)
+			return false
+		}
+	}
+
+	pos := protocol.BlockPos{px, py, pz}
+	bp.logger.Info("Clearing block obstruction at placement site", "x", x, "y", y, "z", z)
+	bp.digBlock(ctx, pos)
+	world.SetSolid(px, py, pz, false)
+	return true
+}
+
+// blockIsWorthKeeping reports whether a block should survive the bot clearing a
+// build site.
+//
+// It reuses the two classifiers the rest of the bot already trusts rather than
+// keeping a third list to drift out of date: storage matches chests, barrels,
+// shulkers, hoppers and modded storage by suffix, and the interaction
+// vocabulary covers doors, signage, workbenches and everything else with a
+// behaviour attached to it.
+func blockIsWorthKeeping(name string) bool {
+	normalised := strings.ToLower(strings.TrimSpace(name))
+	if i := strings.IndexByte(normalised, ':'); i >= 0 {
+		normalised = normalised[i+1:]
+	}
+	return storage.IsContainerBlock(normalised) || interact.IsInteractiveBlockName(normalised)
 }
 
 func (bp *BlockPlacer) digBlock(ctx context.Context, pos protocol.BlockPos) {

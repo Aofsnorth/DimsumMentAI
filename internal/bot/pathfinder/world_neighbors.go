@@ -458,20 +458,11 @@ func (w *LocalWorldModel) appendCornerParkourIfPossible(neighbors []Node, dx, dz
 		}
 
 		if w.canStandAt(lx, cy, lz) && !w.IsSolid(lx, cy+2, lz) {
-			// Air clearance along diagonal arc
-			midX := cx
-			midZ := cz
-			if side.sx > 0 {
-				midX += 1
-			} else if side.sx < 0 {
-				midX -= 1
-			}
-			if side.sz > 0 {
-				midZ += 1
-			} else if side.sz < 0 {
-				midZ -= 1
-			}
-			if w.isAirAt(midX, cy, midZ) {
+			// The whole swept arc has to be open, not just the first cell of it.
+			// A corner jump threads a one-block-wide body between the corner and
+			// whatever is beside it, and checking a single midpoint let a
+			// two-block lateral swing pass straight through a wall on its way.
+			if w.cornerArcClear(cx, cy, cz, lx, lz) {
 				neighbors = append(neighbors, Node{
 					X:        lx,
 					Y:        cy,
@@ -483,6 +474,44 @@ func (w *LocalWorldModel) appendCornerParkourIfPossible(neighbors []Node, dx, dz
 		}
 	}
 	return neighbors
+}
+
+// cornerArcClear walks the cells the bot's body sweeps through while rounding
+// a corner and requires every one of them to be open.
+//
+// Clearance is checked on both sides of the move, which is what makes this a
+// corner rule rather than a line-of-sight rule. A body is a block wide: getting
+// from the bot's cell to the landing cell means every cell on the way has to be
+// free at feet and head height at once. Testing only the midpoint let the two
+// block offset clear a one block gap and a wall at the same time, because
+// neither the near side nor the far side of the corner was ever checked for the
+// whole way through.
+func (w *LocalWorldModel) cornerArcClear(cx, cy, cz, lx, lz int32) bool {
+	dx := int64(lx - cx)
+	dz := int64(lz - cz)
+
+	// Walk the longer axis in whole steps. For a corner move that lands on both
+	// axes this traces the diagonal the body actually sweeps.
+	span := dx
+	for _, v := range []int64{-dx, -dz, dz} {
+		if v > span {
+			span = v
+		}
+	}
+	if span < 1 {
+		span = 1
+	}
+
+	// Step 0 is the bot's own cell and is deliberately not tested: it is
+	// standing there.
+	for step := int64(1); step <= span; step++ {
+		x := cx + int32(dx*step/span)
+		z := cz + int32(dz*step/span)
+		if !w.isAirAt(x, cy, z) {
+			return false
+		}
+	}
+	return true
 }
 
 // canStepDownJumpTo checks if a step-down jump (Y-1) over a gap is valid.

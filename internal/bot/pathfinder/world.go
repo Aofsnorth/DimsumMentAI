@@ -185,6 +185,27 @@ func (w *LocalWorldModel) chunkSaysSolid(x, y, z int32) bool {
 	return loaded && isSolid
 }
 
+// Reset drops everything the model believes about the world.
+//
+// It is called when the bot crosses a dimension. The model's overrides are
+// learned facts about a specific place — this block was mined, that one was
+// placed, this cell is a hazard — and every one of them is about a world the
+// bot is no longer standing in. Keeping them means the bot arrives in the
+// Nether already certain that cells are solid that are open sky, and the
+// pathfinder believes it before it has seen a single Nether block.
+func (w *LocalWorldModel) Reset() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.solidBlocks = make(map[int64]bool)
+	w.hazardBlocks = make(map[int64]bool)
+	w.passableBlocks = make(map[int64]bool)
+	w.bodyClearance = make(map[int64]bool)
+	w.tempSolidBlocks = make(map[int64]time.Time)
+	// The chunk querier and the path bounds are not facts about the world: they
+	// are where to ask and what the current trip is. Those survive.
+}
+
+// SetTempSolid marks a cell temporarily blocked, used for stuck recovery.
 func (w *LocalWorldModel) SetTempSolid(x, y, z int32, duration time.Duration) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -307,6 +328,15 @@ func blockNameFor(querier ChunkQuerier, rid uint32) (string, bool) {
 }
 
 func (w *LocalWorldModel) IsHazard(x, y, z int32) bool {
+	// The void and the build ceiling come first because they are arithmetic.
+	// Checking them here rather than in each movement mode is the whole point of
+	// this vocabulary: the walk rule, the drop rule, the parkour rule and the
+	// diagonal rule all call IsHazard, so none of them can forget that there is
+	// something below the world to fall into.
+	if IsVoid(y) {
+		return true
+	}
+
 	w.mu.RLock()
 	defer w.mu.RUnlock()
 
@@ -315,15 +345,14 @@ func (w *LocalWorldModel) IsHazard(x, y, z int32) bool {
 		return true
 	}
 
-	// 2. Pre-emptively check for known natural hazards (lava, fire)
+	// 2. Pre-emptively check for known natural hazards (lava, fire) and the rest
+	// of the lethal set.
 	if w.chunkQuerier != nil {
 		rid, loaded := w.chunkQuerier.GetBlockRID(x, y, z)
 		if loaded {
 			name, ok := blockNameFor(w.chunkQuerier, rid)
-			if ok {
-				if name == "minecraft:lava" || name == "minecraft:flowing_lava" || name == "minecraft:fire" {
-					return true
-				}
+			if ok && normalisedLethal[normaliseBlockName(name)] {
+				return true
 			}
 		}
 	}

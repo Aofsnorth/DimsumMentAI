@@ -7,7 +7,9 @@ import (
 	"sync/atomic"
 
 	"bedrock-ai/internal/bot"
+	"bedrock-ai/internal/bot/dimension"
 	"bedrock-ai/internal/debuglog"
+	"bedrock-ai/internal/evidence"
 	"bedrock-ai/internal/safecast"
 
 	"github.com/go-gl/mathgl/mgl32"
@@ -104,11 +106,46 @@ func handleSubChunkRequestMode(b *bot.Bot, p *packet.LevelChunk) {
 
 	b.Mu.Lock()
 	first := !b.SubChunkRequestMode
+	previousDimension := b.ChunkDimension
 	b.SubChunkRequestMode = true
 	b.ChunkDimension = p.Dimension
+	b.Dimension = dimension.FromServerID(p.Dimension)
 	b.SubChunkLimit = limit
 	noSubChunks := b.GeyserNoSubChunks
+	changed := !first && previousDimension != p.Dimension
 	b.Mu.Unlock()
+
+	if changed {
+		// The cache is full of the world the bot just left. Every block in it is
+		// a lie from here on: pathfinding would plan through overworld terrain
+		// that is now a mile underground, storage would look for chests in cells
+		// full of netherrack, and every "is that solid" answer would be about
+		// somewhere the bot is not.
+		//
+		// Nothing in the protocol says "dimension changed", so this comparison is
+		// the only signal there is. Skipping it is the difference between a bot
+		// that knows it is in the Nether and one that confidently mines a wall of
+		// end stone while believing it is home.
+		if b.WorldCache != nil {
+			b.WorldCache.Reset()
+		}
+		// The local world model is handed out as a three-method interface, and
+		// clearing it is not one of them. Narrowing here rather than widening the
+		// interface keeps the change off every implementer in the tree.
+		if model, ok := b.GetLocalWorldModel().(interface{ Reset() }); ok {
+			model.Reset()
+		}
+		b.Logger.Info("AGI: crossed a dimension",
+			"from", dimension.FromServerID(previousDimension).String(),
+			"to", b.Dimension.String(),
+		)
+		b.Evidence.Record(evidence.KindDimension, b.Dimension.String(), map[string]any{
+			"from_id": previousDimension,
+			"to_id":   p.Dimension,
+			"from":    dimension.FromServerID(previousDimension).String(),
+			"to":      b.Dimension.String(),
+		})
+	}
 
 	if first {
 		b.Logger.Info("server uses sub-chunk request mode; terrain arrives as SubChunk packets",

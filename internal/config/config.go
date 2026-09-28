@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -40,6 +41,16 @@ type AGIConfig struct {
 	SelfPreservation bool `yaml:"self_preservation"`
 	LowHPThreshold   int  `yaml:"low_hp_threshold"`
 	LowHunger        int  `yaml:"low_hunger_threshold"`
+
+	// LowAirSeconds is how long the bot's head can be under water before it
+	// stops what it is doing and goes up.
+	//
+	// It is a count of seconds rather than an air bar because the bot has no air
+	// bar to read: Bedrock's air supply is not something this client has been
+	// shown receiving, so the honest version of "am I drowning" is "how long has
+	// my head been in water". Health only starts falling once the air is nearly
+	// gone, which is far too late to react to.
+	LowAirSeconds int `yaml:"low_air_seconds"`
 
 	// Wander makes the bot go somewhere when it has nothing to do, the way a
 	// player idles around a world. Exploration is local and cheap; it never
@@ -106,6 +117,59 @@ type AGIConfig struct {
 
 	// WanderRadius is how far from its current spot one wander step may land.
 	WanderRadius float32 `yaml:"wander_radius"`
+
+	// Mode selects which autonomy the brain runs.
+	Mode string `yaml:"mode"`
+
+	// PlanLifetimeMin is how long one plan is pursued before the planner is
+	// consulted from scratch. A plan needs room to actually finish — an
+	// expedition that gets replanned every minute never leaves the door.
+	PlanLifetimeMin int `yaml:"plan_lifetime_min"`
+	// PlanReplanMin is how often the planner gets a look in while a plan is
+	// alive. Replanning is advisory: the current plan keeps executing while a
+	// replan is in flight, which is what keeps a slow planner from stalling
+	// the bot.
+	PlanReplanMin int `yaml:"plan_replan_min"`
+	// PlanMaxSteps bounds a generated plan. An unbounded plan is a wishlist,
+	// and a wishlist cannot be finished — there has to be a last step.
+	PlanMaxSteps int `yaml:"plan_max_steps"`
+}
+
+// Autonomy modes.
+const (
+	// ModeDefault is the reactive brain: reflexes, a short goal, and activities
+	// chosen from what is in front of the bot. It is a companion, and it is the
+	// right default because it needs no objective to be useful.
+	ModeDefault = "default"
+
+	// ModePlanning adds a long-horizon plan on top: a structured objective with
+	// steps and waypoints that survives across ticks, executed one bounded
+	// action at a time.
+	//
+	// It is additive, not a replacement. The reflexes still run in planning mode
+	// — a bot pursuing a plan that stops to eat and runs from a creeper is
+	// correct, not distracted. What planning changes is the horizon, not the
+	// safety.
+	//
+	// The mode is deliberately general. It is not a "dragon mode": the plan's
+	// objective comes from the player or the model, and the machinery underneath
+	// is the same whatever the objective happens to be. Hardcoding a target into
+	// the brain is what turns an agent back into a script.
+	ModePlanning = "planning"
+)
+
+// NormalizeMode maps a configured mode to a known one, falling back to default.
+//
+// An unknown mode is a typo, and silently guessing at behaviour would be worse
+// than the safe default: a user who writes "planing" should get a working bot
+// and a default brain, not a bot stuck in a half-configured planning mode.
+func NormalizeMode(mode string) string {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case ModePlanning, "plan", "long_horizon", "long-horizon":
+		return ModePlanning
+	default:
+		return ModeDefault
+	}
 }
 
 // PerceptionConfig bounds what the bot notices, in world units.

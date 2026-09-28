@@ -620,6 +620,17 @@ func (b *Bot) sendStackRequest(requestID int32, resultCh chan craftResult, actio
 		b.Mu.Unlock()
 		return craftResult{}, fmt.Errorf("connection closed while waiting for item stack response (item: %s)", itemName)
 	case <-time.After(5 * time.Second):
+		// The entry has to go here too, not just on the two exits above. A
+		// timed-out request is still sitting in pendingCrafts holding a channel
+		// nobody will ever read, and every one of those is a map entry that never
+		// comes back. A bot that crafts through a laggy server grows this map
+		// for the rest of the session, and a server that answers after the
+		// timeout still finds a listener to write to — which is worse, because
+		// the result arrives into a channel the craft path has already given up
+		// on.
+		b.Mu.Lock()
+		delete(b.pendingCrafts, requestID)
+		b.Mu.Unlock()
 		return craftResult{}, fmt.Errorf("server did not respond to item stack request within 5s (item: %s)", itemName)
 	}
 }

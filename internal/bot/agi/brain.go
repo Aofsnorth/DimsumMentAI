@@ -66,6 +66,10 @@ type Snapshot struct {
 	// 0, 4 min left)" can reason about abandoning it, which a bot that is only
 	// shown the present moment cannot.
 	GoalSummary string
+	// PlanSummary is the active plan, or empty when there is none. It goes into
+	// the state text so Jev is deciding with the plan in view rather than
+	// picking a bounded action at random.
+	PlanSummary string
 	// Craftable is how many distinct recipes the bot could make right now. It
 	// gates the craft activity, because a bot asked to craft with no ingredients
 	// fails every time and the failure is visible.
@@ -79,6 +83,17 @@ type Snapshot struct {
 	// preconditions the curriculum reasons about are literally the same scan the
 	// block summary used a moment earlier.
 	Features perception.Features
+	// Underwater and SecondsUnderwater drive the breath reflex. They are derived
+	// from the world rather than from an air-supply packet, because the bot
+	// cannot see one: knowing that water is where the head is and counting the
+	// seconds since is enough to reproduce what a player does, and it does not
+	// depend on a protocol field this client has never been shown sending.
+	//
+	// SecondsUnderwater is zero on the surface. A bot that keeps working at the
+	// bottom of a flooded mine and only surfaces when a health bar has already
+	// started falling is a bot that surfaces dead.
+	Underwater        bool
+	SecondsUnderwater int
 }
 
 // InventoryFree reports whether the bot has room to collect more. One free
@@ -123,6 +138,11 @@ const (
 type Thresholds struct {
 	LowHP     int
 	LowHunger int
+	// LowAirSeconds is how long the bot's head can be under before it stops
+	// what it is doing and goes up. It is in seconds because that is the unit
+	// the bot can actually observe: it has no air bar to read, only a count of
+	// how long it has been down.
+	LowAirSeconds int
 }
 
 // IsNightTime reports whether a Bedrock world clock reading is night, using
@@ -184,7 +204,34 @@ const (
 	ReflexSleep
 	// ReflexLook turns the head towards a player who came into view.
 	ReflexLook
+	// ReflexSurface is drowning. It outranks hunger and every social reflex
+	// because the other two are recoverable and this one is not.
+	ReflexSurface
 )
+
+// String names the reflex for a log line and for the evidence record.
+//
+// It exists because a reflex that is only identifiable by its integer value
+// cannot be looked up later. Every question asked of a past session starts with
+// "what happened at 14:32" and the answer has to be a word.
+func (k ReflexKind) String() string {
+	switch k {
+	case ReflexEat:
+		return "eat"
+	case ReflexFlee:
+		return "flee"
+	case ReflexShelter:
+		return "shelter"
+	case ReflexSleep:
+		return "sleep"
+	case ReflexLook:
+		return "look"
+	case ReflexSurface:
+		return "surface"
+	default:
+		return "none"
+	}
+}
 
 // DecideReflex picks at most one reflex to run this tick.
 //
@@ -193,6 +240,14 @@ const (
 // character that is eating, turning and running simultaneously is not a person
 // multitasking, it is a bot looping over a list.
 func DecideReflex(s Snapshot, t Thresholds) Reflex {
+	// Drowning is checked before everything else, including the critical health
+	// branch. Health only starts falling once the air is nearly gone, so a
+	// reflex layer that ranks by health bars will always find out too late. A
+	// clock the bot keeps itself is the only warning it actually gets.
+	if s.Underwater && s.SecondsUnderwater >= t.LowAirSeconds {
+		return Reflex{Kind: ReflexSurface}
+	}
+
 	urgency := EvaluateUrgency(s, t)
 
 	// Survival first, and never alongside anything else.
