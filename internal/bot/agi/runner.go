@@ -53,6 +53,10 @@ type Runner struct {
 	lastSpoke time.Time
 	lastGaze  time.Time
 	seed      int
+	// goal is the multi-tick objective the bot is currently pursuing. It is
+	// empty when the bot has no goal, which is a supported state (and the
+	// correct one at the start of a session): the brain then just wanders.
+	goal Goal
 	// activityLog is a short history of the activities the brain has already
 	// chosen. It exists so the loop can notice it is repeating itself: a model
 	// that keeps picking the same activity is not deciding, and the caller
@@ -64,6 +68,20 @@ type Runner struct {
 // enough to catch an immediate repeat without penalising a natural rhythm of
 // "mine, wander, mine".
 const activityMemory = 3
+
+// goalLifetime is how long one goal is pursued before it is re-examined. It is
+// long enough that a goal can actually be progressed, and short enough that the
+// bot re-reads the world rather than grinding a stale intention. This is a
+// constant rather than config because it is a property of the loop, not a
+// taste knob: any value in the few-minutes range behaves the same way.
+const goalLifetime = 4 * time.Minute
+
+// goalConfidenceFloor is the confidence below which a goal CHANGE is ignored.
+//
+// It applies only to switching, never to keeping the current goal: the bot is
+// free to be unsure about what to do next, but it should not be talked out of
+// what it is already doing on a whim.
+const goalConfidenceFloor = 0.5
 
 // Config is the subset of the AGI settings the runner needs. Declared here
 // rather than importing the config package so agi can be tested with a plain
@@ -264,8 +282,9 @@ func (r *Runner) Tick(ctx context.Context) {
 		// tick it "decides" to wander.
 		activity := judgement.Activity
 		if r.recentActivity(activity) {
-			activity = alternativeActivity(activity)
+			activity = r.alternativeActivity(activity)
 		}
+		r.goalProgress(activity)
 		r.doActivity(activity)
 		return
 	}
@@ -288,6 +307,12 @@ func (r *Runner) Tick(ctx context.Context) {
 // midday, approach with nobody in sight. A choice question built from a menu of
 // impossible options produces confident nonsense, and confident nonsense is what
 // makes an agent look broken rather than busy.
+// Curriculum returns the activities worth offering for this snapshot.
+//
+// This is the unfiltered menu: everything plausible in the current world. The
+// active goal narrows it — see (*Runner).menu, which is what the brain actually
+// asks the model about. Keeping this pure and runner-free is what lets it be
+// tested against snapshots directly.
 func Curriculum(s Snapshot) []string {
 	curriculum := make([]string, 0, 8)
 	// Rest leads the list and is always present. It is the answer that makes
@@ -388,6 +413,78 @@ func (r *Runner) doActivity(activity string) {
 	}
 }
 
+// currentGoal returns the active goal, or the zero Goal when there is none.
+func (r *Runner) currentGoal() Goal {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.goal
+}
+
+// menu is the activity list the model is asked about: the full curriculum,
+// narrowed by the active goal.
+//
+// A goal that does not constrain the menu is a goal in name only — the bot
+// would keep making independent choices and merely describe them as progress.
+func (r *Runner) menu(s Snapshot) []string {
+	full := Curriculum(s)
+	goal := r.currentGoal()
+	if goal.Name == "" {
+		return full
+	}
+	return NarrowToGoal(full, goal)
+}
+
+// adoptGoal installs a goal and gives it a lifetime. An empty name clears it.
+func (r *Runner) adoptGoal(name string, now time.Time) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if name == "" {
+		r.goal = Goal{}
+		return
+	}
+	entry, ok := goalCatalogue[name]
+	if !ok {
+		return
+	}
+	// Re-adopting the goal the bot is already pursuing refreshes its deadline
+	// without resetting progress, so continuing something does not look like
+	// starting over.
+	if r.goal.Name == name {
+		r.goal.Deadline = now.Add(goalLifetime)
+		return
+	}
+	r.goal = newGoal(entry, now, goalLifetime)
+}
+
+// considerGoal decides whether to adopt the model's goal choice, and reports
+// whether the goal actually changed.
+//
+// Switching is the part that needs guarding. A model that is unsure about a new
+// intention must not be allowed to talk the bot out of what it is already
+// doing, because oscillating between two goals every tick looks busy while
+// accomplishing nothing. Keeping the current goal is the human behaviour: people
+// change their mind on evidence, not because a coin flipped. With no current
+// goal there is nothing to defend, so even a weak answer establishes one --
+// otherwise the bot could never start.
+func (r *Runner) considerGoal(choice string, confidence float64, now time.Time) bool {
+	current := r.currentGoal()
+	switching := current.Name != "" && current.Name != choice
+	if switching && confidence < goalConfidenceFloor {
+		return false
+	}
+	r.adoptGoal(choice, now)
+	return true
+}
+
+// goalProgress records that an activity advanced the active goal.
+func (r *Runner) goalProgress(activity string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.goal.Name != "" && r.goal.advances(activity) {
+		r.goal.Progress++
+	}
+}
+
 // maybeWander starts an idle drift, but only when nothing else wants the bot.
 // Wandering while busy would fight whatever it is already doing.
 func (r *Runner) maybeWander() {
@@ -442,11 +539,10 @@ func (r *Runner) gesture() {
 func (r *Runner) recentActivity(activity string) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	for i, prev := range r.activityLog {
+	for _, prev := range r.activityLog {
 		if prev == activity {
 			return true
 		}
-		_ = i
 	}
 	return false
 }
@@ -466,7 +562,14 @@ func (r *Runner) recordActivity(activity string) {
 // alternates between two activities on a fixed beat is as mechanical as one
 // that repeats a single action, and resting is the honest answer to "I have
 // nothing better to do".
-func alternativeActivity(activity string) string {
+//
+// The one exception is an activity that advances the active goal. Repeating
+// "mine" while working towards getting wood is not a loop, it is the whole
+// point; breaking out of it would make the goal impossible to finish.
+func (r *Runner) alternativeActivity(activity string) string {
+	if r.currentGoal().advances(activity) {
+		return activity
+	}
 	if activity == jev.ActivityRest {
 		return jev.ActivityExplore
 	}
@@ -494,6 +597,10 @@ type Judgement struct {
 	// ActivityConfidence is Jev's confidence in the activity it chose, straight
 	// from the choice answer.
 	ActivityConfidence float64
+	// Goal is the multi-tick objective Jev picked. It is installed on the
+	// runner rather than merely returned, because a goal that did not persist
+	// past the tick that chose it would be a suggestion, not a goal.
+	Goal string
 	// Known is true when a Jev answer actually arrived. A missing answer must
 	// never be read as a confident "no" — that would silently turn the brain
 	// off whenever the API hiccups.
@@ -504,6 +611,17 @@ type Judgement struct {
 // Every failure path returns a zero Judgement with Known=false, which the
 // caller treats as "carry on with the hardcoded rules".
 func (r *Runner) consult(ctx context.Context, snap Snapshot) Judgement {
+	// An expired goal is cleared before the model is asked what to do, so the
+	// goal question sees the real state and the bot is not told it is midway
+	// through something it abandoned an hour ago.
+	if goal := r.currentGoal(); goal.Name != "" && goal.Expired(snap.Now) {
+		r.b.Logger.Info("AGI: goal expired",
+			slog.String("goal", goal.Name),
+			slog.Int("progress", goal.Progress),
+		)
+		r.adoptGoal("", snap.Now)
+	}
+
 	if r.cfg.Jev == nil {
 		return Judgement{}
 	}
@@ -537,6 +655,11 @@ func (r *Runner) consult(ctx context.Context, snap Snapshot) Judgement {
 		j.Activity = choice
 		j.ActivityConfidence = confidence
 	}
+	if choice, confidence, ok := resp.Choice(jev.QGoal); ok {
+		if r.considerGoal(choice, confidence, snap.Now) {
+			j.Goal = choice
+		}
+	}
 	// One INFO line per consultation. It is the only way to tell a live System
 	// One loop from a fallback: the numbers are the model speaking, and seeing
 	// them is what makes a "the bot is thinking" claim checkable.
@@ -561,7 +684,29 @@ func (r *Runner) questions(s Snapshot) map[string]json.RawMessage {
 	if s.Busy || s.Exploring {
 		return questions
 	}
-	for name, raw := range jev.BuildActivityQuestion(Curriculum(s)) {
+
+	// Goal first, then activity. The goal is a separate decision with a
+	// different horizon, and asking for both in one call is exactly the parallel
+	// fan-out this client is built for.
+	goals := AvailableGoals(s)
+	if len(goals) > 1 {
+		descriptions := make(map[string]string, len(goals))
+		for _, g := range goals {
+			descriptions[g.Name] = g.Description
+		}
+		current := r.currentGoal()
+		currentName := ""
+		if current.Name != "" {
+			currentName = current.Name
+		}
+		for name, raw := range jev.BuildGoalQuestion(GoalsFor(goals), descriptions, currentName) {
+			questions[name] = raw
+		}
+	}
+
+	// The activity menu is narrowed by the goal, so the model is choosing among
+	// things that actually move it forward rather than among everything.
+	for name, raw := range jev.BuildActivityQuestion(r.menu(s)) {
 		questions[name] = raw
 	}
 	return questions
@@ -574,6 +719,7 @@ func describeState(s Snapshot) string {
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "Health %d/20. Hunger %d/20. Position %s.\n", s.HP, s.Hunger, s.Coords)
 	fmt.Fprintf(&sb, "Time: %s. Free inventory slots: %d.\n", timeOfDay(s), s.FreeSlots)
+	fmt.Fprintf(&sb, "Current goal: %s.\n", s.GoalSummary)
 	fmt.Fprintf(&sb, "Holding: %s.\n", s.HeldItem)
 	fmt.Fprintf(&sb, "Visible mobs: %s.\n", s.VisibleMob)
 	fmt.Fprintf(&sb, "Nearby blocks: %s.\n", s.NearBlocks)
@@ -674,6 +820,7 @@ func (r *Runner) Observe() Snapshot {
 		FreeSlots:    r.freeInventorySlots(),
 		Nearby:       r.nearbyPeople(pos, lookTarget),
 		VisibleSigns: r.visibleSignText(),
+		GoalSummary:  describeGoal(r.currentGoal()),
 	}
 	return snap
 }

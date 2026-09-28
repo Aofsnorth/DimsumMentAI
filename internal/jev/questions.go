@@ -1,6 +1,9 @@
 package jev
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"fmt"
+)
 
 // The questions the bot asks Jev.
 //
@@ -31,6 +34,11 @@ const (
 	// QMining asks whether the bot should go after a resource it can see, which
 	// is the decision that keeps a survival loop from being only wandering.
 	QMining = "worth_mining"
+	// QGoal asks which objective the bot should be working towards across
+	// several ticks. It is the one question that is not about right now: a
+	// goal outlives the tick that chose it, and answering it is what gives the
+	// bot continuity rather than a fresh coin flip every thirty seconds.
+	QGoal = "goal"
 )
 
 // Activity options offered to the model. Kept short on purpose: Jev is a
@@ -92,6 +100,57 @@ func BuildReflexQuestions() map[string]json.RawMessage {
 		QMining: mustMarshal(NoulQuestion{
 			Type:         TypeNoul,
 			Instructions: "Is it worth starting to gather a resource it can see right now, judging by whether it looks reachable, useful, and safe to stop for?",
+		}),
+	}
+}
+
+// Goal options. These are larger than activities: a goal spans many ticks and
+// narrows the activity menu to whatever advances it, which is what turns a
+// sequence of reactions into something with intent.
+const (
+	GoalIdle         = "idle"
+	GoalStockUp      = "stock_up"
+	GoalGatherWood   = "gather_wood"
+	GoalFindStorage  = "find_storage"
+	GoalExplore      = "explore"
+	GoalBuildShelter = "build_shelter"
+	GoalSocialise    = "socialise"
+)
+
+// BuildGoalQuestion asks which objective the bot should pursue.
+//
+// The options are the goals that are actually available in the current world,
+// so a model is never asked to pursue something that cannot happen. The
+// instructions name the current goal when there is one, because a bot that has
+// already committed to something should be nudged to continue it rather than
+// flip-flopping every tick.
+func BuildGoalQuestion(goals []string, descriptions map[string]string, current string) map[string]json.RawMessage {
+	criteria := make(map[string]string, len(goals))
+	for _, name := range goals {
+		if desc, ok := descriptions[name]; ok {
+			criteria[name] = desc
+		}
+	}
+	// Idle is never filtered out. A goal set with no way to stop guarantees the
+	// bot is always busy, which is the exact failure this integration avoids.
+	if _, ok := criteria[GoalIdle]; !ok {
+		criteria[GoalIdle] = "have nothing pressing to do, so simply be here"
+	}
+
+	instructions := "What should the bot be working towards over the next several minutes? " +
+		"Prefer a goal that is actually available and reachable, not an exciting one that cannot happen. " +
+		"Answer the same way twice in a row when the first answer is still a sensible thing to be doing."
+	if current != "" {
+		instructions += fmt.Sprintf(
+			"The bot is currently working towards %q. Prefer to continue it unless it has clearly stopped making sense.",
+			current)
+	}
+
+	return map[string]json.RawMessage{
+		QGoal: mustMarshal(ChoiceQuestion{
+			Type:         TypeChoice,
+			Instructions: instructions,
+			Criteria:     criteria,
 		}),
 	}
 }

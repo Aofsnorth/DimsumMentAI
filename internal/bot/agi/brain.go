@@ -55,9 +55,15 @@ type Snapshot struct {
 	HasBed bool
 	// FreeSlots is how many empty inventory slots the bot has. The curriculum
 	// uses it to stop offering work it cannot bank: a bot that mines wood with
-	// a full inventory swings at a tree and then has nowhere to put it, which
-	// looks worse than never offering the activity.
+	// a full inventory swings at a tree and then has nowhere to put the wood,
+	// which looks worse than never offering the activity.
 	FreeSlots int
+	// GoalSummary describes the active goal in the model's own terms. It goes
+	// into the state text so the model can judge whether the goal still makes
+	// sense — a bot that is told "currently working towards stock_up (progress
+	// 0, 4 min left)" can reason about abandoning it, which a bot that is only
+	// shown the present moment cannot.
+	GoalSummary string
 }
 
 // InventoryFree reports whether the bot has room to collect more. One free
