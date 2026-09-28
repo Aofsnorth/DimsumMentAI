@@ -70,6 +70,20 @@ const (
 	// ActivityLook reads the signage around the bot. It is the decision that
 	// lets a labelled storage room be used rather than blindly searched.
 	ActivityLook = "look_around"
+	// ActivityFish fishes, and is only ever offered when there is water in
+	// sight. A bot that casts a fishing rod at a tree because nobody told it
+	// there was no water looks broken in a way that is obvious to a player.
+	ActivityFish = "fish"
+	// ActivityHarvest collects ripe crops. Offered only when there are ripe
+	// ones: harvesting seedlings destroys the field and yields nothing, which
+	// is strictly worse than not farming.
+	ActivityHarvest = "harvest"
+	// ActivityTendAnimals feeds or herds the animals in view.
+	ActivityTendAnimals = "tend_animals"
+	// ActivityCraft makes something the bot already has the ingredients for.
+	// Offered only when it genuinely can, so the bot does not repeatedly choose
+	// a recipe it has no materials for.
+	ActivityCraft = "craft"
 )
 
 // BuildReflexQuestions asks the survival and pacing judgements in one call.
@@ -193,17 +207,21 @@ func BuildActivityQuestion(curriculum []string) map[string]json.RawMessage {
 // current snapshot reach the model — this is the catalogue, the curriculum is
 // the subset.
 var activityDescriptions = map[string]string{
-	ActivityRest:     "stay put; nothing nearby is worth the effort",
-	ActivityWander:   "walk somewhere new and look around",
-	ActivityExplore:  "explore the area a little, as if sightseeing",
-	ActivityGather:   "collect a resource it can see or plausibly reach",
-	ActivityApproach: "walk over to a nearby player, without necessarily saying anything",
-	ActivityChat:     "walk over to a nearby player to talk with them",
-	ActivityShelter:  "get under cover before it gets dangerous",
-	ActivitySleep:    "sleep until morning",
-	ActivityGesture:  "play a short emote, as people do when standing about",
-	ActivityMine:     "actually mine or chop the resource in front of it, and collect what drops",
-	ActivityLook:     "look around at nearby signs, chests and blocks to see what is here",
+	ActivityRest:        "stay put; nothing nearby is worth the effort",
+	ActivityWander:      "walk somewhere new and look around",
+	ActivityExplore:     "explore the area a little, as if sightseeing",
+	ActivityGather:      "collect a resource it can see or plausibly reach",
+	ActivityApproach:    "walk over to a nearby player, without necessarily saying anything",
+	ActivityChat:        "walk over to a nearby player to talk with them",
+	ActivityShelter:     "get under cover before it gets dangerous",
+	ActivitySleep:       "sleep until morning",
+	ActivityGesture:     "play a short emote, as people do when standing about",
+	ActivityMine:        "actually mine or chop the resource in front of it, and collect what drops",
+	ActivityLook:        "look around at nearby signs, chests and blocks to see what is here",
+	ActivityFish:        "fish at the water it can see",
+	ActivityHarvest:     "harvest the ripe crops in front of it",
+	ActivityTendAnimals: "feed or look after the animals nearby",
+	ActivityCraft:       "craft something it has the ingredients for right now",
 }
 
 func mustMarshal(v any) json.RawMessage {

@@ -63,6 +63,10 @@ PILIHAN:
 - Jalan-jalan sebentar: <action>explore:25</action>
 - Ambil bahan: <action>gather:oak_log,3</action>
 - Nambang beneran: <action>automine:wood</action> (bikin kayu yang beneran keluar)
+- Mau mancing: <action>fish</action> (bot cuma nelen kalau ada air di pandangan)
+- Panen: <action>harvest</action> (cuma kalau tanaman sudah matang)
+- Rawat hewan: <action>feed</action>
+- Bikin sesuatu: <action>craft:nama_barang</action> (misal <action>craft:wooden_pickaxe,1</action>)
 - Baca papan: <action>readsign</action> — buat cari tau isi ruangan
 - Cari barang di chest: <action>take:nama_barang,3</action> (bot buka chest satu-satu, dan baca sign dulu kalau ada)
 - Simpan barang: <action>store:nama_barang</action>

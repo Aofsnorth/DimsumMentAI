@@ -174,12 +174,5 @@ func TestRepeatingAnOnGoalActivityIsAllowed(t *testing.T) {
 	}
 }
 
-// hasActivity reports whether a menu contains an entry.
-func hasActivity(list []string, name string) bool {
-	for _, v := range list {
-		if v == name {
-			return true
-		}
-	}
-	return false
-}
+// hasActivity reports whether a menu contains an entry. It lives in
+// curriculum_test.go, which both goal and curriculum tests use.

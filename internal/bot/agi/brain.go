@@ -25,6 +25,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"bedrock-ai/internal/bot/perception"
 )
 
 // Snapshot is everything the brain is allowed to know about the world right
@@ -64,6 +66,19 @@ type Snapshot struct {
 	// 0, 4 min left)" can reason about abandoning it, which a bot that is only
 	// shown the present moment cannot.
 	GoalSummary string
+	// Craftable is how many distinct recipes the bot could make right now. It
+	// gates the craft activity, because a bot asked to craft with no ingredients
+	// fails every time and the failure is visible.
+	Craftable int
+	// Features records what is in view that makes specific activities possible.
+	// Without these preconditions the curriculum would offer fishing with no
+	// water in sight and the bot would cast at a tree, which is worse than never
+	// offering fishing at all.
+	//
+	// It is the perception package's own type rather than a copy, so the
+	// preconditions the curriculum reasons about are literally the same scan the
+	// block summary used a moment earlier.
+	Features perception.Features
 }
 
 // InventoryFree reports whether the bot has room to collect more. One free

@@ -353,12 +353,29 @@ func Curriculum(s Snapshot) []string {
 		curriculum = append(curriculum, jev.ActivityChat)
 	}
 	// Gesturing is always available. Emoting at nothing in particular is one of
-	// the most human things a player standing idle does, and it costs nothing.
+	// the most human things a player does while waiting, and it costs nothing.
 	// It is offered in daylight only: a bot that emotes around at 3am reads as
 	// scripted, not as spontaneous.
 	curriculum = append(curriculum, jev.ActivityGesture)
 	// Reading the surroundings is offered whenever there is something to read.
 	curriculum = append(curriculum, jev.ActivityLook)
+
+	// The rest are gated on the world actually offering them. This is the whole
+	// point of the Features scan: a menu built from wishful thinking produces a
+	// bot that repeatedly picks an action that cannot work, and a player can see
+	// that it cannot work.
+	if s.Features.Water {
+		curriculum = append(curriculum, jev.ActivityFish)
+	}
+	if s.Features.RipeCrops > 0 {
+		curriculum = append(curriculum, jev.ActivityHarvest)
+	}
+	if s.Features.Animals > 0 {
+		curriculum = append(curriculum, jev.ActivityTendAnimals)
+	}
+	if s.Craftable > 0 {
+		curriculum = append(curriculum, jev.ActivityCraft)
+	}
 	return curriculum
 }
 
@@ -410,6 +427,16 @@ func (r *Runner) doActivity(activity string) {
 		r.gesture()
 	case jev.ActivityLook:
 		action.Execute(r.b, "readsign", "", who)
+	case jev.ActivityFish:
+		// Only reachable when the curriculum saw water; the handler still walks
+		// to it and reports honestly if the water is not actually castable.
+		action.Execute(r.b, "fish", "", who)
+	case jev.ActivityHarvest:
+		action.Execute(r.b, "harvest", "", who)
+	case jev.ActivityTendAnimals:
+		action.Execute(r.b, "feed", "", who)
+	case jev.ActivityCraft:
+		action.Execute(r.b, "craft", "", who)
 	}
 }
 
@@ -821,6 +848,8 @@ func (r *Runner) Observe() Snapshot {
 		Nearby:       r.nearbyPeople(pos, lookTarget),
 		VisibleSigns: r.visibleSignText(),
 		GoalSummary:  describeGoal(r.currentGoal()),
+		Features:     perception.VisibleFeatures(b, r.cfg.BlockScanDistance),
+		Craftable:    r.craftableCount(),
 	}
 	return snap
 }
@@ -837,6 +866,18 @@ func (r *Runner) visibleSignText() []string {
 		out = append(out, fmt.Sprintf("%q at %d,%d,%d", sign.Text, sign.Pos.X(), sign.Pos.Y(), sign.Pos.Z()))
 	}
 	return out
+}
+
+// craftableCount is how many distinct recipes the bot could make right now.
+//
+// It gates the craft activity. Offering "craft something" to a bot holding two
+// sticks and nothing else produces a repeated attempt that always fails, which
+// is a visible failure mode; offering it only when a recipe genuinely exists
+// turns the activity into one that works.
+func (r *Runner) craftableCount() int {
+	held := r.b.GetHeldItem()
+	hasTable := strings.Contains(held, "crafting_table")
+	return len(r.b.ListCraftableItems(hasTable))
 }
 
 // freeInventorySlots counts the empty slots in the bot's inventory. The
