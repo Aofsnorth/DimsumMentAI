@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	"bedrock-ai/internal/bot/movement/animation"
+
 	"github.com/go-gl/mathgl/mgl32"
 )
 
@@ -71,23 +73,25 @@ func TestMaxGatherAttemptsIsBounded(t *testing.T) {
 // TestChopCadenceVariesLikeAHand covers the "natural" side of the fix: a fixed
 // 100 ms tick between swings is the clearest tell of a bot. The rhythm must
 // vary, stay inside its bounds, and still pause longer between bursts than
-// inside them.
+// inside them. The bounds themselves are pinned in the animation package, which
+// now owns the rhythm; what this guards is that the chopper still uses it
+// rather than drifting back to a local metronome.
 func TestChopCadenceVariesLikeAHand(t *testing.T) {
 	t.Parallel()
 
 	seen := map[time.Duration]int{}
 	for swing := 0; swing < 24; swing++ {
 		wait := chopCadence(swing)
-		if wait < chopSwingMin || wait > chopRecoveryMax {
-			t.Fatalf("swing %d: cadence %v outside [%v, %v]", swing, wait, chopSwingMin, chopRecoveryMax)
+		if wait < animation.SwingMin || wait > animation.RecoveryMax {
+			t.Fatalf("swing %d: cadence %v outside [%v, %v]", swing, wait, animation.SwingMin, animation.RecoveryMax)
 		}
 		seen[wait]++
 
-		isRecoverySlot := swing%chopBurstLength == chopBurstLength-1
-		if isRecoverySlot && wait < chopRecoveryMin {
-			t.Fatalf("swing %d: recovery slot cadence %v shorter than the recovery floor %v", swing, wait, chopRecoveryMin)
+		isRecoverySlot := swing%animation.BurstLength == animation.BurstLength-1
+		if isRecoverySlot && wait < animation.RecoveryMin {
+			t.Fatalf("swing %d: recovery slot cadence %v shorter than the recovery floor %v", swing, wait, animation.RecoveryMin)
 		}
-		if !isRecoverySlot && wait > chopRecoveryMax {
+		if !isRecoverySlot && wait > animation.RecoveryMax {
 			t.Fatalf("swing %d: burst cadence %v longer than the burst ceiling", swing, wait)
 		}
 	}
@@ -104,11 +108,11 @@ func TestChopWindUpStaysInBounds(t *testing.T) {
 
 	for i := 0; i < 20; i++ {
 		w := chopWindUp()
-		if w < chopWindUpMin || w > chopWindUpMax {
-			t.Fatalf("wind-up %v outside [%v, %v]", w, chopWindUpMin, chopWindUpMax)
+		if w < animation.WindUpMin || w > animation.WindUpMax {
+			t.Fatalf("wind-up %v outside [%v, %v]", w, animation.WindUpMin, animation.WindUpMax)
 		}
 	}
-	if chopWindUpMin >= chopSwingMin {
+	if animation.WindUpMin >= animation.SwingMin {
 		t.Fatal("wind-up floor should stay under the swing floor so it reads as a separate beat")
 	}
 }
@@ -123,14 +127,14 @@ func TestChopAimJittersAroundBlockCentre(t *testing.T) {
 
 	for i := 0; i < 40; i++ {
 		aim := chopAim(center)
-		if math.Abs(float64(aim.X()-center.X())) > chopAimJitter {
-			t.Fatalf("aim X drifted %v, want at most %v", aim.X()-center.X(), chopAimJitter)
+		if math.Abs(float64(aim.X()-center.X())) > animation.AimJitter {
+			t.Fatalf("aim X drifted %v, want at most %v", aim.X()-center.X(), animation.AimJitter)
 		}
-		if math.Abs(float64(aim.Y()-center.Y())) > chopAimJitter {
-			t.Fatalf("aim Y drifted %v, want at most %v", aim.Y()-center.Y(), chopAimJitter)
+		if math.Abs(float64(aim.Y()-center.Y())) > animation.AimJitter {
+			t.Fatalf("aim Y drifted %v, want at most %v", aim.Y()-center.Y(), animation.AimJitter)
 		}
-		if math.Abs(float64(aim.Z()-center.Z())) > chopAimJitter {
-			t.Fatalf("aim Z drifted %v, want at most %v", aim.Z()-center.Z(), chopAimJitter)
+		if math.Abs(float64(aim.Z()-center.Z())) > animation.AimJitter {
+			t.Fatalf("aim Z drifted %v, want at most %v", aim.Z()-center.Z(), animation.AimJitter)
 		}
 		if aim != center {
 			moved = true

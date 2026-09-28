@@ -60,20 +60,30 @@ const oneBlockThreshold = 2
 // fresh scan, because the scan has already happened this tick and doing it twice
 // to answer a yes/no question is a cost the bot pays on every decision.
 func DetectOneBlock(nearBlocks string) OneBlockConfidence {
-	terms := splitList(nearBlocks)
-	// "none" and an empty summary both mean the scan found nothing in reach,
-	// which in a single-block world is the normal answer standing still.
-	distinct := map[string]bool{}
-	for _, t := range terms {
-		term := normaliseTerm(t)
-		if term == "" || term == "none" || term == "air" ||
-			term == "cave_air" || term == "void_air" {
-			continue
-		}
-		distinct[term] = true
+	distinct, readable := readableBlockNames(nearBlocks)
+	if !readable {
+		// The summary was not a list of block names, so there is no evidence at
+		// all. "I do not know" must not be recorded as "there is nothing here":
+		// PossiblyOneBlock confirms into DefinitelyOneBlock on the next reading,
+		// and a confirmed one-block world pins the bot to mining the block under
+		// it in place forever. An unreadable summary is evidence against the
+		// conclusion, not for it.
+		return NotOneBlock
 	}
 
-	switch n := len(distinct); {
+	// Air is not a block in reach, so it cannot count toward the total. A bot
+	// standing in the open sees air and would otherwise look like a single-block
+	// world on every hillside.
+	names := make([]string, 0, len(distinct))
+	for _, name := range distinct {
+		switch name {
+		case "air", "cave_air", "void_air", "unknown":
+			continue
+		}
+		names = append(names, name)
+	}
+
+	switch n := len(names); {
 	case n == 0:
 		// Nothing in reach at all. This is the single-block world's signature,
 		// but it is also what a bot standing in the middle of a large empty

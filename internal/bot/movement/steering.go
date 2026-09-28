@@ -351,7 +351,17 @@ func (tc *TickContext) ensureWalkToHasPath() {
 	if len(tc.B.CurrentPath) > 0 {
 		tc.B.WalkToRepathFailures = 0
 	} else {
-		tc.B.WalkToRepathFailures++
+		// Only count as a failure if terrain is actually loaded. A failure
+		// caused by unloaded chunks is transient and will resolve on its own;
+		// counting it triggers exponential backoff (up to 30s) that makes the
+		// bot give up right before the terrain arrives.
+		if terrainReady(tc.B, pathfinder.Node{
+			X: int32(math.Floor(float64(tc.B.Pos.X()))),
+			Y: int32(math.Floor(float64(tc.B.Pos.Y() + 0.1))),
+			Z: int32(math.Floor(float64(tc.B.Pos.Z()))),
+		}) {
+			tc.B.WalkToRepathFailures++
+		}
 	}
 	tc.B.Mu.Unlock()
 }

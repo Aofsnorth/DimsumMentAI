@@ -10,6 +10,29 @@ import (
 	"github.com/sandertv/gophertunnel/minecraft/protocol/packet"
 )
 
+// obstacleBreakFace is the face an unstick break claims. The bot is already
+// wedged against the cell, so the top face is the one it can be looking at.
+const obstacleBreakFace int32 = 1
+
+// obstacleBreakDuration is how long an unstick break waits. The bot is already
+// stuck, so a deliberate margin over the vanilla time is free: the block going
+// a beat later is invisible, a rejected destroy leaves the bot pushing the same
+// wall forever.
+const (
+	obstacleBreakDuration = 1800 * time.Millisecond
+	obstacleHardBreak     = 2600 * time.Millisecond
+)
+
+// hardToBreak reports whether a block needs the longer unstick break.
+func hardToBreak(lowerName string) bool {
+	for _, keyword := range []string{"stone", "ore", "cobble", "deepslate", "obsidian"} {
+		if strings.Contains(lowerName, keyword) {
+			return true
+		}
+	}
+	return false
+}
+
 // BreakObstacleAt asynchronously breaks the block at pos so the bot can
 // continue along its current path. Used by the steering loop when the bot is
 // detected as stuck against a wall.
@@ -34,48 +57,45 @@ func (b *Bot) BreakObstacleAt(pos protocol.BlockPos) {
 			EntityRuntimeID: runtimeID,
 			ActionType:      protocol.PlayerActionStartBreak,
 			BlockPosition:   pos,
-			BlockFace:       1,
+			BlockFace:       obstacleBreakFace,
 		})
 
-		// Generous fixed wait covers most hand-breakable blocks. The bot is
-		// already stuck so a few extra ms here is irrelevant.
-		breakMs := 1200
-		if strings.Contains(lower, "stone") || strings.Contains(lower, "ore") || strings.Contains(lower, "cobble") || strings.Contains(lower, "deepslate") {
-			breakMs = 1800
+		breakTime := obstacleBreakDuration
+		if hardToBreak(lower) {
+			breakTime = obstacleHardBreak
 		}
-		// Swing at a human pace (~300 ms): a 150 ms metronome restarts the
-		// viewer's arm-swing cycle before it finishes, so the arm reads as
-		// vibrating rather than swinging.
-		swingInterval := 300 * time.Millisecond
-		elapsed := time.Duration(0)
-		total := time.Duration(breakMs) * time.Millisecond
-		for elapsed < total {
-			_ = b.WritePacket(animation.MineSwing(runtimeID))
-			wait := swingInterval
-			if elapsed+wait > total {
-				wait = total - elapsed
+		// The shared rhythm, for the same reason the chopper and the miner use
+		// it: a fixed 300 ms metronome restarts the viewer's arm-swing cycle
+		// before it finishes, so the arm reads as vibrating rather than
+		// swinging, and the dig sound it drives comes out as a rattle.
+		aim := obstacleAim(pos)
+		for i, beat := range animation.Beats(breakTime, aim) {
+			time.Sleep(beat.Wait)
+			if i == 0 {
+				// The first beat is the wind-up; the arm is still being raised.
+				continue
 			}
-			time.Sleep(wait)
-			elapsed += wait
+			_ = b.WritePacket(animation.MineSwing(runtimeID))
+			b.LookAt(beat.Aim)
 		}
 
 		_ = b.WritePacket(&packet.PlayerAction{
 			EntityRuntimeID: runtimeID,
 			ActionType:      protocol.PlayerActionCrackBreak,
 			BlockPosition:   pos,
-			BlockFace:       1,
+			BlockFace:       obstacleBreakFace,
 		})
 		_ = b.WritePacket(&packet.PlayerAction{
 			EntityRuntimeID: runtimeID,
 			ActionType:      protocol.PlayerActionPredictDestroyBlock,
 			BlockPosition:   pos,
-			BlockFace:       1,
+			BlockFace:       obstacleBreakFace,
 		})
 		_ = b.WritePacket(&packet.PlayerAction{
 			EntityRuntimeID: runtimeID,
 			ActionType:      protocol.PlayerActionStopBreak,
 			BlockPosition:   pos,
-			BlockFace:       1,
+			BlockFace:       obstacleBreakFace,
 		})
 
 		b.WorldModel.SetSolid(pos.X(), pos.Y(), pos.Z(), false)

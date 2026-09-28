@@ -1,78 +1,30 @@
 {
   "goal": {
-    "id": "g-mulcquiv7f",
-    "objective": "Tambah mode 'natural' ke AGI: bot yang main sendiri tanpa input, terus-menerus, siap rekam YT. Berisi: (N1) Episode brief dengan deadline keras dari chat command — \"/episode 1 24m build a house\" → bot bikin goal danMENJALANKAN SAMPAI SELESAI dalam batas waktu; (N2) mode natural di config; (N3) Jev sebagai controller utama/inti — dia yang memutuskan kapan LLM besarneeded, dan saat escalate LLM dapat konteks LENGKAP (goal, plan, mob, blok, lokasi) fixing the gap where the LLM saw nothing; (N4) runtime discovery — bot vocabulary dari block/item yang benar-benar dia temukan, bukan hardcode survival; (N5) idle dua jenis: 'idle tapi hidup' (gaze + micro-move) dan 'diam total', durasi dari config bukan dari AI; (N6) watchdog — death/stuck/disconnect handler + rejoin supaya tahan 3 jam unattended; (N7) OneBlock sebagai kasus一等 — block yang berubah saat dipecah, bot harus baca dan bereaksi.",
-    "stop_condition": "Setiap layer punya test lulus + perilaku observable: (1) /episode parses brief dan menghitung EndsAt dengan benar, deadline lewat = bot berhenti, bukan lanjut; (2) mode natural jalan, dan plan yang ada dipakai untuk episode; (3) Jev yangtrigger eskalasi LLM, dan prompt LLM memuat goal+plan+mob+blok (regresi untuk gap yang ditemukan); (4) discovery menambah block baru ke vocabulary dan goal/activity bisa pakai item yang tidak ada di katalog lama; (5) idle_alive dan idle_still keduanya bisa dipilih dan时长 dari config; (6) watchdog mendeteksi death/stuck/disconnect dan memicu rejoin, tercatat di evidence log; (7) oneblock terdeteksi dan bot bereaksi terhadap block yang berubah. go build/vet/test ./... + pnxcheck hijau tiap checkpoint.",
+    "id": "g-mulv0wperq",
+    "objective": "Implement full critical path agar bot bisa \"namatin Minecraft\" (kill Ender Dragon): truthful action results, furnace fix, ranged combat (bow), portal lighting, stronghold exploration, end portal filling, dan dragon fight.",
+    "stop_condition": "go build ./..., go vet ./..., go test ./..., go run ./cmd/pnxcheck, go run ./cmd/archcheck semuanya exit 0; semua task completed; bot memiliki rantai lengkap: craft tools → smelt → light portal → enter Nether → kill blaze → craft eyes → find stronghold → fill frames → enter End → destroy crystals → kill dragon.",
     "validation": [
       "go build ./...",
-      "go test ./...",
       "go vet ./...",
-      "go run ./cmd/pnxcheck"
+      "go test ./... -timeout 120s",
+      "go run ./cmd/pnxcheck",
+      "go run ./cmd/archcheck"
     ],
     "constraints": [
-      "Jangan ubah offline/lan_discovery di configs/bot.yaml",
-      "Jangan pernah commit .env atau configs/token.json",
-      "Pertahankan semua test yang sudah ada",
-      "Mode default dan planning harus tetap berfungsi penuh; natural aditif",
-      "Jev tetap opsional: tanpa key, AGI tetap jalan di mode lama",
-      "Episode deadline harus keras — bot tidak bolehextend sendiri melewati batas",
-      "Universal: tidak boleh hardcode blok survival (oak_log/chest) sebagai syarat bisa jalan"
+      "Jangan ubah configs/bot.yaml atau .env kecuali diperlukan untuk fitur baru",
+      "Jangan commit tanpa diminta user",
+      "Pertahankan semua dirty changes user yang sudah ada",
+      "Ikuti harness rules: TDD, t.Parallel(), no layer violations",
+      "Jangan hapus safety validation yang ada",
+      "Setiap fitur baru wajib punya regression test"
     ],
-    "status": "done",
-    "created_at": "2026-09-28T14:37:57.895Z",
-    "updated_at": "2026-09-28T15:10:05.058Z",
-    "checkpoints": 3,
-    "max_checkpoints": 40,
-    "progress_log": [
-      {
-        "at": "2026-09-28T14:57:15.420Z",
-        "checkpoint": 1,
-        "summary": "N1 episode brief with hard deadline, N2 natural mode wired into the tick loop, N5 dual idle (alive/still) with config-driven bias. Plus a self-deadlock caught by the new tests.",
-        "validation_result": "go build/vet/test ./... all green, pnxcheck exit 0, 17 new tests"
-      },
-      {
-        "at": "2026-09-28T15:06:44.215Z",
-        "checkpoint": 2,
-        "summary": "N4 runtime discovery (vocabulary from what was actually seen, replacing the hardcoded survival list) and N3 Jev as primary controller (it decides when the big model is called, and the call now carries the full picture — closing the gap found earlier).",
-        "validation_result": "go build/vet/test ./... all green; pnxcheck exit 0; archcheck 0 findings; 16 new tests (9 discovery, 7 escalation)"
-      },
-      {
-        "at": "2026-09-28T15:10:05.058Z",
-        "checkpoint": 3,
-        "summary": "All seven layers done: N1 episode brief with hard deadline, N2 natural mode, N3 Jev as primary controller with full-context escalation, N4 runtime discovery, N5 dual idle, N6 watchdog, N7 oneblock. Config documented and verified.",
-        "validation_result": "go build/vet/test ./... all green; 42 packages ok, 0 failures; pnxcheck exit 0; archcheck 0 findings; ~40 new tests across episode/natural/idle/discovery/escalation/watchdog/oneblock; real configs/bot.yaml verified to load and resolve all four mode spellings"
-      }
-    ],
-    "evidence": [
-      {
-        "id": "e-muldfj4a5i",
-        "at": "2026-09-28T14:57:09.514Z",
-        "kind": "test",
-        "description": "N1+N2+N5 done, plus a real bug caught by the new idle code. N1 Episode (internal/bot/agi/episode.go): Episode{Number,Title,Objective,StartedAt,EndsAt} with a HARD deadline — Remaining never negative, Over() true AT the deadline (not one nanosecond after), Urgency that is flat zero across the first 40% and then climbs, WrappingUp at 0.75 which is the \"shoot\" moment, and Describe() that carries the remaining time because every caller needs the budget and would otherwise re-derive it. ParseEpisode accepts \"/episode 1 24m build a house\", no slash, /ep alias, \"m30\" unit-first, \"1h30m\", \"1h 30m\" split by a space, and a bare number as minutes. N2 natural mode wired into Tick below the reflex layer, with the rule that a human outranks the schedule: Suspend() pauses work but NOT the episode clock (the recording is still going whether anyone is talking or not), lapsing after 90s, and it delegates to the SAME playAlong path the default brain uses rather than implementing a second personality. A new brief throws away the old plan outright. N5 idle: idle_alive vs idle_still chosen by a pure ChooseIdle(seed, bias) so a run cannot pick one mode every time, still idles get a longer window, and the rest period is HELD on the runner rather than re-derived from the clock each tick — a duration recomputed from the clock slides forward forever and the bot never wakes up. New config idle_still_bias, clamped not rejected.",
-        "result": "pass"
-      },
-      {
-        "id": "e-muldfj4dy6",
-        "at": "2026-09-28T14:57:09.517Z",
-        "kind": "test",
-        "description": "Validation: go build ./... exit 0, go vet ./... clean, go test ./... zero failures, go run ./cmd/pnxcheck exit 0. 17 new tests (9 episode, 8 natural/idle). The idle tests caught a real self-deadlock I introduced while writing them: idle() held r.mu and then called planIdle(), which takes r.mu itself — the identical non-reentrant pattern that wedged Observe() and that the tests/agi/observe_test.go guard now exists to catch. It hung the package for the full 60s test timeout before failing, which is exactly the signature of that bug. Also required giving Runner a log()/note() pair that tolerate a nil bot: the agi package's own tests run in-package and cannot construct a *bot.Bot because the bot imports agi, so every notifying method has to survive a runner with no bot or the decision layer becomes untestable.",
-        "result": "pass"
-      },
-      {
-        "id": "e-muldrp3bdc",
-        "at": "2026-09-28T15:06:37.127Z",
-        "kind": "test",
-        "description": "N4 discovery + N3 Jev as primary controller. N4: internal/bot/agi/discovery.go — Vocabulary built from what the bot has actually SEEN, replacing the hardcoded survival list (oak_log/chest/bed/night) that cannot work on an addon server and is entirely empty on a one-block world. Names normalised (namespace, case, spaces) so one block is not three terms, air excluded so the list is not topped by \"air\", most-seen first because a block seen once is scenery and seen forty times is a resource, stable ordering so a reshuffle is not mistaken for a discovery, capped at 48 so the state text stays inside the model's budget. Wired into Observe() and into describeState so BOTH the fast and slow models see what this world is made of. N3: a new Jev question jev.needs_the_big_brain, asked in the same parallel pass rather than as a second round trip, with a deliberately high 0.75 threshold because the big model is the expensive tier and a bot that thinks every few seconds reads as laggy rather than thoughtful. WantsBigBrain refuses to escalate on a judgement that never arrived — a missing answer must never read as a confident yes, or a session with Jev down spends the expensive tier every tick. The escalation prompt deliberately is NOT a task list, and says so. And the standing gap is closed: buildDecisionPrompt now carries plan, goal, world contents, episode clock and visible mobs, with the instruction to follow the plan and not to invent actions the world cannot support.",
-        "result": "pass"
-      },
-      {
-        "id": "e-muldvzwjld",
-        "at": "2026-09-28T15:09:57.763Z",
-        "kind": "test",
-        "description": "N6 watchdog + N7 oneblock, completing all seven layers. N6 internal/bot/agi/watchdog.go: Diagnose returns ONE fault in a fixed order — disconnect first (nothing else can be tried until the connection is back), then death (a dead bot is also a motionless one, so checking stillness first means unsticking a corpse), then stuck. Death and disconnect act on the FIRST sighting because waiting to confirm a dead bot means lying on the respawn screen for another tick; stuck needs two consecutive agreeing readings because one tick can be a server hiccup and a watchdog that thrashes gets switched off. Exploring is exempt from the stuck check — a bot walking somewhere on purpose is supposed to leave its position alone, and calling that stuck produces a bot that interrupts its own journey every thirty seconds. PositionChanged beats a pure clock because a server applying a freeze still answers ticks. N7 internal/bot/agi/oneblock.go: DetectOneBlock is a CONFIDENCE not a boolean, because \"one block in reach\" is also \"a small room\" and a sweep of identical floor tiles looks identical; ConfirmOneBlock takes the second opinion after standing still, which is the difference between a room and a single-block world. Air is excluded so a bot on a hillside does not look like one. OneBlockPlan states the one verb there is — break the block, see what turned up, build upward — and rules out what is absent without instructing the bot to go find it.",
-        "result": "pass"
-      }
-    ]
+    "status": "active",
+    "created_at": "2026-09-28T23:09:40.370Z",
+    "updated_at": "2026-09-28T23:09:40.371Z",
+    "checkpoints": 0,
+    "max_checkpoints": 30,
+    "progress_log": [],
+    "evidence": []
   },
   "tasks": [
     {
@@ -282,6 +234,154 @@
       "blocked_by": [],
       "created_at": "2026-09-28T14:38:10.936Z",
       "updated_at": "2026-09-28T15:10:05.063Z"
+    },
+    {
+      "id": "t-27",
+      "subject": "Debug and fix wooden axe auto-craft ItemStackRequest packet violation, including regression coverage",
+      "status": "completed",
+      "blocked_by": [],
+      "created_at": "2026-09-28T16:12:41.332Z",
+      "updated_at": "2026-09-28T21:51:48.164Z"
+    },
+    {
+      "id": "t-28",
+      "subject": "Bind crafting-table interaction to confirmed server workbench window and close its assigned ID",
+      "status": "completed",
+      "blocked_by": [
+        "t-27"
+      ],
+      "created_at": "2026-09-28T16:52:30.610Z",
+      "updated_at": "2026-09-28T21:51:48.168Z"
+    },
+    {
+      "id": "t-29",
+      "subject": "Stabilize A* route reuse for same moving drop/command with regression tests",
+      "status": "completed",
+      "blocked_by": [],
+      "created_at": "2026-09-28T16:52:30.626Z",
+      "updated_at": "2026-09-28T21:51:48.172Z"
+    },
+    {
+      "id": "t-30",
+      "subject": "Fix block break swing, server-confirmed sound/termination with regression tests",
+      "status": "completed",
+      "blocked_by": [],
+      "created_at": "2026-09-28T16:52:30.640Z",
+      "updated_at": "2026-09-28T21:51:48.175Z"
+    },
+    {
+      "id": "t-31",
+      "subject": "T1: Make ExecuteAndWait return truthful per-action status (plan.go/execute.go)",
+      "status": "in_progress",
+      "blocked_by": [],
+      "created_at": "2026-09-28T23:09:40.421Z",
+      "updated_at": "2026-09-28T23:11:12.342Z"
+    },
+    {
+      "id": "t-32",
+      "subject": "T2: Fix furnace - name-based find, ContainerOpen wait, ItemStackRequest, real window ID, smelt progress via ContainerSetData",
+      "status": "in_progress",
+      "blocked_by": [],
+      "created_at": "2026-09-28T23:09:40.427Z",
+      "updated_at": "2026-09-28T23:11:12.385Z"
+    },
+    {
+      "id": "t-33",
+      "subject": "T3: Wire SetHunger from handleUpdateAttributes + implement tickAutoArmor",
+      "status": "in_progress",
+      "blocked_by": [],
+      "created_at": "2026-09-28T23:09:40.431Z",
+      "updated_at": "2026-09-28T23:11:12.390Z"
+    },
+    {
+      "id": "t-34",
+      "subject": "T4: Remove legacy chest/scan.go fabricated data",
+      "status": "in_progress",
+      "blocked_by": [],
+      "created_at": "2026-09-28T23:09:40.434Z",
+      "updated_at": "2026-09-28T23:11:12.397Z"
+    },
+    {
+      "id": "t-35",
+      "subject": "T5: Bow shoot mechanics - charge via UseItem, release timing, aim at target",
+      "status": "in_progress",
+      "blocked_by": [],
+      "created_at": "2026-09-28T23:09:40.446Z",
+      "updated_at": "2026-09-28T23:11:12.403Z"
+    },
+    {
+      "id": "t-36",
+      "subject": "T6: Mob tactics - creeper flee, skeleton strafe, enderman gaze avoidance",
+      "status": "in_progress",
+      "blocked_by": [],
+      "created_at": "2026-09-28T23:09:40.452Z",
+      "updated_at": "2026-09-28T23:11:12.446Z"
+    },
+    {
+      "id": "t-37",
+      "subject": "T7: Light unlit portal with flint_and_steel using dimension.Classify NeedsLighting",
+      "status": "pending",
+      "blocked_by": [
+        "t-31",
+        "t-32"
+      ],
+      "created_at": "2026-09-28T23:09:56.532Z",
+      "updated_at": "2026-09-28T23:09:56.532Z"
+    },
+    {
+      "id": "t-38",
+      "subject": "T8: Stronghold exploration - search spiral + stronghold hint detection",
+      "status": "in_progress",
+      "blocked_by": [
+        "t-31"
+      ],
+      "created_at": "2026-09-28T23:09:56.555Z",
+      "updated_at": "2026-09-28T23:20:01.417Z"
+    },
+    {
+      "id": "t-39",
+      "subject": "T9: Fill end portal frames with eyes of ender (UseItem on frame blocks)",
+      "status": "pending",
+      "blocked_by": [
+        "t-37",
+        "t-38"
+      ],
+      "created_at": "2026-09-28T23:10:13.479Z",
+      "updated_at": "2026-09-28T23:10:13.479Z"
+    },
+    {
+      "id": "t-40",
+      "subject": "T10: Dragon fight - crystal targeting, phase awareness, melee on perch",
+      "status": "pending",
+      "blocked_by": [
+        "t-35",
+        "t-36"
+      ],
+      "created_at": "2026-09-28T23:10:13.483Z",
+      "updated_at": "2026-09-28T23:10:13.483Z"
+    },
+    {
+      "id": "t-41",
+      "subject": "T11: Extend planner vocabulary - light_portal, fill_frame, destroy_crystal, explore_stronghold step types",
+      "status": "pending",
+      "blocked_by": [
+        "t-37",
+        "t-38",
+        "t-39",
+        "t-40"
+      ],
+      "created_at": "2026-09-28T23:10:13.492Z",
+      "updated_at": "2026-09-28T23:10:13.492Z"
+    },
+    {
+      "id": "t-42",
+      "subject": "T12: Integration validation - full harness + end-to-end chain test",
+      "status": "pending",
+      "blocked_by": [
+        "t-41"
+      ],
+      "created_at": "2026-09-28T23:10:13.497Z",
+      "updated_at": "2026-09-28T23:10:13.497Z"
     }
   ],
   "archived_goals": [
@@ -648,6 +748,213 @@
           "at": "2026-09-28T12:15:34.308Z",
           "kind": "test",
           "description": "M7 validation plus final goal sweep. go build ./... exit 0, go vet ./... clean, go test ./... zero failures, go run ./cmd/pnxcheck exit 0, and go run ./cmd/archcheck reports 0 architecture findings. 9 new evidence tests, which caught three real defects in my own first draft: Record() contained a BLOCKING send followed by a select/default that could never help, directly contradicting the never-block promise; the sequence number was assigned at call time (racy across the eight goroutines that record) rather than at write time; and three tests read the file before Close(), which is a race, and two asserted full record counts through a 256-slot buffer where drops are correct behaviour. The evidence logger itself caught a test that \"proved\" a bot must not block on an unopenable log by using a path that MkdirAll could in fact create.",
+          "result": "pass"
+        }
+      ]
+    },
+    {
+      "id": "g-mulcquiv7f",
+      "objective": "Tambah mode 'natural' ke AGI: bot yang main sendiri tanpa input, terus-menerus, siap rekam YT. Berisi: (N1) Episode brief dengan deadline keras dari chat command — \"/episode 1 24m build a house\" → bot bikin goal danMENJALANKAN SAMPAI SELESAI dalam batas waktu; (N2) mode natural di config; (N3) Jev sebagai controller utama/inti — dia yang memutuskan kapan LLM besarneeded, dan saat escalate LLM dapat konteks LENGKAP (goal, plan, mob, blok, lokasi) fixing the gap where the LLM saw nothing; (N4) runtime discovery — bot vocabulary dari block/item yang benar-benar dia temukan, bukan hardcode survival; (N5) idle dua jenis: 'idle tapi hidup' (gaze + micro-move) dan 'diam total', durasi dari config bukan dari AI; (N6) watchdog — death/stuck/disconnect handler + rejoin supaya tahan 3 jam unattended; (N7) OneBlock sebagai kasus一等 — block yang berubah saat dipecah, bot harus baca dan bereaksi.",
+      "stop_condition": "Setiap layer punya test lulus + perilaku observable: (1) /episode parses brief dan menghitung EndsAt dengan benar, deadline lewat = bot berhenti, bukan lanjut; (2) mode natural jalan, dan plan yang ada dipakai untuk episode; (3) Jev yangtrigger eskalasi LLM, dan prompt LLM memuat goal+plan+mob+blok (regresi untuk gap yang ditemukan); (4) discovery menambah block baru ke vocabulary dan goal/activity bisa pakai item yang tidak ada di katalog lama; (5) idle_alive dan idle_still keduanya bisa dipilih dan时长 dari config; (6) watchdog mendeteksi death/stuck/disconnect dan memicu rejoin, tercatat di evidence log; (7) oneblock terdeteksi dan bot bereaksi terhadap block yang berubah. go build/vet/test ./... + pnxcheck hijau tiap checkpoint.",
+      "validation": [
+        "go build ./...",
+        "go test ./...",
+        "go vet ./...",
+        "go run ./cmd/pnxcheck"
+      ],
+      "constraints": [
+        "Jangan ubah offline/lan_discovery di configs/bot.yaml",
+        "Jangan pernah commit .env atau configs/token.json",
+        "Pertahankan semua test yang sudah ada",
+        "Mode default dan planning harus tetap berfungsi penuh; natural aditif",
+        "Jev tetap opsional: tanpa key, AGI tetap jalan di mode lama",
+        "Episode deadline harus keras — bot tidak bolehextend sendiri melewati batas",
+        "Universal: tidak boleh hardcode blok survival (oak_log/chest) sebagai syarat bisa jalan"
+      ],
+      "status": "done",
+      "created_at": "2026-09-28T14:37:57.895Z",
+      "updated_at": "2026-09-28T15:10:05.058Z",
+      "checkpoints": 3,
+      "max_checkpoints": 40,
+      "progress_log": [
+        {
+          "at": "2026-09-28T14:57:15.420Z",
+          "checkpoint": 1,
+          "summary": "N1 episode brief with hard deadline, N2 natural mode wired into the tick loop, N5 dual idle (alive/still) with config-driven bias. Plus a self-deadlock caught by the new tests.",
+          "validation_result": "go build/vet/test ./... all green, pnxcheck exit 0, 17 new tests"
+        },
+        {
+          "at": "2026-09-28T15:06:44.215Z",
+          "checkpoint": 2,
+          "summary": "N4 runtime discovery (vocabulary from what was actually seen, replacing the hardcoded survival list) and N3 Jev as primary controller (it decides when the big model is called, and the call now carries the full picture — closing the gap found earlier).",
+          "validation_result": "go build/vet/test ./... all green; pnxcheck exit 0; archcheck 0 findings; 16 new tests (9 discovery, 7 escalation)"
+        },
+        {
+          "at": "2026-09-28T15:10:05.058Z",
+          "checkpoint": 3,
+          "summary": "All seven layers done: N1 episode brief with hard deadline, N2 natural mode, N3 Jev as primary controller with full-context escalation, N4 runtime discovery, N5 dual idle, N6 watchdog, N7 oneblock. Config documented and verified.",
+          "validation_result": "go build/vet/test ./... all green; 42 packages ok, 0 failures; pnxcheck exit 0; archcheck 0 findings; ~40 new tests across episode/natural/idle/discovery/escalation/watchdog/oneblock; real configs/bot.yaml verified to load and resolve all four mode spellings"
+        }
+      ],
+      "evidence": [
+        {
+          "id": "e-muldfj4a5i",
+          "at": "2026-09-28T14:57:09.514Z",
+          "kind": "test",
+          "description": "N1+N2+N5 done, plus a real bug caught by the new idle code. N1 Episode (internal/bot/agi/episode.go): Episode{Number,Title,Objective,StartedAt,EndsAt} with a HARD deadline — Remaining never negative, Over() true AT the deadline (not one nanosecond after), Urgency that is flat zero across the first 40% and then climbs, WrappingUp at 0.75 which is the \"shoot\" moment, and Describe() that carries the remaining time because every caller needs the budget and would otherwise re-derive it. ParseEpisode accepts \"/episode 1 24m build a house\", no slash, /ep alias, \"m30\" unit-first, \"1h30m\", \"1h 30m\" split by a space, and a bare number as minutes. N2 natural mode wired into Tick below the reflex layer, with the rule that a human outranks the schedule: Suspend() pauses work but NOT the episode clock (the recording is still going whether anyone is talking or not), lapsing after 90s, and it delegates to the SAME playAlong path the default brain uses rather than implementing a second personality. A new brief throws away the old plan outright. N5 idle: idle_alive vs idle_still chosen by a pure ChooseIdle(seed, bias) so a run cannot pick one mode every time, still idles get a longer window, and the rest period is HELD on the runner rather than re-derived from the clock each tick — a duration recomputed from the clock slides forward forever and the bot never wakes up. New config idle_still_bias, clamped not rejected.",
+          "result": "pass"
+        },
+        {
+          "id": "e-muldfj4dy6",
+          "at": "2026-09-28T14:57:09.517Z",
+          "kind": "test",
+          "description": "Validation: go build ./... exit 0, go vet ./... clean, go test ./... zero failures, go run ./cmd/pnxcheck exit 0. 17 new tests (9 episode, 8 natural/idle). The idle tests caught a real self-deadlock I introduced while writing them: idle() held r.mu and then called planIdle(), which takes r.mu itself — the identical non-reentrant pattern that wedged Observe() and that the tests/agi/observe_test.go guard now exists to catch. It hung the package for the full 60s test timeout before failing, which is exactly the signature of that bug. Also required giving Runner a log()/note() pair that tolerate a nil bot: the agi package's own tests run in-package and cannot construct a *bot.Bot because the bot imports agi, so every notifying method has to survive a runner with no bot or the decision layer becomes untestable.",
+          "result": "pass"
+        },
+        {
+          "id": "e-muldrp3bdc",
+          "at": "2026-09-28T15:06:37.127Z",
+          "kind": "test",
+          "description": "N4 discovery + N3 Jev as primary controller. N4: internal/bot/agi/discovery.go — Vocabulary built from what the bot has actually SEEN, replacing the hardcoded survival list (oak_log/chest/bed/night) that cannot work on an addon server and is entirely empty on a one-block world. Names normalised (namespace, case, spaces) so one block is not three terms, air excluded so the list is not topped by \"air\", most-seen first because a block seen once is scenery and seen forty times is a resource, stable ordering so a reshuffle is not mistaken for a discovery, capped at 48 so the state text stays inside the model's budget. Wired into Observe() and into describeState so BOTH the fast and slow models see what this world is made of. N3: a new Jev question jev.needs_the_big_brain, asked in the same parallel pass rather than as a second round trip, with a deliberately high 0.75 threshold because the big model is the expensive tier and a bot that thinks every few seconds reads as laggy rather than thoughtful. WantsBigBrain refuses to escalate on a judgement that never arrived — a missing answer must never read as a confident yes, or a session with Jev down spends the expensive tier every tick. The escalation prompt deliberately is NOT a task list, and says so. And the standing gap is closed: buildDecisionPrompt now carries plan, goal, world contents, episode clock and visible mobs, with the instruction to follow the plan and not to invent actions the world cannot support.",
+          "result": "pass"
+        },
+        {
+          "id": "e-muldvzwjld",
+          "at": "2026-09-28T15:09:57.763Z",
+          "kind": "test",
+          "description": "N6 watchdog + N7 oneblock, completing all seven layers. N6 internal/bot/agi/watchdog.go: Diagnose returns ONE fault in a fixed order — disconnect first (nothing else can be tried until the connection is back), then death (a dead bot is also a motionless one, so checking stillness first means unsticking a corpse), then stuck. Death and disconnect act on the FIRST sighting because waiting to confirm a dead bot means lying on the respawn screen for another tick; stuck needs two consecutive agreeing readings because one tick can be a server hiccup and a watchdog that thrashes gets switched off. Exploring is exempt from the stuck check — a bot walking somewhere on purpose is supposed to leave its position alone, and calling that stuck produces a bot that interrupts its own journey every thirty seconds. PositionChanged beats a pure clock because a server applying a freeze still answers ticks. N7 internal/bot/agi/oneblock.go: DetectOneBlock is a CONFIDENCE not a boolean, because \"one block in reach\" is also \"a small room\" and a sweep of identical floor tiles looks identical; ConfirmOneBlock takes the second opinion after standing still, which is the difference between a room and a single-block world. Air is excluded so a bot on a hillside does not look like one. OneBlockPlan states the one verb there is — break the block, see what turned up, build upward — and rules out what is absent without instructing the bot to go find it.",
+          "result": "pass"
+        }
+      ]
+    },
+    {
+      "id": "g-mulg3h7bvm",
+      "objective": "Perbaiki perilaku natural bot saat menghancurkan block dan stabilkan navigasi A* agar animasi/suara serta perpindahan menuju target terasa natural dan tidak recalculation loop.",
+      "stop_condition": "Test regresi untuk break pacing/animasi/suara dan A* stabil lulus; go build ./..., go vet ./..., go test ./..., go run ./cmd/pnxcheck, dan go run ./cmd/archcheck semuanya exit 0.",
+      "validation": [
+        "go test ./internal/bot/action ./internal/bot/movement ./internal/bot/gathering ./internal/bot/agi -timeout 90s",
+        "go build ./...",
+        "go vet ./...",
+        "go test ./...",
+        "go run ./cmd/pnxcheck",
+        "go run ./cmd/archcheck"
+      ],
+      "constraints": [
+        "Jangan ubah mode natural/episode atau configs/bot.yaml kecuali diperlukan oleh bug ini",
+        "Jangan commit .env atau configs/token.json",
+        "Pertahankan packet protocol yang kompatibel dengan Bedrock server",
+        "Jangan menghapus safety validation pada break atau pathfinding",
+        "Tambahkan regression test untuk setiap akar masalah yang diperbaiki"
+      ],
+      "status": "done",
+      "created_at": "2026-09-28T16:11:46.007Z",
+      "updated_at": "2026-09-28T21:51:48.148Z",
+      "checkpoints": 1,
+      "max_checkpoints": 20,
+      "progress_log": [
+        {
+          "at": "2026-09-28T16:15:44.282Z",
+          "checkpoint": 0,
+          "summary": "goal_control:pause — Pausing the unrelated natural break/navigation goal while auditing the requested CraftItemOnTable packet violation.",
+          "validation_result": "-"
+        },
+        {
+          "at": "2026-09-28T16:28:47.460Z",
+          "checkpoint": 0,
+          "summary": "goal_control:resume — User requested continuing the crafting packet-violation and natural break/navigation fixes.",
+          "validation_result": "-"
+        },
+        {
+          "at": "2026-09-28T21:51:43.803Z",
+          "checkpoint": 1,
+          "summary": "Fixed four root causes: (1) table crafting disconnect - AutoCraft replaced by staged 3x3 grid + manual craft actions, workbench now confirmed open via ContainerOpen and closed by the server-assigned window ID; (2) A* recalc loop - WalkTo reuses the live route for a re-asserted target; (3) break naturalness - one shared swing rhythm for chopper, miner, obstruction clear and obstacle unstick, with no runt final swing; (4) AGI watchdog self-deadlock that wedged the decision loop on its first tick.",
+          "validation_result": "go build ./... exit 0; go vet ./... clean; go test ./... all packages ok, 0 failures; go run ./cmd/pnxcheck passes; go run ./cmd/archcheck 0 findings; go run ./cmd/harness PASSED"
+        },
+        {
+          "at": "2026-09-28T21:51:48.148Z",
+          "checkpoint": 1,
+          "summary": "goal_control:complete — All four root causes fixed with regression coverage; full validation gate passes.",
+          "validation_result": "-"
+        }
+      ],
+      "evidence": [
+        {
+          "id": "e-muls7pys26",
+          "at": "2026-09-28T21:50:59.383Z",
+          "kind": "test",
+          "description": "Table craft: AutoCraftRecipeStackRequestAction replaced by the staged-grid path (Take -> Place -> CraftRecipe -> CraftResults -> Consume per staged slot -> Place) with slots 32..40. New tests: internal/bot/inventory_table_craft_test.go (grid mapping, consume-per-slot action order, unsupported-recipe rejection) and internal/bot/inventory/crafting/table_test.go (arm watch before click, fail when no ContainerOpen, close by the assigned window ID).",
+          "result": "pass"
+        },
+        {
+          "id": "e-muls7uazag",
+          "at": "2026-09-28T21:51:05.003Z",
+          "kind": "test",
+          "description": "A* recalculation loop: WalkTo no longer re-plans for a re-asserted destination. shouldReplanForWalkTo is pure and unit-tested in internal/bot/walk_to_replan_test.go (same target reuses route, sub-0.25 drift reuses, moved target re-plans, no-route / changed mode always re-plans). Fixes both the \"recalculating path using A*\" every 250ms for a one-block drop and the stuck-ladder reset that prevented escalation.",
+          "result": "pass"
+        },
+        {
+          "id": "e-muls85ngme",
+          "at": "2026-09-28T21:51:19.708Z",
+          "kind": "test",
+          "description": "Break animation and sound: one shared rhythm in internal/bot/movement/animation/rhythm.go (WindUp/Cadence/JitteredAim/Beats), now used by the chopper, the miner, the obstruction clear and the obstacle unstick (which had its own fixed 300ms metronome). Beats refuses to end on a runt swing - the new TestBeatsNeverEndOnARuntSwing caught a real 86ms final swing that would have shown as the exact arm vibration the rhythm exists to prevent. Tests: rhythm_test.go, break_obstacle_test.go, chop_rhythm_test.go.",
+          "result": "pass"
+        },
+        {
+          "id": "e-muls8frez6",
+          "at": "2026-09-28T21:51:32.810Z",
+          "kind": "test",
+          "description": "AGI watchdog self-deadlock found while running the goal validation gate: watch() took r.mu across the reading and then took it again to count the repeat, and sync.Mutex is not reentrant, so the loop wedged on its first tick (this is why the bot still needed chat commands to act). Split into observePosition and recordFault, each locking once. Regression test internal/bot/agi/watchdog_lock_test.go runs it on a goroutine with a timeout.",
+          "result": "pass"
+        },
+        {
+          "id": "e-muls8jlpsl",
+          "at": "2026-09-28T21:51:37.789Z",
+          "kind": "build",
+          "description": "Full gate: go build ./... exit 0, go vet ./... clean, go test ./... all packages ok (no failures), go run ./cmd/pnxcheck RESULT every PNX login check passes, go run ./cmd/archcheck 0 findings, go run ./cmd/harness PASSED.",
+          "result": "pass"
+        }
+      ]
+    },
+    {
+      "id": "g-mulsvm9d3c",
+      "objective": "Audit gap DimsumMentAI terhadap kemampuan player Bedrock dan fitur Minepal, lalu susun roadmap implementasi berbukti dan terprioritaskan.",
+      "stop_condition": "Dokumen audit/roadmap tersedia dengan bukti path kode, sumber resmi Minepal, matriks status/gap, fase dependensi, dan acceptance criteria; hasil audit dirangkum untuk pengguna.",
+      "validation": [
+        "Review code paths dan integrasi fitur yang relevan.",
+        "Verifikasi klaim Minepal melalui dokumentasi resmi publik.",
+        "Periksa konsistensi matriks gap dan roadmap serta link file."
+      ],
+      "constraints": [
+        "Audit dan planning saja; jangan implementasikan fitur gameplay atau mengubah konfigurasi/secrets.",
+        "Pertahankan semua perubahan pengguna yang sudah ada.",
+        "Bedakan implementasi, integrasi, dan bukti live; klaim Minepal harus bersumber."
+      ],
+      "status": "done",
+      "created_at": "2026-09-28T22:09:34.322Z",
+      "updated_at": "2026-09-28T22:52:25.147Z",
+      "checkpoints": 1,
+      "max_checkpoints": 5,
+      "progress_log": [
+        {
+          "at": "2026-09-28T22:52:25.147Z",
+          "checkpoint": 1,
+          "summary": "Completed full audit: 3 sub-agent audits (inventory/mechanics, movement/combat/dimensions, AI/integration/UX) plus direct verification of dimension, movement, combat, storage, AGI, reconnection, voice, and memory subsystems; compared against MinePal official docs and source; wrote docs/FEATURE_GAP_ROADMAP.md with gap matrices and 12-phase roadmap.",
+          "validation_result": "docs/FEATURE_GAP_ROADMAP.md written with verified path:line evidence for all claims; MinePal features sourced from minepal.net official pages and GitHub 0es/MinePal actions.js; no code modified (audit/planning only per goal constraints)."
+        }
+      ],
+      "evidence": [
+        {
+          "id": "e-muluepvrg2",
+          "at": "2026-09-28T22:52:25.097Z",
+          "kind": "artifact",
+          "description": "Feature-gap audit delivered as docs/FEATURE_GAP_ROADMAP.md: verified inventory of 18 existing domains with path:line evidence; gap matrices for movement/combat/stations/containers/farming/survival/building/AI vs 1:1 Bedrock player; MinePal comparison from official sources (minepal.net + GitHub 0es/MinePal actions.js); 12-phase roadmap with dependencies, acceptance criteria per task, and effort estimates. Cross-cutting root cause identified: ExecuteAndWait returns success for every non-craft action without server confirmation.",
+          "result": "pass"
+        },
+        {
+          "id": "e-muluepx0wm",
+          "at": "2026-09-28T22:52:25.140Z",
+          "kind": "review",
+          "description": "MinePal feature claims verified against official sources: minepal.net/lobbies (follow/mine/fight/hunt/build/chat), minepal.net/updates (autonomy, mining smarts, home protection, sign reading, backup/restore), minepal.net/pal-voice (11 voices, personality steering), minepal.net/imagine (text/image to structure), minepal.net/pocket (cross-device shared memory), GitHub 0es/MinePal src/agent/commands/actions.js (37 commands: goToPlayer, teleportToPlayer, followPlayer, rememberHere, givePlayer, collectBlocks, craftRecipe, smeltItem, sow, buildHouse, tameMob, dismount, activateEntity, crouching, consume, equip, chest/furnace operations).",
           "result": "pass"
         }
       ]

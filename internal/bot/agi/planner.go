@@ -436,7 +436,7 @@ func (r *Runner) requestPlan(ctx context.Context, snap Snapshot, judgement Judge
 		// The state text already carries the active plan, so a replan sees the
 		// steps that are done and the ones that are not. That is what lets the
 		// planner revise rather than restart.
-		reply, err := r.b.AiClient.AskPlanner(plannerSystemPrompt(r.cfg.PlanMaxSteps), plannerMessage(snap))
+		reply, err := r.b.AiClient.AskPlanner(plannerSystemPrompt(r.cfg.PlanMaxSteps), r.plannerMessageFor(snap))
 		if err != nil {
 			r.b.Logger.Warn("AGI: planner unavailable", "error", err.Error())
 			return
@@ -450,10 +450,11 @@ func (r *Runner) requestPlan(ctx context.Context, snap Snapshot, judgement Judge
 	}()
 }
 
-// plannerMessage is what the planner is shown: the world, and whatever plan is
-// already in play.
-func plannerMessage(snap Snapshot) string {
-	return describeState(snap) + "\nWrite the plan for this bot now, as JSON."
+// plannerMessageFor is what the planner is shown: the world, whatever plan is
+// already in play, and — when the operator named one — the standing goal that
+// every step has to serve.
+func (r *Runner) plannerMessageFor(snap Snapshot) string {
+	return describeState(snap) + r.operatorGoalInstruction() + "\nWrite the plan for this bot now, as JSON."
 }
 
 // installPlan stamps a generated plan with the bookkeeping the executor needs

@@ -7,7 +7,6 @@ package crafting
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
 	"math"
@@ -17,12 +16,16 @@ import (
 	"bedrock-ai/internal/bot/entity"
 	"bedrock-ai/internal/bot/placement"
 	"bedrock-ai/internal/event"
-	"bedrock-ai/internal/safecast"
 
 	"github.com/go-gl/mathgl/mgl32"
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
 	"github.com/sandertv/gophertunnel/minecraft/protocol/packet"
 )
+
+// containerOpenTimeout bounds the wait for the server to open the workbench
+// window after the click. A LAN host answers in well under a second; a host
+// that never opens it would otherwise be waited on for the length of a craft.
+const containerOpenTimeout = 2 * time.Second
 
 // Bot is the subset of *bot.Bot required to drive the crafting workflow.
 type Bot interface {
@@ -44,6 +47,18 @@ type Bot interface {
 	CraftItem(recipeNetID uint32, count int) error
 	GetRecipes() map[string]uint32
 	PlaceBlock(ctx context.Context, request placement.Request) error
+	// BeginContainerWatch arms the packet capture that WaitContainerOpen reads,
+	// so the server's ContainerOpen cannot be missed between click and wait.
+	BeginContainerWatch()
+	// ClickBlockAt runs the proven block click (aim convergence, wire block ID,
+	// swing, and the inline PlayerAuthInput fallback for hosts that ignore a
+	// standalone transaction).
+	ClickBlockAt(ctx context.Context, pos protocol.BlockPos) (bool, string)
+	// WaitContainerOpen blocks until the server assigns a window ID, which is
+	// the only proof the workbench is actually open.
+	WaitContainerOpen(ctx context.Context, timeout time.Duration) (byte, protocol.BlockPos, bool)
+	// CloseContainerWindow closes the window the server assigned, by that ID.
+	CloseContainerWindow(windowID byte)
 }
 
 // Manager runs the EnsureCraftingTable / OpenCraftingTable / CloseWindow
@@ -52,13 +67,15 @@ type Manager struct {
 	bot    Bot
 	logger *slog.Logger
 
-	// nextWindowID rotates through 1..127 (ContainerID range used for
-	// player-opened blocks). Vanilla starts at 1 and increments.
-	nextWindowID byte
+	// windowID is the workbench window the server assigned. Zero means no
+	// workbench is open, so CloseWindow has nothing to close. It is never
+	// guessed: the bot used to close window 1 on every craft while the server
+	// had assigned a different ID, which left the workbench open server-side.
+	windowID byte
 }
 
 func NewManager(bot Bot, logger *slog.Logger) *Manager {
-	return &Manager{bot: bot, logger: logger, nextWindowID: 1}
+	return &Manager{bot: bot, logger: logger}
 }
 
 // EnsureCraftingTable returns a crafting_table block position the bot can
@@ -124,50 +141,44 @@ func (m *Manager) EnsureCraftingTableForItem(ctx context.Context, targetItem str
 	return placePos, true
 }
 
-// OpenCraftingTable sends the interact packet that asks the server to open
-// the crafting_table window at pos. The bot must already be standing within
-// 4 blocks. Waits briefly so the server's ContainerOpen response can arrive
-// before the caller fires CraftItem.
+// OpenCraftingTable opens the crafting_table at pos and returns only once the
+// server has confirmed the window. The bot must already be standing within
+// 4 blocks.
+//
+// Confirmation is the point: staging ingredients into the 3×3 input is only
+// legal while the workbench is open, and a click that never registers leaves
+// the server looking at the personal 2×2 grid. Sleeping a fixed interval and
+// assuming the best is what made those crafts fail.
 func (m *Manager) OpenCraftingTable(ctx context.Context, pos protocol.BlockPos) error {
-	m.bot.LookAt(mgl32.Vec3{float32(pos.X()) + 0.5, float32(pos.Y()) + 0.5, float32(pos.Z()) + 0.5})
-	if !sleepCtx(ctx, 150*time.Millisecond) {
-		return errors.New("canceled")
+	if m.windowID != 0 {
+		m.CloseWindow()
 	}
 
-	tx := &packet.InventoryTransaction{
-		TransactionData: &protocol.UseItemTransactionData{
-			ActionType:      protocol.UseItemActionClickBlock,
-			BlockPosition:   pos,
-			BlockFace:       1,
-			HotBarSlot:      safecast.To[int32](m.bot.GetHeldItemSlot()),
-			HeldItem:        protocol.ItemInstance{},
-			Position:        m.bot.GetCoords(),
-			ClickedPosition: mgl32.Vec3{0.5, 0.5, 0.5},
-		},
+	// Arm the capture before the click: ContainerOpen can arrive within a frame.
+	m.bot.BeginContainerWatch()
+	if ok, reason := m.bot.ClickBlockAt(ctx, pos); !ok {
+		return fmt.Errorf("interact crafting_table: %s", reason)
 	}
-	if err := m.bot.WritePacket(tx); err != nil {
-		return fmt.Errorf("interact crafting_table: %w", err)
-	}
-	m.logger.Info("opened crafting_table", "pos", pos)
 
-	// Server typically replies with ContainerOpen within ~150ms. We don't
-	// block on the actual packet — caller is fine with optimistic open since
-	// CraftItem's StackRequest carries the recipe network ID server already
-	// associates with crafting_table by class.
-	if !sleepCtx(ctx, 200*time.Millisecond) {
-		return errors.New("canceled")
+	windowID, openedPos, ok := m.bot.WaitContainerOpen(ctx, containerOpenTimeout)
+	if !ok {
+		return fmt.Errorf("server tidak membuka crafting table di %d,%d,%d", pos.X(), pos.Y(), pos.Z())
 	}
+	m.windowID = windowID
+	m.logger.Info("opened crafting_table", "pos", openedPos, "window_id", windowID)
 	return nil
 }
 
-// CloseWindow sends a ContainerClose for the most recently opened
-// crafting_table session. Called after CraftItem returns.
+// CloseWindow closes the workbench window the server assigned. Called after
+// CraftItem returns. A real client always closes what it opens, and the ID has
+// to be the assigned one — a guessed ID closes nothing and leaves the server
+// holding an open workbench.
 func (m *Manager) CloseWindow() {
-	pk := &packet.ContainerClose{
-		WindowID:   m.nextWindowID,
-		ServerSide: false,
+	if m.windowID == 0 {
+		return
 	}
-	_ = m.bot.WritePacket(pk)
+	m.bot.CloseContainerWindow(m.windowID)
+	m.windowID = 0
 }
 
 func (m *Manager) findExistingTable(radius int32) (protocol.BlockPos, bool) {

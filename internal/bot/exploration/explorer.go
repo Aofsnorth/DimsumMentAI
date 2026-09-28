@@ -130,7 +130,13 @@ func (e *Explorer) ExploreSpiral(ctx context.Context, maxRadius int, waypointInt
 	return waypoints
 }
 
-// ExploreRandom explores randomly in different directions
+// ExploreRandom explores randomly in different directions.
+//
+// The distance is deliberately short (5-14 blocks). A target that is 20-60
+// blocks away (the old range) lands in terrain that has not been decoded yet
+// on a fresh join — the pathfinder sees air everywhere and exhausts its budget
+// finding nothing, which presents as a bot that wanders in place forever.
+// Short hops stay inside the loaded radius and actually produce movement.
 func (e *Explorer) ExploreRandom(ctx context.Context, duration time.Duration) int {
 	e.mu.Lock()
 	e.isExploring = true
@@ -160,16 +166,17 @@ func (e *Explorer) ExploreRandom(ctx context.Context, duration time.Duration) in
 		}
 
 		pos := e.bot.GetCoords()
-		// Random direction, 20-60 blocks away
+		// Random direction, 5-14 blocks away. Short enough to stay within
+		// loaded terrain, long enough to look like purposeful walking.
 		angle := rand.Float64() * math.Pi * 2
-		dist := 20.0 + rand.Float64()*40.0
+		dist := 5.0 + rand.Float64()*9.0
 
 		x := pos.X() + float32(math.Cos(angle))*float32(dist)
 		z := pos.Z() + float32(math.Sin(angle))*float32(dist)
 		target := mgl32.Vec3{x, pos.Y(), z}
 
 		e.bot.NavigateTo(target)
-		time.Sleep(5 * time.Second)
+		time.Sleep(4 * time.Second)
 		e.bot.StopMovement()
 		waypoints++
 

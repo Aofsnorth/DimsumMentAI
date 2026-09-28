@@ -16,6 +16,48 @@ import (
 	"github.com/go-gl/mathgl/mgl32"
 )
 
+// plansTowardDestination reports whether the bot currently has somewhere it is
+// trying to get to.
+//
+// An idle bot still carries whatever TargetPos was last set, and that value is
+// the zero vector until something sets it. Planning toward (0,0,0) is not a
+// harmless no-op: the search is a real A* run over a real world, and from a
+// world origin's distance it takes the largest iteration budget there is.
+func plansTowardDestination(state string) bool {
+	return state == "walk_to" || state == "follow"
+}
+
+// minChunksForPathfinding is the minimum number of decoded chunks the world
+// cache must hold before A* can produce meaningful results. With zero chunks
+// the world model sees everything as air, every neighbor is vetoed, and the
+// search exhausts its full iteration budget finding nothing.
+//
+// The threshold is 1 (not 4): a bot standing in a single loaded chunk can path
+// within that chunk. The old value of 4 permanently blocked pathfinding on LAN
+// worlds where the initial burst delivers only 2-3 chunks, which presented as
+// a bot that joins and never moves.
+const minChunksForPathfinding = 1
+
+// terrainReady reports whether enough terrain has been decoded for pathfinding.
+//
+// Two paths to "ready": the WorldCache holds real decoded chunks (production),
+// or the WorldModel's own chunk querier can resolve the block under the start
+// node (synthetic setups, tests). Without this second path, every harness test
+// that supplies a flat-ground querier but no WorldCache chunks would be gated
+// out of pathfinding.
+func terrainReady(b *bot.Bot, start pathfinder.Node) bool {
+	if b.WorldCache == nil {
+		return true
+	}
+	if b.WorldCache.ChunkCount() >= minChunksForPathfinding {
+		return true
+	}
+	if b.WorldModel != nil {
+		return b.WorldModel.CanResolve(start.X, start.Y-1, start.Z)
+	}
+	return false
+}
+
 // RecalculatePath computes the shortest path to targetPos using A* search.
 // A* runs without holding b.Mu so SendInputLoop is not blocked for the whole search.
 func RecalculatePath(b *bot.Bot) {
@@ -34,6 +76,31 @@ func RecalculatePath(b *bot.Bot) {
 	movementState := b.MovementState
 	lastTickPos := b.Pos
 	b.Mu.Unlock()
+
+	// No destination means no search. Every caller that means to go somewhere
+	// sets the state first, so this only ever fires for a re-plan nobody asked
+	// for — the damage handler being the one that mattered, because it runs on
+	// the packet goroutine and a 30000-iteration search there stalls every
+	// packet the bot has not read yet.
+	if !plansTowardDestination(movementState) {
+		b.Logger.Debug("A* skipped: bot has no destination",
+			"movement_state", movementState,
+			"target", target,
+		)
+		return
+	}
+
+	// Terrain gate: pathfinding over an unloaded world produces nonsense. The
+	// world model sees air everywhere, every neighbor is vetoed, and the search
+	// burns its full budget finding nothing. Waiting a few hundred milliseconds
+	// for chunks to arrive is cheaper than a 30000-iteration dead end.
+	if !terrainReady(b, start) {
+		b.Logger.Debug("A* skipped: terrain not loaded yet",
+			"chunks", b.WorldCache.ChunkCount(),
+			"need", minChunksForPathfinding,
+		)
+		return
+	}
 
 	b.Logger.Info("recalculating path using A*",
 		"start_x", start.X, "start_y", start.Y, "start_z", start.Z,

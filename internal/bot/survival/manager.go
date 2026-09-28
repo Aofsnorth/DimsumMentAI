@@ -77,6 +77,10 @@ type Manager struct {
 	lastTorchTime time.Time
 	autoTorchOn   bool
 
+	// Weather state, driven by LevelEvent packets from the server.
+	isRaining    bool
+	isThundering bool
+
 	// Night enables the reactive night routine (bed or shelter). It has its own
 	// switch, separate from the per-behaviour ones, because "let the bot handle
 	// nightfall" is a policy a server owner may want off while still allowing
@@ -124,6 +128,28 @@ func (m *Manager) SetHunger(hunger int) {
 	m.mu.Lock()
 	m.hungerLevel = hunger
 	m.mu.Unlock()
+}
+
+// SetWeather updates the tracked weather state (called from LevelEvent handler).
+func (m *Manager) SetWeather(raining, thundering bool) {
+	m.mu.Lock()
+	m.isRaining = raining
+	m.isThundering = thundering
+	m.mu.Unlock()
+}
+
+// IsRaining reports whether it is currently raining.
+func (m *Manager) IsRaining() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.isRaining
+}
+
+// IsThundering reports whether a thunderstorm is active.
+func (m *Manager) IsThundering() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.isThundering
 }
 
 // Tick lives in reactive.go, where the reactive half is explained.

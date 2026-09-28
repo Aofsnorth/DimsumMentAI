@@ -176,8 +176,22 @@ func handleUpdateAttributes(b *bot.Bot, p *packet.UpdateAttributes) {
 			b.WorldModel.SetHazard(feetX, feetY-1, feetZ, true)
 			b.Logger.Warn("bot took damage! marking block below feet as hazard", "x", feetX, "y", feetY-1, "z", feetZ)
 
+			// Only re-path if the bot actually has somewhere to go. Re-pathing an
+			// idle bot wastes a full A* budget over terrain that may not be loaded
+			// yet, and the result is discarded immediately.
+			hasDestination := b.MovementState == "walk_to" || b.MovementState == "follow"
+
 			b.Mu.Unlock()
-			b.RecalculatePath()
+			// Off the read loop. Re-planning is an A* search, and A* is measured
+			// in hundreds of milliseconds against a world that is still loading
+			// right after a join. Packet handlers run inline, so doing it here
+			// stalls every packet the bot has not read yet — a bot being hurt
+			// repeatedly stops seeing the world entirely. The search reads the
+			// route under b.Mu and publishes it at the end, so running it
+			// concurrently is what it was written for.
+			if hasDestination {
+				go b.RecalculatePath()
+			}
 			b.Mu.Lock()
 		}
 		b.Mu.Unlock()

@@ -80,15 +80,26 @@ const (
 
 // Protocol slot constants
 const (
-	// CraftingGridBaseSlot is the first slot in the 3x3 crafting grid (personal inventory)
+	// CraftingGridBaseSlot is the first slot of the player's personal 2x2
+	// crafting grid in the player UI container.
 	CraftingGridBaseSlot = 28
 
 	// CraftingGrid1x1Slot is the slot for 2x2 crafting (personal inventory)
 	CraftingGrid1x1Slot = 29
 
+	// CraftingTableGridBaseSlot is the first slot of a crafting table's 3x3 input
+	// in the same player UI container (slots 32..40).
+	CraftingTableGridBaseSlot = 32
+
 	// CreatedOutputSlot is the crafting result slot
 	CreatedOutputSlot = 50
 )
+
+// obstacleAim is the point the bot looks at while breaking an obstacle in its
+// way: the top face centre, which is what a wedged player is staring at.
+func obstacleAim(pos protocol.BlockPos) mgl32.Vec3 {
+	return mgl32.Vec3{float32(pos.X()) + 0.5, float32(pos.Y()) + 1, float32(pos.Z()) + 0.5}
+}
 
 // BlockCollidesWithBot returns true if the block at blockPos intersects the bot's AABB.
 func BlockCollidesWithBot(blockPos protocol.BlockPos, botPos mgl32.Vec3) bool {

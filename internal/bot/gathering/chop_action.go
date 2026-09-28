@@ -6,7 +6,6 @@ import (
 	"context"
 	"fmt"
 	"math"
-	"math/rand"
 	"strings"
 	"time"
 
@@ -271,72 +270,35 @@ func (tc *TreeChopper) startBreakBlock(step mineStep) {
 	})
 }
 
-// Swing rhythm. Two tells made the old swing look automated:
-//
-//  1. Pace faster than the animation. Every Animate packet makes the viewer's
-//     client replay the full arm-swing cycle (~300 ms). Swinging again every
-//     70-110 ms restarts that cycle before it finishes, so viewers saw the arm
-//     vibrate instead of swinging. A human swinging an tool lands around
-//     2.5-4 swings per second — 260-400 ms.
-//  2. A metronome. The pauses must vary so the beat is organic: quick inside a
-//     burst, a longer recovery between bursts, and the aim drifts a little
-//     inside the block instead of being welded to its centre.
-const (
-	chopWindUpMin   = 100 * time.Millisecond
-	chopWindUpMax   = 220 * time.Millisecond
-	chopSwingMin    = 260 * time.Millisecond
-	chopSwingMax    = 400 * time.Millisecond
-	chopRecoveryMin = 460 * time.Millisecond
-	chopRecoveryMax = 760 * time.Millisecond
-	chopBurstLength = 3
-	chopAimJitter   = 0.12
-)
-
+// Swing rhythm lives in the animation package, shared with the miner, the
+// scaffold and the obstacle unstick: see animation/rhythm.go for why the pacing
+// and the variation are what they are. The chopper was the first caller and
+// still is the reference for how a break should look.
 func chopWindUp() time.Duration {
-	return chopWindUpMin + time.Duration(rand.Int63n(int64(chopWindUpMax-chopWindUpMin)))
+	return animation.WindUp()
 }
 
-// chopCadence returns the pause after the nth swing of a burst: quick inside a
-// burst, a longer recovery between them.
 func chopCadence(swing int) time.Duration {
-	if swing%chopBurstLength == chopBurstLength-1 {
-		return chopRecoveryMin + time.Duration(rand.Int63n(int64(chopRecoveryMax-chopRecoveryMin)))
-	}
-	return chopSwingMin + time.Duration(rand.Int63n(int64(chopSwingMax-chopSwingMin)))
+	return animation.Cadence(swing)
 }
 
-// chopAim jitters the aim point slightly around the block centre so the head
-// does not sit perfectly still on one pixel.
 func chopAim(center mgl32.Vec3) mgl32.Vec3 {
-	return mgl32.Vec3{
-		center.X() + chopAimJitter*(rand.Float32()*2-1),
-		center.Y() + chopAimJitter*(rand.Float32()*2-1),
-		center.Z() + chopAimJitter*(rand.Float32()*2-1),
-	}
+	return animation.JitteredAim(center)
 }
 
 func (tc *TreeChopper) swingUntilBreak(ctx context.Context, targetCenter mgl32.Vec3, breakTime time.Duration) {
 	bot := tc.rg.bot
-	elapsed := time.Duration(0)
-
-	// Wind-up before the first swing: starting instantly looks automated.
-	if !sleepContext(ctx, chopWindUp()) {
-		return
-	}
-	elapsed += chopWindUpMin // conservative: never overrun the break time
-
-	for swing := 0; elapsed < breakTime; swing++ {
-		_ = bot.WritePacket(animation.MineSwing(bot.GetEntityRuntimeID()))
-		bot.LookAt(chopAim(targetCenter))
-
-		wait := chopCadence(swing)
-		if elapsed+wait > breakTime {
-			wait = breakTime - elapsed
-		}
-		if !sleepContext(ctx, wait) {
+	for i, beat := range animation.Beats(breakTime, targetCenter) {
+		if !sleepContext(ctx, beat.Wait) {
 			return
 		}
-		elapsed += wait
+		if i == 0 {
+			// The first beat is the wind-up: the arm is still being raised, so
+			// no swing has been sent yet.
+			continue
+		}
+		_ = bot.WritePacket(animation.MineSwing(bot.GetEntityRuntimeID()))
+		bot.LookAt(beat.Aim)
 	}
 }
 
@@ -392,7 +354,6 @@ func (tc *TreeChopper) clearObstructions(ctx context.Context, step mineStep) {
 		return
 	}
 
-	_ = bot.WritePacket(animation.MineSwing(bot.GetEntityRuntimeID()))
 	_ = bot.WritePacket(&packet.PlayerAction{
 		EntityRuntimeID: bot.GetEntityRuntimeID(),
 		ActionType:      protocol.PlayerActionStartBreak,
@@ -400,9 +361,11 @@ func (tc *TreeChopper) clearObstructions(ctx context.Context, step mineStep) {
 		BlockFace:       obstructionStep.Face,
 	})
 
-	if !sleepContext(ctx, sabdBreakDuration(serverAuthBreaking(bot), name, "")) {
-		return
-	}
+	// The obstruction is broken the same way the log is, rhythm and all. The
+	// old code threw one swing and then stood still for the whole break, which
+	// is the one pose that reads as a bot: a frozen arm over a block that
+	// takes three seconds to fall.
+	tc.swingUntilBreak(ctx, obstructionStep.Aim, sabdBreakDuration(serverAuthBreaking(bot), name, ""))
 	tc.finishBreakBlock(obstructionStep)
 
 	world.SetSolid(checkPos.X(), checkPos.Y(), checkPos.Z(), false)

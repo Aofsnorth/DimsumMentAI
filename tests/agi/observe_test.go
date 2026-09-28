@@ -43,8 +43,11 @@ func TestObserveReturnsInsteadOfWedgingTheBrain(t *testing.T) {
 	}
 	// Enabled has to be true or New() returns nil and there is nothing to test.
 	r := agi.New(b, agi.Config{
-		Enabled:           true,
-		TickIntervalSec:   30,
+		Enabled: true,
+		TickInterval: agi.TimeRange{
+			Min: 30 * time.Second,
+			Max: 30 * time.Second,
+		},
 		Wander:            true,
 		Vision:            true,
 		MobScanDistance:   32,

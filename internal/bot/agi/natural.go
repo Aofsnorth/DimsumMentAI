@@ -114,6 +114,12 @@ func (r *Runner) singleBlockBrief(under string) string {
 // It sits below the reflex layer like planning mode does — a bot that finishes
 // an episode by dying has not finished anything.
 func (r *Runner) naturalTick(ctx context.Context, snap Snapshot, judgement Judgement) {
+	r.log().Info("AGI: naturalTick",
+		slog.Bool("busy", snap.Busy),
+		slog.Bool("exploring", snap.Exploring),
+		slog.String("episode", r.currentEpisode().Objective),
+	)
+
 	// The watchdog goes first and always. A recording nobody is watching is
 	// exactly the case where a dead or wedged bot goes unnoticed for an hour,
 	// so this is the one thing in the mode that is not optional.
@@ -240,6 +246,16 @@ func (r *Runner) playAlong(snap Snapshot, judgement Judgement) {
 // a bot that is permanently busy for no reason, which is the exact thing that
 // makes a long recording tiring to watch.
 func (r *Runner) freePlay(snap Snapshot, judgement Judgement) {
+	// Diagnostic: log the decision inputs so a frozen bot is never a mystery.
+	// INFO level so it is visible without enabling debug.
+	r.log().Info("AGI: freePlay",
+		slog.Bool("jev_known", judgement.Known),
+		slog.String("activity", judgement.Activity),
+		slog.Bool("engaged", judgement.Engaged),
+		slog.Bool("explorer_nil", r.b.Explorer == nil),
+		slog.Int("chunks", r.b.WorldCache.ChunkCount()),
+	)
+
 	// A single-block world has exactly one thing to do, and it is not any of the
 	// things on the menu. Offering fishing in a world with no water, or
 	// gathering in a world with no wood, is how a bot spends ten minutes failing
@@ -362,11 +378,38 @@ func (r *Runner) modeIsNatural() bool { return r.cfg.Mode == config.ModeNatural 
 // that forgot to would either thrash or never fire.
 func (r *Runner) watch(snap Snapshot) (Fault, Action) {
 	now := nowish(snap)
+	health := r.observePosition(now, snap)
+	fault := Diagnose(health)
+	repeats := r.recordFault(fault)
 
-	// Position is compared, not timed. A server that applies a freeze keeps
-	// answering ticks, so a clock alone calls a wedged bot healthy for as long
-	// as it keeps replying.
+	// A fault that clears must not hand its accumulated patience to the next
+	// one. recordFault resets the counter on a change, and that is why it is
+	// reset rather than merely compared.
+	if fault == FaultNone {
+		return fault, ActNone
+	}
+	return fault, actForFault(fault, repeats)
+}
+
+// observePosition folds a reading into the movement history and returns the
+// health view of it.
+//
+// Position is compared, not timed. A server that applies a freeze keeps
+// answering ticks, so a clock alone calls a wedged bot healthy for as long as
+// it keeps replying.
+//
+// This is its own function so the mutex is taken exactly once. The body used to
+// hold the lock across the whole reading and then take it again to count the
+// repeat, and sync.Mutex is not reentrant: the second Lock blocks forever, so
+// the watchdog never finished a pass, the AGI loop wedged on its first tick,
+// and the bot stopped deciding anything on its own — it still answered chat,
+// because that runs on a different goroutine. Every later stage of the same
+// pass also has to be able to read the runner's state, so holding the lock for
+// the whole function could not be the answer either.
+func (r *Runner) observePosition(now time.Time, snap Snapshot) Health {
 	r.mu.Lock()
+	defer r.mu.Unlock()
+
 	moved := r.lastPosition == "" || snap.Coords != r.lastPosition
 	if moved {
 		r.lastMoved = now
@@ -375,7 +418,7 @@ func (r *Runner) watch(snap Snapshot) (Fault, Action) {
 	if r.lastMoved.IsZero() {
 		r.lastMoved = now
 	}
-	health := Health{
+	return Health{
 		HP:              snap.HP,
 		Disconnected:    r.disconnected,
 		PositionChanged: moved,
@@ -383,29 +426,26 @@ func (r *Runner) watch(snap Snapshot) (Fault, Action) {
 		Now:             now,
 		Exploring:       snap.Exploring,
 	}
-	fault := Diagnose(health)
+}
 
-	// The streak is updated with the reading in hand BEFORE the action is
-	// chosen, so a fault is counted from the tick it was first seen. Counting it
-	// afterwards makes the first sighting look like a non-event and a
-	// two-tick threshold silently become a three-tick one.
+// recordFault notes a fault and returns how many readings in a row it has now
+// been seen.
+//
+// The streak is updated with the reading in hand BEFORE the action is chosen, so
+// a fault is counted from the tick it was first seen. Counting it afterwards
+// makes the first sighting look like a non-event and a two-tick threshold
+// silently becomes a three-tick one.
+func (r *Runner) recordFault(fault Fault) int {
 	r.mu.Lock()
+	defer r.mu.Unlock()
+
 	if fault == r.lastFault {
 		r.faultRepeats++
 	} else {
 		r.faultRepeats = 1
 	}
 	r.lastFault = fault
-	repeats := r.faultRepeats
-	r.mu.Unlock()
-
-	// A fault that clears must not hand its accumulated patience to the next
-	// one. Reseting above on a change does exactly that, and it is why the
-	// counter is reset rather than merely compared.
-	if fault == FaultNone {
-		return fault, ActNone
-	}
-	return fault, actForFault(fault, repeats)
+	return r.faultRepeats
 }
 
 // actForFault maps a confirmed fault to what to do, applying the repeat rule only

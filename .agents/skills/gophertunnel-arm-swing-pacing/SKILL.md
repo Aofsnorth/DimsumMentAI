@@ -35,12 +35,30 @@ Every `packet.Animate{ActionType: AnimateActionSwingArm}` makes each viewer's cl
 
 ## Where the Working Implementation Lives
 
-- `internal/bot/gathering/chop_action.go` — `chopWindUp`/`chopCadence`/`chopAim` +
-  the constants block (the canonical rhythm; documented and unit-tested in
-  `chop_rhythm_test.go`).
-- `internal/bot/gathering/miner.go` — `mineSingle` reuses the same rhythm.
-- `internal/bot/break_obstacle.go` — obstacle unstick uses a 300 ms pace.
+- `internal/bot/movement/animation/rhythm.go` — **the one rhythm**: `WindUp`,
+  `Cadence`, `JitteredAim`, and `Beats` (the whole break laid out as a list of
+  timed beats). Unit-tested in `rhythm_test.go`.
 - `internal/bot/movement/animation/swing.go` — the swing packet builders.
+- `internal/bot/gathering/chop_action.go` — `swingUntilBreak` walks
+  `animation.Beats`; `chopWindUp`/`chopCadence`/`chopAim` are thin aliases kept
+  for the existing tests.
+- `internal/bot/gathering/miner.go` — `mineSingle` walks the same beats.
+- `internal/bot/break_obstacle.go` — the unstick break uses the same beats.
+
+Use `animation.Beats(breakTime, aim)` for any new break path. Do not hand-roll
+a loop with a fixed interval: that is the bug this skill exists for.
+
+## Adding a Break Path
+
+`Beats` returns a wind-up beat followed by one beat per swing. The first entry
+is the wind-up: sleep it and send **no** swing. `breakTime` is the break
+duration, and the beats are arranged not to overshoot it — a PredictDestroy
+that arrives early is silently rejected on a server-authoritative host.
+
+`Beats` never emits a swing whose pause is under the swing floor. A final swing
+trimmed to the leftovers (as an earlier version did, producing an 86 ms gap)
+restarts the viewer's arm cycle mid-flight, which is the exact vibration the
+rhythm exists to prevent.
 
 ## Common Pitfalls
 
@@ -54,7 +72,10 @@ Every `packet.Animate{ActionType: AnimateActionSwingArm}` makes each viewer's cl
 
 ## Verification
 
-1. `go test ./internal/bot/gathering/` (covers `chopCadence` bounds and variation,
-   wind-up bounds, aim jitter).
-2. Live check: watch the bot chop a tree — the arm should complete each swing with
+1. `go test ./internal/bot/movement/animation/` — pins the bounds, the variation,
+   the wind-up, the jitter bound, and that no break length ever ends on a swing
+   faster than the animation.
+2. `go test ./internal/bot/gathering/ ./internal/bot/` — covers the chopper and
+   the obstacle path.
+3. Live check: watch the bot chop a tree — the arm should complete each swing with
    visible pauses every few swings, roughly 3 swings per second.

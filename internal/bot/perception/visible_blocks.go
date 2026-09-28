@@ -55,11 +55,23 @@ type clickableBlock struct {
 	dir  string
 }
 
-// BlocksSummary describes the blocks the bot can see: clickable ones first
-// (name, distance, compass direction), then a compact histogram of the terrain
-// behind them. It returns "none" for a part with nothing visible, matching the
-// mobs summary format the prompt already uses.
-func BlocksSummary(b *bot.Bot, maxDistance float32, limit int) string {
+// blockScan is the one pass over what the bot can see, shared by every consumer
+// so the "not xray" rule has exactly one implementation. The prose summary and
+// the plain name list were separate scans once, and they drifted: the summary
+// renders prose and the brain wants names, so a name list is derived here rather
+// than re-parsed out of a sentence.
+type blockScan struct {
+	clickables []clickableBlock
+	terrain    map[string]int
+	// order preserves first-sight order, which is the order a human would list
+	// things in and a far more readable prompt than alphabetical noise.
+	terrainOrder []string
+}
+
+// scanBlocks walks the volume around the bot and returns what is genuinely
+// visible: inside the vision cone, within range, and with a clear line of
+// sight. Nothing here trusts the chunk cache to mean the bot can see a cell.
+func scanBlocks(b *bot.Bot, maxDistance float32) blockScan {
 	origin := b.GetCoords()
 	eye := origin.Add(mgl32.Vec3{0, bot.PlayerEyeHeight, 0})
 	radius := int32(math.Ceil(float64(maxDistance)))
@@ -68,9 +80,7 @@ func BlocksSummary(b *bot.Bot, maxDistance float32, limit int) string {
 	by := int32(math.Floor(float64(origin.Y())))
 	bz := int32(math.Floor(float64(origin.Z())))
 
-	var clickables []clickableBlock
-	terrain := make(map[string]int)
-
+	scan := blockScan{terrain: make(map[string]int)}
 	for dx := -radius; dx <= radius; dx++ {
 		for dy := scanBelow; dy <= scanAbove; dy++ {
 			for dz := -radius; dz <= radius; dz++ {
@@ -104,30 +114,44 @@ func BlocksSummary(b *bot.Bot, maxDistance float32, limit int) string {
 				}
 
 				if interact.IsInteractiveBlockName(name) {
-					clickables = append(clickables, clickableBlock{
+					scan.clickables = append(scan.clickables, clickableBlock{
 						name: clean,
 						pos:  pos,
 						dist: dist,
 						dir:  compassDirection(eye, center),
 					})
-				} else {
-					terrain[clean]++
+					continue
 				}
+				if _, seen := scan.terrain[clean]; !seen {
+					scan.terrainOrder = append(scan.terrainOrder, clean)
+				}
+				scan.terrain[clean]++
 			}
 		}
 	}
+	return scan
+}
 
-	sort.Slice(clickables, func(i, j int) bool { return clickables[i].dist < clickables[j].dist })
-	rendered := make([]clickableBlock, 0, limit)
-	for _, c := range clickables {
-		if alreadyListedStructure(c, rendered) {
-			continue
-		}
-		rendered = append(rendered, c)
-		if len(rendered) >= limit {
-			break
-		}
-	}
+// BlocksSummary describes the blocks the bot can see: clickable ones first
+// (name, distance, compass direction), then a compact histogram of the terrain
+// behind them. It returns "none" for a part with nothing visible, matching the
+// mobs summary format the prompt already uses.
+//
+// This is the PROSE form, for a prompt a human or a language model reads. Code
+// that needs the block names — anything that counts them, matches on them, or
+// feeds them to a decision — must use VisibleBlockNames instead. Parsing names
+// back out of this sentence is how the brain ended up convinced it was standing
+// on a one-block world: the text has prose around a space-separated list, and a
+// comma split returns the whole sentence as one block name.
+func BlocksSummary(b *bot.Bot, maxDistance float32, limit int) string {
+	return renderSummary(scanBlocks(b, maxDistance), limit)
+}
+
+// renderSummary is the prose half of a scan, shared by BlocksSummary and
+// VisibleBlocks.
+func renderSummary(scan blockScan, limit int) string {
+	rendered := renderClickables(scan.clickables, limit)
+
 	parts := make([]string, 0, len(rendered))
 	for _, c := range rendered {
 		parts = append(parts, fmt.Sprintf("%s (%.0fm %s)", c.name, c.dist, c.dir))
@@ -138,7 +162,117 @@ func BlocksSummary(b *bot.Bot, maxDistance float32, limit int) string {
 		clickableText = strings.Join(parts, ", ")
 	}
 
-	return "Clickable: " + clickableText + ". Terrain: " + terrainText(terrain)
+	return "Clickable: " + clickableText + ". Terrain: " + terrainText(scan.terrain)
+}
+
+// VisibleBlockNames returns the distinct names of every block the bot can
+// genuinely see, most-seen first, comma-joined.
+//
+// This is the form every decision in the brain reads. The same visibility rules
+// as BlocksSummary apply — vision cone, range, and a walked line of sight — so
+// nothing behind a wall is ever named here. What differs is the shape: names,
+// not a sentence. DetectOneBlock counts them, the curriculum gates on them, and
+// the vocabulary records them, and all three need to be able to tell one block
+// from another.
+//
+// "none" when nothing is visible, which is both the honest answer in an empty
+// plain and the signature of a single-block world.
+func VisibleBlockNames(b *bot.Bot, maxDistance float32, limit int) string {
+	scan := scanBlocks(b, maxDistance)
+	return visibleBlockNames(scan, limit)
+}
+
+// VisibleBlocks returns both renderings of a single scan: the comma-separated
+// names the brain's rules read, and the prose the models read.
+//
+// One scan, two shapes. Calling the two entry points separately would walk the
+// volume twice per tick for no gain, and — worse — would let the name list and
+// the prompt describe different worlds whenever the world changed in between.
+func VisibleBlocks(b *bot.Bot, maxDistance float32, limit int) (names, text string) {
+	scan := scanBlocks(b, maxDistance)
+	return visibleBlockNames(scan, limit), renderSummary(scan, limit)
+}
+
+// visibleBlockNames is the pure half, so the name list can be tested against a
+// hand-built scan without a live world behind it.
+func visibleBlockNames(scan blockScan, limit int) string {
+	names := make([]string, 0, len(scan.clickables)+len(scan.terrainOrder))
+
+	// Clickables are listed before terrain because they are the actionable ones:
+	// a chest or a crafting table in view is the reason to stop, and burying it
+	// under a histogram of stone would hide it.
+	seen := make(map[string]bool, len(scan.clickables)+len(scan.terrainOrder))
+	rendered := renderClickables(scan.clickables, limit)
+	for _, c := range rendered {
+		if seen[c.name] {
+			continue
+		}
+		seen[c.name] = true
+		names = append(names, c.name)
+	}
+
+	terrain := rank(scan.terrain, scan.terrainOrder)
+	if limit > 0 && len(names)+len(terrain) > limit {
+		terrain = trim(terrain, limit-len(names))
+	}
+	for _, name := range terrain {
+		if seen[name] {
+			continue
+		}
+		seen[name] = true
+		names = append(names, name)
+	}
+
+	if len(names) == 0 {
+		return "none"
+	}
+	// Plain comma, no space. This string is never shown to a person — the
+	// readable rendering is — and it is split on commas by the brain's rules. A
+	// space after the separator makes the contract depend on the reader
+	// trimming, which is exactly the kind of quiet coupling that lets a term
+	// like " oak_log" slip through as a different name.
+	return strings.Join(names, ",")
+}
+
+// renderClickables sorts the clickables nearest-first and drops repeats of the
+// same structure within sameStructureDistance.
+func renderClickables(clickables []clickableBlock, limit int) []clickableBlock {
+	sort.Slice(clickables, func(i, j int) bool { return clickables[i].dist < clickables[j].dist })
+	rendered := make([]clickableBlock, 0, limit)
+	for _, c := range clickables {
+		if alreadyListedStructure(c, rendered) {
+			continue
+		}
+		rendered = append(rendered, c)
+		if limit > 0 && len(rendered) >= limit {
+			break
+		}
+	}
+	return rendered
+}
+
+// trim shortens a list to at most n entries, and to nothing when n is negative —
+// which is what a limit smaller than what is already listed means.
+func trim(list []string, n int) []string {
+	if n <= 0 {
+		return nil
+	}
+	if n >= len(list) {
+		return list
+	}
+	return list[:n]
+}
+
+// rank orders names by how often they were seen, falling back to first-sight
+// order so the result is stable and a term is never silently reordered between
+// two ticks — a list that reshuffles every tick is unreadable in a prompt.
+func rank(counts map[string]int, order []string) []string {
+	out := make([]string, len(order))
+	copy(out, order)
+	sort.SliceStable(out, func(i, j int) bool {
+		return counts[out[i]] > counts[out[j]]
+	})
+	return out
 }
 
 // alreadyListedStructure reports whether a same-named clickable within

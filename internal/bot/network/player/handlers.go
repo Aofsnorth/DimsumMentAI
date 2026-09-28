@@ -80,6 +80,33 @@ func handleSetTime(b *bot.Bot, pk packet.Packet) bool {
 	return true
 }
 
+// handleLevelEvent tracks weather changes from the server.
+//
+// LevelEvent carries hundreds of event types (sounds, particles, block edits).
+// Only the four weather transitions are consumed here; everything else is
+// acknowledged and ignored so the packet does not fall through as unhandled.
+func handleLevelEvent(b *bot.Bot, pk packet.Packet) bool {
+	p := pk.(*packet.LevelEvent)
+	if b.SurvivalMgr == nil {
+		return true
+	}
+	switch p.EventType {
+	case packet.LevelEventStartRaining:
+		b.SurvivalMgr.SetWeather(true, b.SurvivalMgr.IsThundering())
+		b.Logger.Info("weather: rain started")
+	case packet.LevelEventStartThunderstorm:
+		b.SurvivalMgr.SetWeather(true, true)
+		b.Logger.Info("weather: thunderstorm started")
+	case packet.LevelEventStopRaining:
+		b.SurvivalMgr.SetWeather(false, b.SurvivalMgr.IsThundering())
+		b.Logger.Info("weather: rain stopped")
+	case packet.LevelEventStopThunderstorm:
+		b.SurvivalMgr.SetWeather(b.SurvivalMgr.IsRaining(), false)
+		b.Logger.Info("weather: thunderstorm stopped")
+	}
+	return true
+}
+
 func handleAddActor(b *bot.Bot, pk packet.Packet) bool {
 	p := pk.(*packet.AddActor)
 	b.Mu.Lock()

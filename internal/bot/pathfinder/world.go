@@ -124,6 +124,20 @@ func (w *LocalWorldModel) SetBodyClearance(x, y, z int32) {
 	w.mu.Unlock()
 }
 
+// CanResolve reports whether the underlying chunk querier has data for the
+// given position. The terrain gate in the movement layer uses this to skip
+// pathfinding over an unloaded world while still allowing synthetic setups
+// (tests, harness bots) whose querier always answers.
+func (w *LocalWorldModel) CanResolve(x, y, z int32) bool {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+	if w.chunkQuerier == nil {
+		return false
+	}
+	_, loaded := w.chunkQuerier.GetBlockRID(x, y, z)
+	return loaded
+}
+
 func (w *LocalWorldModel) SetChunkQuerier(q ChunkQuerier) {
 	w.mu.Lock()
 	defer w.mu.Unlock()

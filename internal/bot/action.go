@@ -8,9 +8,39 @@ import (
 	"github.com/go-gl/mathgl/mgl32"
 )
 
+// walkToReplanEpsilon is how far a walk_to target may drift before the route
+// is worth re-planning. A dropped item settles and creeps, and re-planning for
+// every centimetre of that creep re-runs A* several times a second for a
+// destination one block away.
+const walkToReplanEpsilon = 0.25
+
+// shouldReplanForWalkTo decides whether a WalkTo call needs a fresh route.
+//
+// Walking somewhere is a continuous activity, not a series of commands: callers
+// re-assert the same destination while they wait (the looter polls its target,
+// actions re-issue a destination before waiting on it). Re-planning on every
+// call cost a full A* run per poll and, worse, reset the stuck-detection
+// bookkeeping each time, so a bot wedged against a wall re-planned the
+// identical route into the identical blocker forever and never escalated.
+//
+// It is pure so the policy is unit testable without a live bot.
+func shouldReplanForWalkTo(state string, hasPath bool, current, next mgl32.Vec3) bool {
+	if state != "walk_to" {
+		return true
+	}
+	if !hasPath {
+		return true
+	}
+	dx := float64(next.X() - current.X())
+	dy := float64(next.Y() - current.Y())
+	dz := float64(next.Z() - current.Z())
+	return dx*dx+dy*dy+dz*dz > walkToReplanEpsilon*walkToReplanEpsilon
+}
+
 // WalkTo directs the bot to walk to a coordinate
 func (b *Bot) WalkTo(pos mgl32.Vec3) {
 	b.Mu.Lock()
+	replan := shouldReplanForWalkTo(b.MovementState, len(b.CurrentPath) > 0, b.TargetPos, pos)
 	b.MovementState = "walk_to"
 	b.TargetPos = pos
 	b.TargetPlayerName = ""
@@ -18,6 +48,9 @@ func (b *Bot) WalkTo(pos mgl32.Vec3) {
 	b.LookTargetUntil = time.Time{}
 	b.Logger.Debug("WalkTo initiated", "x", pos.X(), "y", pos.Y(), "z", pos.Z())
 	b.Mu.Unlock()
+	if !replan {
+		return
+	}
 	b.RecalculatePath()
 }
 

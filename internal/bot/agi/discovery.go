@@ -158,6 +158,9 @@ func (v *Vocabulary) Size() int {
 // the same block seen forty times is a resource, and telling the difference is
 // how the bot works out what to do without being told.
 func (v *Vocabulary) Describe() string {
+	if v == nil {
+		return "nothing observed yet"
+	}
 	v.mu.Lock()
 	defer v.mu.Unlock()
 
@@ -200,6 +203,13 @@ func (v *Vocabulary) Merge(snap Snapshot) {
 }
 
 // splitList turns the comma-joined summary text into terms.
+//
+// A term that is not a bare name is dropped. This is not tidiness: the one
+// caller that decides whether the world is a single block counts DISTINCT terms,
+// so a term like "Clickable: none. Terrain: grass_block(12)" counts as one block
+// and convinces the bot it is standing on the only block in a one-block world —
+// in an ordinary field. The prose rendering of the scan is still handed to the
+// models; it just must not reach the code that reasons about block names.
 func splitList(text string) []string {
 	if strings.TrimSpace(text) == "" {
 		return nil
@@ -207,9 +217,25 @@ func splitList(text string) []string {
 	parts := strings.Split(text, ",")
 	out := make([]string, 0, len(parts))
 	for _, p := range parts {
-		if term := strings.TrimSpace(p); term != "" {
-			out = append(out, term)
+		term := strings.TrimSpace(p)
+		if term == "" {
+			continue
 		}
+		// A name is one word. Anything carrying prose, a count, a distance or a
+		// bearing is a rendered sentence, not a block.
+		if !isBareTerm(term) {
+			continue
+		}
+		out = append(out, term)
 	}
 	return out
+}
+
+// isBareTerm reports whether a term is a single block or item name, with no
+// rendered detail attached.
+func isBareTerm(term string) bool {
+	if strings.ContainsAny(term, " \t()") {
+		return false
+	}
+	return true
 }

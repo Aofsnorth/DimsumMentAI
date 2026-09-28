@@ -145,6 +145,12 @@ func (b *Bot) clickBlock(ctx context.Context, pos protocol.BlockPos) (bool, stri
 	return b.Interactor.ClickBlockAt(ctx, pos)
 }
 
+// ClickBlockAt is clickBlock as an interface method, for subsystems that open a
+// UI through the interactor without owning the container session themselves.
+func (b *Bot) ClickBlockAt(ctx context.Context, pos protocol.BlockPos) (bool, string) {
+	return b.clickBlock(ctx, pos)
+}
+
 // noteContainerUnreadable records a chest whose contents never arrived, so the
 // multi-chest search does not keep re-opening the same silent window.
 func (b *Bot) noteContainerUnreadable(pos protocol.BlockPos) {

@@ -40,7 +40,26 @@ type Snapshot struct {
 	HeldItem   string
 	Inventory  string
 	VisibleMob string
+	// NearBlocks is the COMMA-SEPARATED list of block names the bot can
+	// genuinely see, or "none".
+	//
+	// It is names rather than a sentence because every consumer here needs to
+	// count, match, and gate on individual blocks: DetectOneBlock counts how
+	// many kinds are in view, the curriculum offers gathering only when there is
+	// something to gather, and the vocabulary records what the world contains.
+	// None of those work on prose, and feeding them prose is what made the bot
+	// certain it was standing on a one-block world in an ordinary field.
+	//
+	// The readable rendering of the same scan is in the prompt, not here.
 	NearBlocks string
+	// NearBlocksText is the same scan rendered for a reader rather than for
+	// code: clickable blocks with their distance and compass bearing, then a
+	// histogram of terrain. Jev is told this one, because "chest (4m N)" is a
+	// fact it can act on where "chest" is a word it has to guess about.
+	//
+	// It is a separate field rather than a second scan so the two can never
+	// disagree about what the bot can see.
+	NearBlocksText string
 	// VisibleSigns is the text of signage the bot can read right now. It is
 	// part of the state Jev reasons over because a labelled storage room is a
 	// plan, and a bot that cannot see the labels will search it blindly.
@@ -107,6 +126,11 @@ type Snapshot struct {
 	// started falling is a bot that surfaces dead.
 	Underwater        bool
 	SecondsUnderwater int
+	// IsRaining and IsThundering track the weather. They come from LevelEvent
+	// packets rather than from a weather bar, because the bot has no bar to
+	// read — the server simply announces transitions.
+	IsRaining    bool
+	IsThundering bool
 }
 
 // InventoryFree reports whether the bot has room to collect more. One free

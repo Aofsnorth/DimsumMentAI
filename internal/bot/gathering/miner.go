@@ -227,25 +227,19 @@ func (bm *BlockMiner) mineSingle(ctx context.Context, step mineStep, blockName s
 
 	breakTime := sabdBreakDuration(serverAuthBreaking(bot), blockName, bm.equippedToolName())
 
-	// Same human rhythm as the chopper (chopWindUp/chopCadence live in
-	// chop_action.go): a fixed 150 ms tick restarts the viewer's arm-swing
-	// animation before it finishes, which reads as machine twitching.
-	if !sleepContext(ctx, chopWindUp()) {
-		return false
-	}
-	elapsed := time.Duration(chopWindUpMin) // conservative: never overrun the break time
-	for swing := 0; elapsed < breakTime; swing++ {
-		_ = bot.WritePacket(animation.MineSwing(bot.GetEntityRuntimeID()))
-		bot.LookAt(step.Aim)
-
-		wait := chopCadence(swing)
-		if elapsed+wait > breakTime {
-			wait = breakTime - elapsed
-		}
-		if !sleepContext(ctx, wait) {
+	// The shared swing rhythm, not a local tick: a fixed 150 ms step restarts
+	// the viewer's arm-swing cycle before it finishes, so the arm reads as a
+	// machine twitching. See animation/rhythm.go.
+	for i, beat := range animation.Beats(breakTime, step.Aim) {
+		if !sleepContext(ctx, beat.Wait) {
 			return false
 		}
-		elapsed += wait
+		if i == 0 {
+			// The first beat is the wind-up; the arm is still being raised.
+			continue
+		}
+		_ = bot.WritePacket(animation.MineSwing(bot.GetEntityRuntimeID()))
+		bot.LookAt(beat.Aim)
 	}
 
 	_ = bot.WritePacket(&packet.PlayerAction{

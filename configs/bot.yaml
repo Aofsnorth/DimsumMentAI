@@ -124,7 +124,28 @@ agi:
   # bisa diselesaikan. Angka ini juga dikirim ke prompt planner, jadi prompt dan
   # kode tidak bisa berbeda pendapat soal berapa panjang yang sah.
   plan_max_steps: 12
-  tick_interval_sec: 30
+  # Seberapa sering otak bangun. Dua bentuk, keduanya sah:
+  #
+  #   tick_interval_sec: 30        # tepat setiap 30 detik
+  #   tick_interval_sec: 1-2s      # direntang [1s, 2s], diundi ulang tiap tick
+  #
+  # RENTANG ADA KARENA YANG TETAP TERLIHAT. Otak dengan jam yang pasti diam
+  # dalam lockstep yang kelihatan, dan justru DIAMNYA yang terbaca sebagai bot:
+  # penonton hafal periodenya dalam semenit lalu tinggal menunggu. Setiap jeda
+  # diundi ulang tiap tick, bukan sekali saat start, jadi rata-ratanya tidak
+  # bisa ditebak.
+  #
+  # Angka polos = DETIK. Jadi "1-2" berarti 1-2 detik, dan "1m-2m" berarti
+  # 1-2 menit. Tulis satuan di kedua sisi kalau ragu: "1-1m30s" dibaca sebagai
+  # 1 detik sampai 90 detik, bukan 1 menit sampai 90 detik.
+  #
+  # PENTING — INI juga tingkat request ke model. Tiap tick, Jev dipanggil
+  # sekali (baris "AGI: Jev System One active" di log sekarang ikut mencetak
+  # intervalnya). 1-2 detik berarti 30-60 request per menit ke endpoint Jev.
+  # Kalau Jev lambat, tick-nya tertahan menunggu — botnya tidak berpikir lebih
+  # cepat, hanya menunggu. Ada lantai 500ms supaya interval nol tidak berubah
+  # jadi busy loop.
+  tick_interval_sec: 1-2s
   llm_chance: 0.35
   self_preservation: true
   low_hp_threshold: 8

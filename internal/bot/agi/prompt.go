@@ -106,8 +106,11 @@ ATURAN PENTING:
 	return preamble, decision
 }
 
+// DecisionInterval is the range the next brain tick is drawn from, for the
+// startup log. It is a range and not a number because that is what the loop
+// actually uses.
 func (r *Runner) DecisionInterval() time.Duration {
-	return time.Duration(r.cfg.TickIntervalSec) * time.Second
+	return r.cfg.TickInterval.Draw()
 }
 
 // planBlock, goalBlock, worldBlock and episodeBlock are the four things the

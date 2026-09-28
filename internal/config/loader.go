@@ -102,8 +102,8 @@ func applyDefaults(cfg *Config) {
 // make it eat and armour up constantly.
 func applyAGIDefaults(cfg *Config) {
 	agi := &cfg.AGI
-	if agi.TickIntervalSec <= 0 {
-		agi.TickIntervalSec = 30
+	if agi.TickInterval.Min <= 0 && agi.TickInterval.Max <= 0 {
+		agi.TickInterval = NewTickInterval(DefaultTickInterval)
 	}
 	if agi.LLMChance <= 0 {
 		agi.LLMChance = 0.35

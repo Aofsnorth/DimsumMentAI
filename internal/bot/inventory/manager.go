@@ -50,6 +50,10 @@ type Bot interface {
 	CraftItem(recipeNetID uint32, count int) error
 	GetRecipes() map[string]uint32
 	PlaceBlock(ctx context.Context, request placement.Request) error
+	BeginContainerWatch()
+	ClickBlockAt(ctx context.Context, pos protocol.BlockPos) (bool, string)
+	WaitContainerOpen(ctx context.Context, timeout time.Duration) (byte, protocol.BlockPos, bool)
+	CloseContainerWindow(windowID byte)
 }
 
 type InventoryManager struct {

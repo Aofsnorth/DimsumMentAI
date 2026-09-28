@@ -2,6 +2,7 @@ package agi
 
 import (
 	"fmt"
+	"log/slog"
 	"sort"
 	"strings"
 	"time"
@@ -43,6 +44,15 @@ type Goal struct {
 	// state text can tell the model it is making headway, which changes the
 	// answer: a model told a goal is going nowhere is more likely to abandon it.
 	Progress int
+
+	// Pinned marks a goal the operator wrote down in the config, rather than one
+	// the model chose.
+	//
+	// It is the only thing that makes "set a goal in bot.yaml" mean anything. A
+	// goal the model is free to replace is a suggestion wearing the same label
+	// as an instruction, and the difference is invisible until the bot quietly
+	// abandons what it was told to do.
+	Pinned bool
 }
 
 // Expired reports whether the goal has run out of time.
@@ -120,7 +130,7 @@ func AvailableGoals(s Snapshot) []Goal {
 	out = append(out, goalCatalogue[jev.GoalIdle])
 
 	// Anything it could actually gather or mine.
-	if s.NearBlocks != "" && s.NearBlocks != "none" && s.InventoryFree() {
+	if len(blockNames(s.NearBlocks)) > 0 && s.InventoryFree() {
 		out = append(out, goalCatalogue[jev.GoalStockUp])
 		out = append(out, goalCatalogue[jev.GoalGatherWood])
 	}
@@ -166,8 +176,14 @@ func GoalsFor(goals []Goal) []string {
 // Rest stays because a bot locked into a goal with no way to stop is not
 // persistent, it is compulsive. Everything else is removed: a goal that
 // tolerates every activity has not narrowed anything.
+//
+// A pinned operator goal is the exception, and it has to be. It is free text —
+// "kill the ender dragon" — so there is no list of activities that could
+// possibly count as advancing it, and narrowing on an empty Advances list would
+// leave the bot able to do exactly one thing: stand still. An operator names a
+// destination, not a method; the method is the planner's to work out.
 func NarrowToGoal(curriculum []string, goal Goal) []string {
-	if goal.Name == "" {
+	if goal.Name == "" || goal.Pinned {
 		return curriculum
 	}
 	narrowed := make([]string, 0, len(curriculum))
@@ -182,6 +198,63 @@ func NarrowToGoal(curriculum []string, goal Goal) []string {
 	// Rest is always reachable, whatever the goal.
 	narrowed = append(narrowed, jev.ActivityRest)
 	return narrowed
+}
+
+// operatorGoalName is the internal key for a goal the operator wrote down. It
+// is not in the catalogue, so it can never be selected by accident, and it keeps
+// the free text in Description where the models can read it.
+const operatorGoalName = "operator"
+
+// pinOperatorGoal installs the configured objective as a goal the model cannot
+// replace.
+//
+// The lifetime is the configured one, or none at all when it is zero. "Kill the
+// ender dragon" is not a twenty-minute errand on a fresh world, and an operator
+// who set a goal did not set a deadline by leaving one out.
+func (r *Runner) pinOperatorGoal(now time.Time) {
+	text := r.cfg.Goal
+	if text == "" {
+		return
+	}
+
+	goal := Goal{
+		Name:        operatorGoalName,
+		Description: text,
+		Pinned:      true,
+		Started:     now,
+	}
+	if r.cfg.GoalDeadlineMin > 0 {
+		goal.Deadline = now.Add(time.Duration(r.cfg.GoalDeadlineMin) * time.Minute)
+	}
+
+	r.mu.Lock()
+	r.goal = goal
+	r.mu.Unlock()
+
+	if r.b != nil && r.b.Logger != nil {
+		r.b.Logger.Info("AGI: operator goal set",
+			slog.String("goal", text),
+			slog.Bool("has_deadline", !goal.Deadline.IsZero()),
+		)
+	}
+}
+
+// operatorGoalInstruction is the line the planner is shown when the operator has
+// named a goal.
+//
+// It is an instruction rather than a line of context on purpose. The planner is
+// otherwise asked to "write the plan for this bot now" with the whole world
+// description in front of it, and it will happily write a plan to chop wood —
+// which is a reasonable plan for a bot with no objective, and the wrong one
+// entirely for a bot that was told to go kill a dragon.
+func (r *Runner) operatorGoalInstruction() string {
+	goal := r.currentGoal()
+	if !goal.Pinned {
+		return ""
+	}
+	return "\nThe operator set a standing goal for this bot: " + goal.Description +
+		"\nEvery step you write must move it toward that goal. If it is out of " +
+		"reach right now, plan the next thing that is."
 }
 
 // newGoal stamps a catalogue entry with a lifetime.

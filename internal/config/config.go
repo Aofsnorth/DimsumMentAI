@@ -29,11 +29,27 @@ type AGIConfig struct {
 	// a player's instruction, exactly as before.
 	Enabled bool `yaml:"enabled"`
 
-	// TickIntervalSec is how often the brain wakes up.
-	TickIntervalSec int `yaml:"tick_interval_sec"`
+	// TickInterval is how often the brain wakes up. A plain number is seconds;
+	// a range like "1-2s" makes every gap a fresh draw. See TickInterval.
+	TickInterval TickInterval `yaml:"tick_interval_sec"`
 	// LLMChance is the probability (0..1) that a tick consults the model. The
 	// reflex layer still runs on every tick regardless.
 	LLMChance float64 `yaml:"llm_chance"`
+
+	// Goal is a standing objective the operator sets in words, e.g. "kill the
+	// ender dragon". Empty means the bot picks its own.
+	//
+	// It is free text on purpose. A fixed list would have to know every server's
+	// objectives, and the bot's world is not decided by this config file. What
+	// this does NOT do is narrow the activity menu: an operator names a
+	// destination, not a method, and the planner decides the steps.
+	Goal string `yaml:"goal"`
+
+	// GoalDeadlineMin is how many minutes the operator goal is pursued before it
+	// is retired. Zero means no deadline — the goal stands until the config
+	// changes or somebody clears it with /goal, which is the honest reading of
+	// "kill the ender dragon" on a world where that may take hours.
+	GoalDeadlineMin int `yaml:"goal_deadline_min"`
 
 	// SelfPreservation is the reflex layer: eat when hungry, armour up, run
 	// when badly hurt. These must not wait for a decision — a bot that thinks

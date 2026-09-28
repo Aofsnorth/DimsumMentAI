@@ -18,3 +18,7 @@ func Int() int { return rand.Int() }
 
 // Int63 returns a non-negative int64.
 func Int63() int64 { return rand.Int63() }
+
+// Int63n returns a non-negative int64 in [0, n). It panics for n <= 0, so
+// callers pass a range they have already checked.
+func Int63n(n int64) int64 { return rand.Int63n(n) }

@@ -62,6 +62,17 @@ func (cm *CombatManager) Tick(ctx context.Context) {
 		return
 	}
 
+	// Mob-specific movement comes before the weapon decision: a tactic that
+	// ends the fight (the creeper flee) must win over everything else in the
+	// tick.
+	plan := mobMovePlan(normalizedMobName(target), horizontalDistance(botPos, target.Position))
+	if plan.flee {
+		cm.logger.Info("Tactic: disengaging and fleeing", "mob", normalizedMobName(target), "distance", dist)
+		cm.Disengage()
+		cm.bot.NavigateTo(retreatPoint(botPos, target.Position, plan.safeDistance))
+		return
+	}
+
 	// What to hold, decided before anything else in the tick. Doing it here
 	// rather than on engage means the bot reconsiders as the fight changes: a
 	// creeper that backs off gets met with a bow instead of the sword it was
@@ -74,13 +85,21 @@ func (cm *CombatManager) Tick(ctx context.Context) {
 	}
 	cm.applyShield(situation)
 
-	targetCenter := target.Position.Add(mgl32.Vec3{0, 1.2, 0})
-	cm.bot.LookAt(targetCenter)
+	aimHeight := float32(1.2)
+	if plan.look == LookFeet {
+		// Endermen take eye contact as a challenge, so aim at the feet while
+		// still tracking the target.
+		aimHeight = 0.2
+	}
+	cm.bot.LookAt(target.Position.Add(mgl32.Vec3{0, aimHeight, 0}))
 
-	if dist > 3.0 {
-		cm.bot.NavigateTo(target.Position)
-	} else {
-		cm.bot.StopMovement()
+	cm.moveByPlan(botPos, target.Position, dist, plan)
+
+	if choice.Kind == WeaponBow || choice.Kind == WeaponCrossbow {
+		// A bow is a hold and a release, not a swing. It replaces the melee
+		// path entirely while it is the chosen weapon.
+		cm.shootRanged(choice, situation.HasArrows, target)
+		return
 	}
 
 	if dist <= 3.5 && time.Since(cm.lastAttack) >= 500*time.Millisecond {
@@ -112,6 +131,126 @@ func (cm *CombatManager) slotNames() map[uint32]string {
 		}
 	}
 	return out
+}
+
+// moveByPlan turns the mob tactic into movement: strafing inside a distance
+// band, holding the line outside it, or plain closing on the target when no
+// band applies.
+func (cm *CombatManager) moveByPlan(botPos, targetPos mgl32.Vec3, dist float32, plan movePlan) {
+	if plan.strafe && plan.bandMin > 0 {
+		hd := horizontalDistance(botPos, targetPos)
+		switch {
+		case hd < plan.bandMin:
+			// Pushed inside the band: back away along the line.
+			cm.bot.NavigateTo(retreatPoint(botPos, targetPos, plan.bandMax))
+			return
+		case hd > plan.bandMax:
+			cm.bot.NavigateTo(targetPos)
+			return
+		case within(hd, plan.bandMin, plan.bandMax):
+			sign := float32(1)
+			// Flip the strafe side every couple of seconds so the motion is
+			// not one predictable circle.
+			if int(time.Now().Unix()/2)%2 == 1 {
+				sign = -1
+			}
+			cm.bot.NavigateTo(strafePoint(botPos, targetPos, hd, sign))
+			return
+		}
+	}
+	if dist > 3.0 {
+		cm.bot.NavigateTo(targetPos)
+	} else {
+		cm.bot.StopMovement()
+	}
+}
+
+// shootRanged runs the draw/hold/release state machine for the bow or
+// crossbow currently held. It is driven by the combat tick (~200ms), so the
+// draw is held across ticks rather than blocked on.
+func (cm *CombatManager) shootRanged(choice WeaponChoice, hasArrows bool, target *entity.Info) {
+	cm.mu.Lock()
+	s := cm.shot
+	cm.mu.Unlock()
+	now := time.Now()
+
+	switch planShot(choice.Kind, hasArrows, now, s) {
+	case ShotDraw:
+		cm.beginDraw(choice, now)
+	case ShotFire:
+		cm.fireShot(s, now, target)
+	}
+}
+
+// beginDraw starts holding the weapon down. In Bedrock the draw begins with a
+// UseItem transaction; the release comes later as a ReleaseItem transaction.
+func (cm *CombatManager) beginDraw(choice WeaponChoice, now time.Time) {
+	inv := cm.bot.GetInventorySlots()
+	if err := cm.bot.EquipItem(choice.Slot); err != nil {
+		cm.logger.Warn("Failed to equip ranged weapon for the draw", "slot", choice.Slot, "error", err)
+		return
+	}
+	tx := &packet.InventoryTransaction{
+		TransactionData: &protocol.UseItemTransactionData{
+			ActionType:    protocol.UseItemActionClickAir,
+			TriggerType:   protocol.TriggerTypePlayerInput,
+			BlockPosition: protocol.BlockPos{0, -1, 0},
+			BlockFace:     255,
+			HotBarSlot:    safecast.To[int32](choice.Slot),
+			HeldItem:      protocol.ItemInstance{Stack: inv[choice.Slot]},
+			Position:      cm.bot.GetCoords(),
+		},
+	}
+	if err := cm.bot.WritePacket(tx); err != nil {
+		cm.logger.Error("Failed to write bow draw transaction", "error", err)
+		return
+	}
+	cm.mu.Lock()
+	cm.shot.recordDraw(choice.Kind, choice.Slot, now)
+	cm.mu.Unlock()
+	cm.logger.Info("Drawing ranged weapon", "kind", choice.Kind.String())
+}
+
+// fireShot releases the draw, letting the arrow or bolt go. The head position
+// is the eye height, which is what the release is measured from.
+func (cm *CombatManager) fireShot(s shot, now time.Time, target *entity.Info) {
+	head := cm.bot.GetCoords().Add(mgl32.Vec3{0, 1.62, 0})
+	tx := &packet.InventoryTransaction{
+		TransactionData: &protocol.ReleaseItemTransactionData{
+			ActionType:  protocol.ReleaseItemActionRelease,
+			HotBarSlot:  safecast.To[int32](s.slot),
+			HeldItem:    protocol.ItemInstance{Stack: cm.bot.GetInventorySlots()[s.slot]},
+			HeadPosition: head,
+		},
+	}
+	if err := cm.bot.WritePacket(tx); err != nil {
+		cm.logger.Error("Failed to write shot release transaction", "error", err)
+		return
+	}
+	cm.mu.Lock()
+	cm.shot.recordRelease(now)
+	// A crossbow holds its bolt once loaded, so the next release fires
+	// instantly instead of paying the load time again.
+	cm.shot.loaded = s.kind == WeaponCrossbow
+	cm.mu.Unlock()
+	cm.logger.Info("Shot released", "target", target.Name, "kind", s.kind.String())
+}
+
+// normalizedMobName is the target's mob name in the canonical form the tactic
+// table is keyed on.
+func normalizedMobName(target *entity.Info) string {
+	if name := entity.NormalizeName(target.Name); name != "" {
+		return name
+	}
+	return entity.NormalizeName(target.Type)
+}
+
+// horizontalDistance is the ground distance between two points, ignoring
+// height: tactics care about how far the bot is across the ground, not
+// through the air.
+func horizontalDistance(a, b mgl32.Vec3) float32 {
+	dx, dz := a.X()-b.X(), a.Z()-b.Z()
+	return float32(math.Sqrt(float64(dx*dx + dz*dz)))
 }
 
 // situation reads the fight into the shape the decisions take.

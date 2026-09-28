@@ -210,7 +210,11 @@ func (b *Bot) CraftItem(recipeNetID uint32, count int) error {
 		itemName:           itemName,
 	}
 	for _, pick := range picks {
-		if err := b.stageCraftIngredient(recipe, pick, staging); err != nil {
+		gridSlot, err := craftingGridSlot(recipe, pick.ingredientIndex)
+		if err != nil {
+			return err
+		}
+		if err := b.stageCraftIngredient(pick, staging, gridSlot); err != nil {
 			return err
 		}
 	}
@@ -227,10 +231,8 @@ func (b *Bot) CraftItem(recipeNetID uint32, count int) error {
 	return b.finalizeCraft(recipe, recipeNetID, count, outputSlot, ingredientSources, staging)
 }
 
-// craftStaging accumulates per-ingredient grid state while CraftItem fills the
-// crafting input. Extracting the staging loop body into stageCraftIngredient
-// keeps CraftItem a thin orchestrator and lets a later rejection roll the
-// partially-filled grid back via restoreCraftingGrid.
+// craftStaging keeps the authoritative grid stack IDs for personal and table
+// crafting. A rejected transfer can return already-staged items to their source.
 type craftStaging struct {
 	gridInputs         []craftingGridInput
 	gridInputIndexes   map[byte]int
@@ -241,14 +243,8 @@ type craftStaging struct {
 }
 
 // stageCraftIngredient stages one ingredient (inventory -> cursor -> crafting
-// input). It delegates the take and place phases to dedicated methods so each
-// stays under the maintainability complexity gate; on rejection either phase
-// rolls the partially-filled grid back via restoreCraftingGrid.
-func (b *Bot) stageCraftIngredient(recipe RecipeInfo, pick ingredientPick, s *craftStaging) error {
-	gridSlot, err := craftingGridSlot(recipe, pick.ingredientIndex)
-	if err != nil {
-		return err
-	}
+// input) at the slot chosen for the currently open crafting grid.
+func (b *Bot) stageCraftIngredient(pick ingredientPick, s *craftStaging, gridSlot byte) error {
 	cursorStackID, err := b.takeIngredientToCursor(pick, s)
 	if err != nil {
 		return err
@@ -375,11 +371,9 @@ func (b *Bot) finalizeCraft(recipe RecipeInfo, recipeNetID uint32, count int, ou
 	return nil
 }
 
-// CraftItemOnTable crafts a 3×3 (or any crafting_table-requiring) recipe using
-// the AutoCraft protocol action. The crafting_table window must already be open
-// (via crafting.Manager.OpenCraftingTable). Unlike CraftItem, this does NOT
-// manually fill the grid — the server pulls ingredients from inventory and
-// crafting input automatically.
+// CraftItemOnTable fills the table's nine-slot input before submitting the
+// same manual craft/consume/place sequence as CraftItem. The workbench window
+// must be open and confirmed before staging any ingredients.
 func (b *Bot) CraftItemOnTable(recipeNetID uint32, count int) error {
 	b.craftMu.Lock()
 	defer b.craftMu.Unlock()
@@ -397,77 +391,93 @@ func (b *Bot) CraftItemOnTable(recipeNetID uint32, count int) error {
 		b.Mu.Unlock()
 		return fmt.Errorf("recipe %d not in cache (waiting for CraftingData)", recipeNetID)
 	}
+	if err := validateTableCraftRecipe(recipe); err != nil {
+		b.Mu.Unlock()
+		return err
+	}
+	picks, err := planIngredientConsumption(b.InventoryMap, b.ItemNames, recipe.Ingredients, count)
+	if err != nil {
+		b.Mu.Unlock()
+		return err
+	}
 	itemName := b.ItemNames[recipe.Output.NetworkID]
-	ingredientSources := snapshotIngredientSourcesFromRecipe(b.InventoryMap, b.ItemNames, recipe.Ingredients, count)
+	sources := snapshotIngredientSources(b.InventoryMap, picks)
+	itemNetworkIDs := make(map[uint32]int32, len(picks))
+	for _, pick := range picks {
+		itemNetworkIDs[pick.slot] = b.InventoryMap[pick.slot].NetworkID
+	}
+	outputSlot, hasOutputSlot := findFirstEmptyPlayerSlot(b.InventoryMap)
 	b.Mu.Unlock()
 
 	outputCount := int(recipe.Output.Count) * count
 	if outputCount <= 0 || outputCount > MaxStackSize {
 		return fmt.Errorf("crafted output count %d is unsupported", outputCount)
 	}
-
-	b.Logger.Info("CraftItemOnTable auto-craft",
-		"recipeNetID", recipeNetID,
-		"item", itemName,
-		"count", count,
-		"ingredientCount", len(recipe.Ingredients),
-	)
-
-	b.Mu.Lock()
-	outputSlot, hasOutputSlot := findFirstEmptyPlayerSlot(b.InventoryMap)
-	b.Mu.Unlock()
+	if itemName == "" {
+		return fmt.Errorf("cannot determine the item name of recipe output %+v", recipe.Output)
+	}
 	if !hasOutputSlot {
 		return fmt.Errorf("inventory full, cannot place crafted output")
 	}
 
-	resultItem := recipe.Output
-	resultItem.Count = safecast.To[uint16](outputCount)
-	resultStackItem, ok := stackRequestItemFromStack(resultItem, itemName)
-	if !ok {
-		return fmt.Errorf("cannot describe crafted output %q to the server", itemName)
+	b.Logger.Info("CraftItemOnTable manual grid", "recipeNetID", recipeNetID,
+		"item", itemName, "count", count, "ingredientCount", len(picks))
+	staging := &craftStaging{
+		gridInputs:         make([]craftingGridInput, 0, len(picks)),
+		gridInputIndexes:   make(map[byte]int, len(picks)),
+		predictedSourceIDs: make(map[uint32]int32, len(picks)),
+		stagedIngredients:  make([]stagedCraftIngredient, 0, len(picks)),
+		itemNetworkIDs:     itemNetworkIDs,
+		itemName:           itemName,
 	}
-
-	actions := []protocol.StackRequestAction{
-		&protocol.AutoCraftRecipeStackRequestAction{
-			RecipeNetworkID: recipeNetID,
-			NumberOfCrafts:  byte(count),
-			Ingredients:     recipe.Ingredients,
-		},
-		&protocol.CraftResultsDeprecatedStackRequestAction{
-			ResultItems:  []protocol.StackRequestItem{resultStackItem},
-			TimesCrafted: byte(count),
-		},
+	for _, pick := range picks {
+		gridSlot, err := craftingTableGridSlot(recipe, pick.ingredientIndex)
+		if err != nil {
+			return err
+		}
+		if err := b.stageCraftIngredient(pick, staging, gridSlot); err != nil {
+			return err
+		}
 	}
+	return b.finalizeCraft(recipe, recipeNetID, count, outputSlot, sources, staging)
+}
 
-	requestID, resultCh := b.beginStackRequest(recipe.Output.NetworkID)
-	placeAction := &protocol.PlaceStackRequestAction{}
-	placeAction.Count = byte(outputCount)
-	placeAction.Source = protocol.StackRequestSlotInfo{
-		Container:      protocol.FullContainerName{ContainerID: protocol.ContainerCreatedOutput},
-		Slot:           CreatedOutputSlot,
-		StackNetworkID: requestID,
+// validateTableCraftRecipe rejects recipes the workbench grid cannot express.
+// Non-crafting-table blocks keep their own UI, and anything larger than the
+// 3×3 grid has to be left to the server's recipe book.
+func validateTableCraftRecipe(recipe RecipeInfo) error {
+	if recipe.Block != "crafting_table" {
+		return fmt.Errorf("recipe %s requires its own interface, not a crafting table", recipe.Block)
 	}
-	placeAction.Destination = protocol.StackRequestSlotInfo{
-		Container: protocol.FullContainerName{ContainerID: protocol.ContainerCombinedHotBarAndInventory},
-		Slot:      byte(outputSlot),
+	if recipe.Shapeless {
+		if len(recipe.Ingredients) > 9 {
+			return fmt.Errorf("shapeless recipe has %d ingredients, more than the 3x3 grid holds", len(recipe.Ingredients))
+		}
+		return nil
 	}
-	actions = append(actions, placeAction)
-
-	if _, err := b.sendStackRequest(requestID, resultCh, actions, itemName); err != nil {
-		return fmt.Errorf("auto-craft %s: %w", itemName, err)
+	if recipe.Width <= 0 || recipe.Height <= 0 || recipe.Width > 3 || recipe.Height > 3 {
+		return fmt.Errorf("invalid crafting table shape %dx%d", recipe.Width, recipe.Height)
 	}
-
-	b.Mu.Lock()
-	reconcileCraftIngredientCounts(b.InventoryMap, b.StackNetworkIDs, ingredientSources)
-	b.Mu.Unlock()
-
-	b.Logger.Info("CraftItemOnTable accepted",
-		"recipeNetID", recipeNetID,
-		"item", itemName,
-		"count", count,
-		"inventory", b.GetInventorySummary(),
-	)
 	return nil
+}
+
+// craftingTableGridSlot maps a recipe ingredient to its slot in the open
+// crafting table's 3×3 input, anchored at the top-left like a player does. A
+// shaped pattern may legally sit anywhere in the grid, so the top-left anchor
+// keeps one recipe mapping to one stable set of slots.
+func craftingTableGridSlot(recipe RecipeInfo, ingredientIndex int) (byte, error) {
+	if recipe.Shapeless {
+		if ingredientIndex < 0 || ingredientIndex >= 9 {
+			return 0, fmt.Errorf("ingredient %d does not fit the 3x3 crafting table grid", ingredientIndex)
+		}
+		return byte(CraftingTableGridBaseSlot + ingredientIndex), nil
+	}
+	if ingredientIndex < 0 || ingredientIndex >= int(recipe.Width*recipe.Height) {
+		return 0, fmt.Errorf("ingredient %d is outside recipe shape", ingredientIndex)
+	}
+	row := ingredientIndex / int(recipe.Width)
+	column := ingredientIndex % int(recipe.Width)
+	return byte(CraftingTableGridBaseSlot + row*3 + column), nil
 }
 
 func validatePersonalCraftRecipe(recipe RecipeInfo) error {

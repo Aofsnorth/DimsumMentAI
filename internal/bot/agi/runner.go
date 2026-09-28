@@ -152,8 +152,11 @@ const goalConfidenceFloor = 0.5
 // rather than importing the config package so agi can be tested with a plain
 // struct literal, and so the config surface does not leak into the loop.
 type Config struct {
-	Enabled          bool
-	TickIntervalSec  int
+	Enabled bool
+	// TickInterval is the gap between two brain ticks. It is a range rather
+	// than a number because a brain on a fixed ticker idles in visible
+	// lockstep, and the idle is what a viewer learns to read as a bot.
+	TickInterval     TimeRange
 	LLMChance        float64
 	SelfPreservation bool
 	LowHPThreshold   int
@@ -174,6 +177,12 @@ type Config struct {
 	// natural (playing for its own sake). It is normalised on the way in, so a
 	// typo lands on default rather than leaving the bot half-configured.
 	Mode string
+
+	// Goal is an objective the operator set in words, e.g. "kill the ender
+	// dragon". Empty leaves the choice to the model.
+	Goal string
+	// GoalDeadlineMin is how long that goal is pursued. Zero means no deadline.
+	GoalDeadlineMin int
 
 	// IdleStillBias is the share of rest periods that are fully motionless.
 	//
@@ -226,12 +235,47 @@ type Config struct {
 	WanderRadius float32
 }
 
+// TimeRange is a closed range of durations the brain draws its next gap from.
+// It is the runner's own view of the configured tick interval, so this package
+// still does not depend on internal/config.
+type TimeRange struct {
+	Min time.Duration
+	Max time.Duration
+}
+
+// Draw returns one gap. Reversed bounds are swapped rather than collapsed, so
+// this setting has one meaning wherever it is interpreted; a range at or below
+// the floor falls back to the floor, so a half-built Runner in a test still
+// ticks rather than spinning.
+func (r TimeRange) Draw() time.Duration {
+	const floor = 500 * time.Millisecond
+	minD, maxD := r.Min, r.Max
+	if maxD < minD {
+		minD, maxD = maxD, minD
+	}
+	if minD < floor {
+		minD = floor
+	}
+	if maxD <= minD {
+		return minD
+	}
+	return minD + time.Duration(rand.Int63n(int64(maxD-minD)))
+}
+
+// String renders the range for the log line at startup.
+func (r TimeRange) String() string {
+	if r.Max <= r.Min {
+		return r.Min.String()
+	}
+	return fmt.Sprintf("%s-%s", r.Min, r.Max)
+}
+
 // ConfigFrom adapts the YAML config to the runner's own view of it, so the
 // package does not depend on internal/config.
 func ConfigFrom(c config.AGIConfig) Config {
 	cfg := Config{
 		Enabled:           c.Enabled,
-		TickIntervalSec:   c.TickIntervalSec,
+		TickInterval:      TimeRange{Min: c.TickInterval.Min, Max: c.TickInterval.Max},
 		LLMChance:         c.LLMChance,
 		SelfPreservation:  c.SelfPreservation,
 		LowHPThreshold:    c.LowHPThreshold,
@@ -250,6 +294,8 @@ func ConfigFrom(c config.AGIConfig) Config {
 		EngageThreshold:   c.Jev.EngageThreshold,
 
 		Mode:            config.NormalizeMode(c.Mode),
+		Goal:            strings.TrimSpace(c.Goal),
+		GoalDeadlineMin: c.GoalDeadlineMin,
 		IdleStillBias:   c.IdleStillBias,
 		PlanLifetimeMin: c.PlanLifetimeMin,
 		PlanReplanMin:   c.PlanReplanMin,
@@ -283,12 +329,19 @@ func New(b *bot.Bot, cfg Config) *Runner {
 	if !cfg.Enabled {
 		return nil
 	}
-	return &Runner{
+	r := &Runner{
 		b:          b,
 		cfg:        cfg,
 		seed:       rand.Intn(360),
 		vocabulary: NewVocabulary(),
 	}
+	// An operator-set goal is installed before the loop starts, so the very
+	// first tick already has one. Waiting for the model to install it would make
+	// a configured goal indistinguishable from a typo that never took effect.
+	if cfg.Goal != "" {
+		r.pinOperatorGoal(time.Now())
+	}
+	return r
 }
 
 // Run drives the loop until the session ends. It is started as a goroutine by
@@ -298,18 +351,14 @@ func (r *Runner) Run(ctx context.Context) {
 		return
 	}
 
-	interval := time.Duration(r.cfg.TickIntervalSec) * time.Second
 	r.b.Logger.Info("AGI loop started",
-		slog.Int("interval_sec", r.cfg.TickIntervalSec),
+		slog.String("interval", r.cfg.TickInterval.String()),
 		slog.String("mode", r.cfg.Mode),
 		slog.Float64("llm_chance", r.cfg.LLMChance),
 		slog.Bool("social", r.cfg.Social),
 		slog.Bool("wander", r.cfg.Wander),
 		slog.Bool("vision", r.cfg.Vision),
 	)
-
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
 
 	// Say plainly, at startup, whether the System One layer is actually wired
 	// in. A bot that logs "AGI enabled" and then silently runs on hardcoded
@@ -321,33 +370,45 @@ func (r *Runner) Run(ctx context.Context) {
 			slog.Float64("danger_threshold", r.cfg.DangerThreshold),
 			slog.Float64("speak_threshold", r.cfg.SpeakThreshold),
 			slog.Float64("engage_threshold", r.cfg.EngageThreshold),
+			// The tick is also the model's request rate, so a short interval is
+			// a spend, not just a pace. Logging it here is what makes a
+			// two-second brain an informed choice rather than a surprise bill.
+			slog.String("one_request_per_tick", r.cfg.TickInterval.String()),
 		)
 	} else {
 		r.b.Logger.Info("AGI: running on local thresholds (Jev not configured)")
 	}
 
+	// A timer rather than a ticker: the gap is redrawn every time, so a
+	// recurring interval is not what this loop can express. The first wait is
+	// drawn from the same range rather than from a fraction of it, so a
+	// reconnecting bot does not wake up in lockstep with whatever it was doing
+	// before — and, unlike the old rand.Intn(interval), it cannot divide by zero
+	// when the configured interval is not a positive number.
 	for {
-		// Jitter the first tick so a reconnecting bot does not wake up in
-		// lockstep with whatever it was doing before.
+		wait := r.cfg.TickInterval.Draw()
+		timer := time.NewTimer(wait)
 		select {
 		case <-ctx.Done():
+			timer.Stop()
 			return
-		case <-time.After(time.Duration(rand.Intn(r.cfg.TickIntervalSec)) * time.Second):
+		case <-timer.C:
 		}
-
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				r.Tick(ctx)
-			}
-		}
+		r.Tick(ctx)
 	}
 }
 
 // Tick runs one pass of the brain: reflex first, then an optional decision.
 func (r *Runner) Tick(ctx context.Context) {
+	// Don't act until the world has at least some terrain. The threshold is
+	// deliberately low (1 chunk): the bot only needs to see the ground under its
+	// feet to start deciding. Pathfinding itself has a separate, stricter gate.
+	// A threshold that is too high (the old 4) permanently blocks the AGI on
+	// worlds where only 2-3 chunks arrive in the initial burst — which presents
+	// as a bot that joins and never moves.
+	if r.b.WorldCache == nil || r.b.WorldCache.ChunkCount() < 1 {
+		return
+	}
 	snap := r.Observe()
 
 	// Ask Jev once, up front, for every judgement this tick needs. One call
@@ -457,7 +518,11 @@ func Curriculum(s Snapshot) []string {
 	// Only offer to collect when there is something to collect. An empty
 	// "gather" is a task the bot cannot finish, and finishing nothing reads as
 	// a bug from the outside.
-	if s.NearBlocks != "" && s.NearBlocks != "none" {
+	//
+	// The test is for real block names, not for the string merely being
+	// non-empty. A rendered sentence is non-empty too, and a bot offered
+	// "gather wood" in a world it can see no wood in walks off and fails.
+	if len(blockNames(s.NearBlocks)) > 0 {
 		curriculum = append(curriculum, jev.ActivityGather)
 		// Mining is only offered when there is a resource AND the bot is not
 		// already carrying too much. Offering "go mine" with a full inventory
@@ -615,6 +680,13 @@ func (r *Runner) adoptGoal(name string, now time.Time) {
 // otherwise the bot could never start.
 func (r *Runner) considerGoal(choice string, confidence float64, now time.Time) bool {
 	current := r.currentGoal()
+	// An operator-set goal outranks the model's opinion. The whole point of
+	// writing one down is that the bot keeps working on it while the model has
+	// better ideas, and a model given a free hand here will have better ideas
+	// every tick.
+	if current.Pinned {
+		return false
+	}
 	switching := current.Name != "" && current.Name != choice
 	if switching && confidence < goalConfidenceFloor {
 		return false
@@ -880,6 +952,11 @@ func describeState(s Snapshot) string {
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "Health %d/20. Hunger %d/20. Position %s.\n", s.HP, s.Hunger, s.Coords)
 	fmt.Fprintf(&sb, "Time: %s. Free inventory slots: %d.\n", timeOfDay(s), s.FreeSlots)
+	if s.IsThundering {
+		sb.WriteString("Weather: thunderstorm.\n")
+	} else if s.IsRaining {
+		sb.WriteString("Weather: raining.\n")
+	}
 	fmt.Fprintf(&sb, "Current goal: %s.\n", s.GoalSummary)
 	// The vocabulary goes in right after the goal, because the two are read
 	// together: the goal says what the bot is trying to do and this says what it
@@ -891,13 +968,82 @@ func describeState(s Snapshot) string {
 	}
 	fmt.Fprintf(&sb, "Holding: %s.\n", s.HeldItem)
 	fmt.Fprintf(&sb, "Visible mobs: %s.\n", s.VisibleMob)
-	fmt.Fprintf(&sb, "Nearby blocks: %s.\n", s.NearBlocks)
+	// The prose rendering, not the name list: a model can act on "chest (4m N)"
+	// and cannot act on a bare "chest", and the name list is there for the rules
+	// in this package rather than for the model.
+	fmt.Fprintf(&sb, "Nearby blocks: %s.\n", s.nearBlocksForPrompt())
 	fmt.Fprintf(&sb, "Visible signs: %s.\n", describeSigns(s))
 	fmt.Fprintf(&sb, "Players nearby: %s.\n", DescribePeople(s.Nearby))
 	if s.Busy {
 		sb.WriteString("The bot is already doing something.\n")
 	}
 	return sb.String()
+}
+
+// blockNames returns the distinct block names in a summary, which is the only
+// question the curriculum and the goal filter actually mean to ask.
+//
+// "Is there anything to gather?" is not "is this string non-empty?". The
+// rendered sentence is non-empty in every world, including an empty plain, and
+// asking the second question is what put "gather wood" on the menu of a bot
+// standing in a field with no tree in it.
+//
+// The "none" sentinel is dropped here rather than at each call site, because it
+// is a claim about the absence of blocks rather than the name of one. Leaving it
+// in means a bot standing on nothing is offered mining, which is the same
+// failure wearing a different hat.
+func blockNames(nearBlocks string) []string {
+	names, _ := readableBlockNames(nearBlocks)
+	return names
+}
+
+// readableBlockNames returns the distinct block names in a summary, and whether
+// the summary was a list of names in the first place.
+//
+// The second return value is the important one. "The scan found no blocks" and
+// "I could not read the scan" both leave the caller holding an empty list, and
+// a caller that cannot tell them apart will read every unreadable summary as an
+// empty world — which for the single-block detector means a conclusion it has no
+// evidence for, confirmed on the next tick into a state the bot never leaves.
+func readableBlockNames(nearBlocks string) (names []string, readable bool) {
+	text := strings.TrimSpace(nearBlocks)
+	if text == "" {
+		// Nothing was scanned. That is a real absence, not a parsing failure.
+		return nil, true
+	}
+
+	terms := splitList(text)
+	if len(terms) == 0 {
+		// There was content, and none of it was a bare name. The summary is in a
+		// shape this code does not understand.
+		return nil, false
+	}
+
+	distinct := make([]string, 0, len(terms))
+	seen := make(map[string]bool, len(terms))
+	for _, term := range terms {
+		name := normaliseTerm(term)
+		if name == "" || name == "none" || seen[name] {
+			continue
+		}
+		seen[name] = true
+		distinct = append(distinct, name)
+	}
+	return distinct, true
+}
+
+// nearBlocksForPrompt returns the readable rendering of the block scan,
+// falling back to the name list for a snapshot built without one.
+//
+// The fallback is what keeps hand-built snapshots in the tests meaningful, and
+// it is not merely a test convenience: any path that assembles a Snapshot
+// without scanning still has to put something truthful in the prompt, and a
+// bare list of names is truthful where an empty string would be a lie.
+func (s Snapshot) nearBlocksForPrompt() string {
+	if s.NearBlocksText != "" {
+		return s.NearBlocksText
+	}
+	return s.NearBlocks
 }
 
 // timeOfDay names the world clock in words. Jev decides from this text, and a
@@ -960,7 +1106,10 @@ func (r *Runner) Observe() Snapshot {
 	// the only visible symptom was a bot standing still.
 	moving := b.MovementState != "idle"
 	pos := b.Pos
-	lookTarget := b.LookTargetName
+	lookTarget := ""
+	if b.LookTargetName != "" && time.Now().Before(b.LookTargetUntil) {
+		lookTarget = b.LookTargetName
+	}
 	actors := make(map[uint64]*entity.Info, len(b.Actors))
 	for id, info := range b.Actors {
 		if info == nil {
@@ -994,29 +1143,37 @@ func (r *Runner) Observe() Snapshot {
 
 	underwater, secondsUnder := r.observeSubmersion(now)
 
+	// One scan, two shapes: the names the brain's rules read and the prose the
+	// models read. Scanning twice would double a per-tick cost to produce two
+	// descriptions that could disagree about the same instant.
+	nearBlocks, nearBlocksText := perception.VisibleBlocks(b, r.cfg.BlockScanDistance, r.cfg.BlockScanLimit)
+
 	snap := Snapshot{
-		Now:          now,
-		Coords:       coords,
-		HP:           hp,
-		Hunger:       hunger,
-		HeldItem:     b.GetHeldItem(),
-		Inventory:    b.GetInventorySummary(),
-		VisibleMob:   visibleMobs,
-		NearBlocks:   perception.BlocksSummary(b, r.cfg.BlockScanDistance, r.cfg.BlockScanLimit),
-		Busy:         busy,
-		Exploring:    b.Explorer != nil && b.Explorer.IsExploring(),
-		IsNight:      r.isNight(),
-		HasBed:       r.hasBed(),
-		FreeSlots:    r.freeInventorySlots(),
-		Nearby:       r.nearbyPeople(pos, lookTarget),
-		VisibleSigns: r.visibleSignText(),
-		GoalSummary:  describeGoal(r.currentGoal()),
-		PlanSummary:  renderPlan(r.currentPlan()),
-		Features:     perception.VisibleFeatures(b, r.cfg.BlockScanDistance),
-		Craftable:    r.craftableCount(),
+		Now:            now,
+		Coords:         coords,
+		HP:             hp,
+		Hunger:         hunger,
+		HeldItem:       b.GetHeldItem(),
+		Inventory:      b.GetInventorySummary(),
+		VisibleMob:     visibleMobs,
+		NearBlocks:     nearBlocks,
+		NearBlocksText: nearBlocksText,
+		Busy:           busy,
+		Exploring:      b.Explorer != nil && b.Explorer.IsExploring(),
+		IsNight:        r.isNight(),
+		HasBed:         r.hasBed(),
+		FreeSlots:      r.freeInventorySlots(),
+		Nearby:         r.nearbyPeople(pos, lookTarget),
+		VisibleSigns:   r.visibleSignText(),
+		GoalSummary:    describeGoal(r.currentGoal()),
+		PlanSummary:    renderPlan(r.currentPlan()),
+		Features:       perception.VisibleFeatures(b, r.cfg.BlockScanDistance),
+		Craftable:      r.craftableCount(),
 
 		Underwater:        underwater,
 		SecondsUnderwater: secondsUnder,
+		IsRaining:         b.SurvivalMgr != nil && b.SurvivalMgr.IsRaining(),
+		IsThundering:      b.SurvivalMgr != nil && b.SurvivalMgr.IsThundering(),
 	}
 
 	// Fold what is in view into the vocabulary, then hand the same pointer to
