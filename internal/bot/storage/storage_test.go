@@ -5,6 +5,8 @@ import (
 	"testing"
 	"time"
 
+	"bedrock-ai/internal/bot/fov"
+
 	"github.com/go-gl/mathgl/mgl32"
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
 )
@@ -17,6 +19,10 @@ type fakeBot struct {
 	navigated [3]int32
 	stopped   bool
 	looked    mgl32.Vec3
+	// fovPassthrough lets a test opt into real field-of-view behaviour. It
+	// defaults to false (always visible) so the existing geometry tests keep
+	// testing LOS and ordering, not the cone.
+	fovPassthrough bool
 }
 
 type blockInfo struct {
@@ -59,6 +65,14 @@ func (f *fakeBot) BlockLoaded(x, y, z int32) (bool, bool) {
 func (f *fakeBot) SignText(x, y, z int32) (string, bool) {
 	text, ok := f.signs[protocol.BlockPos{x, y, z}]
 	return text, ok
+}
+
+func (f *fakeBot) InFieldOfView(point mgl32.Vec3) bool {
+	if !f.fovPassthrough {
+		return true
+	}
+	eye := f.pos.Add(mgl32.Vec3{0, 1.62, 0})
+	return fov.Within(point, eye, 0)
 }
 
 func (f *fakeBot) set(x, y, z int32, name string, solid bool) {
@@ -115,6 +129,46 @@ func TestVisibleChestIsFoundAndSortedNearestFirst(t *testing.T) {
 
 // TestApproachStaysBesideTheChestNotInsideIt checks the stand-off logic picks a
 // neighbouring open cell, which is what a player actually stands on.
+// TestChestDirectlyBehindIsNotACandidate is the P0 field-of-view rule reaching
+// the storage layer. Line of sight alone was enough to accept a chest at any
+// angle, so the bot could "see" storage directly behind its own head — which no
+// player can do. This drives the real cone to prove the wiring, not just the
+// geometry: a chest behind the bot must never enter the search list.
+func TestChestDirectlyBehindIsNotACandidate(t *testing.T) {
+	t.Parallel()
+
+	b := newFakeBot(0.5, 64, 0.5)
+	b.fovPassthrough = true // real cone, facing heading 0 (+Z)
+	b.set(0, 63, 0, "minecraft:stone", true)
+	// A chest 8 blocks to the north (-Z) — behind the bot, which faces +Z.
+	b.set(0, 64, -8, "minecraft:chest", true)
+
+	svc := New(b)
+	for _, chest := range svc.FindContainers() {
+		if chest.Pos.Z() < 0 {
+			t.Fatalf("FindContainers accepted a chest directly behind the bot at %v", chest.Pos)
+		}
+	}
+}
+
+// TestChestInFrontIsACandidate is the mirror case, so the cone is not simply
+// rejecting everything.
+func TestChestInFrontIsACandidate(t *testing.T) {
+	t.Parallel()
+
+	b := newFakeBot(0.5, 64, 0.5)
+	b.fovPassthrough = true
+	b.set(0, 63, 0, "minecraft:stone", true)
+	// A chest 8 blocks to the south (+Z) — straight ahead, heading 0.
+	b.set(0, 64, 8, "minecraft:chest", true)
+
+	svc := New(b)
+	chests := svc.FindContainers()
+	if len(chests) == 0 {
+		t.Fatal("FindContainers rejected a chest straight ahead; the cone is too tight")
+	}
+}
+
 func TestApproachStaysBesideTheChestNotInsideIt(t *testing.T) {
 	t.Parallel()
 

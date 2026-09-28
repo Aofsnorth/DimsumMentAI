@@ -83,7 +83,7 @@ func (s *Service) FindSigns() []Sign {
 					continue
 				}
 				center := blockCenter(pos)
-				if !s.lineOfSight(origin, center, pos) {
+				if !s.visibleFrom(origin, center, pos) {
 					continue
 				}
 				clean := CleanSignText(text)

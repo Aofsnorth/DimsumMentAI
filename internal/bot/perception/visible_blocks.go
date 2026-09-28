@@ -3,9 +3,16 @@
 // but no blocks at all: asked "is there a button near you?" the model could
 // only guess, and answered "no" while standing in front of one.
 //
-// Everything here is line-of-sight — a ray is walked from the bot's eyes to
-// each block, and anything behind a loaded solid cell is dropped. That is the
-// "not xray" rule: a button on the far side of a wall is never reported.
+// Two rules govern everything here, and both are about honesty rather than
+// capability:
+//
+//   - LINE OF SIGHT. A ray is walked from the bot's eyes to each block, and
+//     anything behind a loaded solid cell is dropped. That is the "not xray"
+//     rule: a button on the far side of a wall is never reported.
+//   - FIELD OF VIEW. A block outside the vision cone is not reported either.
+//     Line of sight alone still describes a sphere, which means the bot "saw"
+//     the tree behind its head — a claim no player could make. See
+//     field_of_view.go.
 package perception
 
 import (
@@ -83,6 +90,13 @@ func BlocksSummary(b *bot.Bot, maxDistance float32, limit int) string {
 				}
 				dist := center.Sub(eye).Len()
 				if dist > maxDistance {
+					continue
+				}
+				// Vision cone, before the LOS walk. Doing it in this order means
+				// the expensive ray is only ever cast at blocks the bot could
+				// plausibly be looking at, and — more importantly — the summary
+				// can no longer report a tree behind the player as "nearby".
+				if !InFieldOfView(b, center) {
 					continue
 				}
 				if !hasLineOfSight(b, eye, center, pos) {
@@ -175,7 +189,14 @@ func terrainText(terrain map[string]int) string {
 // same line-of-sight walk as the block scan. Exported because the AGI vision
 // reflex needs the identical rule: a player behind a wall is not visible no
 // matter how close they are.
+//
+// The vision cone is applied here too, so "visible" means the same thing to the
+// AGI as it does to the block summary. Checking only the ray would let the
+// brain decide someone is present directly behind it.
 func SeesPoint(b *bot.Bot, to mgl32.Vec3) bool {
+	if !InFieldOfView(b, to) {
+		return false
+	}
 	origin := b.GetCoords()
 	eye := origin.Add(mgl32.Vec3{0, bot.PlayerEyeHeight, 0})
 	delta := to.Sub(eye)

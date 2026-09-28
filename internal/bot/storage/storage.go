@@ -70,6 +70,15 @@ type Bot interface {
 	// payload carried it. Sign text lives in block entities, so this is empty
 	// until the chunk holding the sign has been decoded.
 	SignText(x, y, z int32) (string, bool)
+	// InFieldOfView reports whether a world point is inside the bot's vision
+	// cone.
+	//
+	// It is a method rather than a direct perception call because this package
+	// cannot import perception: the bot imports storage, so perception->storage
+	// would close a cycle. The bot wires it to the same cone the block summary
+	// uses, which is the point — "a chest the bot can see" has to mean the same
+	// thing here as everywhere else.
+	InFieldOfView(point mgl32.Vec3) bool
 }
 
 // Container is the read/write session for one open chest window. The concrete
@@ -131,7 +140,7 @@ func (s *Service) ChestAt(pos protocol.BlockPos, name string) (Chest, bool) {
 	center := blockCenter(pos)
 	origin := s.bot.GetCoords()
 	dist := center.Sub(origin).Len()
-	if !s.lineOfSight(origin, center, pos) {
+	if !s.visibleFrom(origin, center, pos) {
 		return Chest{}, false
 	}
 	return Chest{
@@ -188,7 +197,7 @@ func (s *Service) FindContainers() []Chest {
 				if dist > float32(searchRadius)+2 {
 					continue
 				}
-				if !s.lineOfSight(origin, center, pos) {
+				if !s.visibleFrom(origin, center, pos) {
 					continue
 				}
 				out = append(out, Chest{
@@ -220,9 +229,29 @@ func (s *Service) lineOfSight(origin, target mgl32.Vec3, targetPos protocol.Bloc
 	return s.lineOfSightBetween(origin, target, targetPos, targetPos)
 }
 
+// visibleFrom is the full visibility test for something the bot is deciding
+// whether to act on: inside the vision cone, and not behind anything solid.
+//
+// The cone is checked first and is cheap, so a container the bot is facing away
+// from never costs a ray walk. This is the rule that makes "the chest over
+// there" mean a chest the bot could actually point at, rather than any chest
+// inside a radius — the difference between looking for storage and seeing
+// through walls.
+func (s *Service) visibleFrom(origin, target mgl32.Vec3, targetPos protocol.BlockPos) bool {
+	if !s.bot.InFieldOfView(target) {
+		return false
+	}
+	return s.lineOfSight(origin, target, targetPos)
+}
+
 // lineOfSightBetween is lineOfSight with a second endpoint to exclude. Both
 // endpoints are excluded because a label test always has two solid endpoints
 // (the sign and the chest) and neither should occlude the other.
+//
+// This is pure line of sight on purpose. The vision cone is applied by
+// visibleFrom, which is the only place that knows the geometry is measured from
+// the bot; applying it here would test a sign against the chest's field of view
+// rather than the bot's.
 func (s *Service) lineOfSightBetween(origin, target mgl32.Vec3, endpointA, endpointB protocol.BlockPos) bool {
 	eye := origin.Add(mgl32.Vec3{0, eyeHeight, 0})
 	delta := target.Sub(eye)

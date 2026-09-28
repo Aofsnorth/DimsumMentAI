@@ -7,8 +7,10 @@ import (
 	"strings"
 	"time"
 
+	"bedrock-ai/internal/bot/fov"
 	"bedrock-ai/internal/bot/storage"
 
+	"github.com/go-gl/mathgl/mgl32"
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
 )
 
@@ -23,6 +25,22 @@ const (
 	// in a tight loop, short enough that a rejoin can try again.
 	containerUnreadableCooldown = 2 * time.Minute
 )
+
+// InFieldOfView reports whether a world point is inside the bot's vision cone.
+//
+// This is the bridge the storage package needs, wired to the same cone the block
+// summary uses. It deliberately calls the neutral fov package rather than the
+// perception package: perception imports the bot type, so routing through it
+// would close an import cycle, and the whole point of extracting fov was to
+// give every subsystem one shared notion of "can the bot see this".
+func (b *Bot) InFieldOfView(point mgl32.Vec3) bool {
+	origin := b.GetCoords()
+	eye := origin.Add(mgl32.Vec3{0, PlayerEyeHeight, 0})
+	b.Mu.Lock()
+	headYaw := b.HeadYaw
+	b.Mu.Unlock()
+	return fov.Within(point, eye, headYaw)
+}
 
 func errChestNotLoaded(p protocol.BlockPos) error {
 	return errors.New("blok chest di " + blockPosKey(p) + " belum termuat di cache dunia")
