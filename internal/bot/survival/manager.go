@@ -38,6 +38,11 @@ type Bot interface {
 	GetEntityRuntimeID() uint64
 	GetLocalWorldModel() entity.WorldModel
 	GetBlockName(x, y, z int32) (string, bool)
+	// IsBusy reports whether the bot is already occupied. The reactive loop
+	// uses it to decide whether a self-care action may interrupt, and it is the
+	// same definition the AGI loop uses, so the two never disagree about
+	// whether the bot is free.
+	IsBusy() bool
 }
 
 // Manager handles all survival automation: auto-eat, auto-armor, auto-tool,
@@ -72,6 +77,15 @@ type Manager struct {
 	lastTorchTime time.Time
 	autoTorchOn   bool
 
+	// Night enables the reactive night routine (bed or shelter). It has its own
+	// switch, separate from the per-behaviour ones, because "let the bot handle
+	// nightfall" is a policy a server owner may want off while still allowing
+	// torch placement.
+	autoNightOn bool
+
+	// reactive holds the cooldowns for the unattended behaviours.
+	reactive reactiveState
+
 	// Potion
 	lastPotionTime time.Time
 
@@ -85,10 +99,17 @@ type Manager struct {
 
 func NewManager(bot Bot, logger *slog.Logger) *Manager {
 	return &Manager{
-		bot:                bot,
-		logger:             logger,
-		autoEatOn:          true,
+		bot:       bot,
+		logger:    logger,
+		autoEatOn: true,
+		// autoTorchOn was never set, so the torch behaviour was dead twice
+		// over: this private gate was false, so even AutoPlaceTorches called
+		// directly returned immediately, and nothing called it either. The
+		// public AutoTorchEnabled flag below was advertising a feature that had
+		// never once run.
+		autoTorchOn:        true,
 		autoArmorOn:        true,
+		autoNightOn:        true,
 		hungerLevel:        20,
 		EatThreshold:       10,
 		ArmorEnabled:       true,
@@ -105,11 +126,7 @@ func (m *Manager) SetHunger(hunger int) {
 	m.mu.Unlock()
 }
 
-// Tick runs the survival automation loop (called every 500ms)
-func (m *Manager) Tick() {
-	m.tickAutoEat()
-	m.tickAutoArmor()
-}
+// Tick lives in reactive.go, where the reactive half is explained.
 
 // healingPotions lists potion types that restore health
 var healingPotions = []string{

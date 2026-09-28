@@ -801,7 +801,7 @@ func (r *Runner) Observe() Snapshot {
 	hp, hunger, coords := b.GetStatusDetails()
 
 	b.Mu.Lock()
-	busy := b.MovementState != "idle" || (b.Planner != nil && b.Planner.IsRunning())
+	busy := b.IsBusy()
 	pos := b.Pos
 	lookTarget := b.LookTargetName
 	actors := make(map[uint64]*entity.Info, len(b.Actors))

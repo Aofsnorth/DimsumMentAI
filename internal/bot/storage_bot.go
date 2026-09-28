@@ -26,6 +26,20 @@ const (
 	containerUnreadableCooldown = 2 * time.Minute
 )
 
+// IsBusy reports whether the bot is already occupied with something.
+//
+// It is a method rather than a field check so the definition lives in one
+// place: both the AGI loop (which must not start a deliberation while busy) and
+// the survival loop (which must not start sleeping or building while busy) need
+// the same answer, and two copies of it is how one of them ends up disagreeing
+// with the other.
+func (b *Bot) IsBusy() bool {
+	b.Mu.Lock()
+	moving := b.MovementState != "idle"
+	b.Mu.Unlock()
+	return moving || (b.Planner != nil && b.Planner.IsRunning())
+}
+
 // InFieldOfView reports whether a world point is inside the bot's vision cone.
 //
 // This is the bridge the storage package needs, wired to the same cone the block
