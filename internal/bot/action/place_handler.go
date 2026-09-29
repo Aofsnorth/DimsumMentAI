@@ -9,6 +9,7 @@ import (
 
 	"bedrock-ai/internal/bot"
 	"bedrock-ai/internal/bot/placement"
+	"bedrock-ai/internal/event"
 
 	"github.com/go-gl/mathgl/mgl32"
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
@@ -16,21 +17,41 @@ import (
 
 // handlePlace places a block in front of the bot.
 // param format: "item_name" or "item_name,distance" (distance defaults to 1)
+//
+// Every early exit reports, because a placement that quietly gave up used to
+// leave the step with nothing to go on and read as a timeout.
 func handlePlace(b *bot.Bot, param, user string) {
 	go func() {
 		itemName, distance, ok := parsePlaceParams(param)
 		if !ok {
+			reportStatus(b, user, event.ActionStatus{
+				Action:  "place",
+				Success: false,
+				Error:   "butuh nama blok, contoh: place:cobblestone",
+			})
 			return
 		}
 		targetSlot, found := b.FindItemSlotByName(itemName)
 		if !found {
 			b.Logger.Warn("handlePlace: item not found", "item", itemName)
+			reportStatus(b, user, event.ActionStatus{
+				Action:  "place",
+				Item:    itemName,
+				Success: false,
+				Error:   fmt.Sprintf("tidak punya %s", itemName),
+			})
 			return
 		}
 
 		placePos, supportPos, found := findPlacementTarget(b, user, distance)
 		if !found {
 			b.Logger.Warn("handlePlace: no valid adjacent solid support spot found", "item", itemName)
+			reportStatus(b, user, event.ActionStatus{
+				Action:  "place",
+				Item:    itemName,
+				Success: false,
+				Error:   "tidak ada tempat yang bisa diletakkan",
+			})
 			return
 		}
 		request := placement.Request{
@@ -42,9 +63,16 @@ func handlePlace(b *bot.Bot, param, user string) {
 		}
 		if err := b.PlaceBlock(context.Background(), request); err != nil {
 			b.Logger.Warn("handlePlace: placement failed", "item", itemName, "pos", placePos, "error", err)
+			reportStatus(b, user, event.ActionStatus{
+				Action:  "place",
+				Item:    itemName,
+				Success: false,
+				Error:   err.Error(),
+			})
 			return
 		}
 		b.Logger.Info("handlePlace: placed block", "item", itemName, "pos", placePos)
+		reportStatus(b, user, event.ActionStatus{Action: "place", Item: itemName, Success: true})
 	}()
 }
 

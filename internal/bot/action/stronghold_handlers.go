@@ -113,7 +113,7 @@ func runStrongholdSearch(b *bot.Bot, user string) {
 		switch result {
 		case strongholdFound:
 			arrived := b.NavigateToBlock(hint.pos.X(), hint.pos.Y(), hint.pos.Z(), 1.5)
-			b.ReportActionStatus(user, event.ActionStatus{
+			reportStatus(b, user, event.ActionStatus{
 				Action:  "explorestronghold",
 				Item:    fmt.Sprintf("stronghold ketemu di %d,%d,%d", hint.pos.X(), hint.pos.Y(), hint.pos.Z()),
 				Success: arrived,
@@ -127,7 +127,7 @@ func runStrongholdSearch(b *bot.Bot, user string) {
 				"hint", hint.pos, "converge", attempt+1)
 			centerX, centerZ = convergeOnHint(best)
 		case strongholdExhausted:
-			b.ReportActionStatus(user, event.ActionStatus{
+			reportStatus(b, user, event.ActionStatus{
 				Action:  "explorestronghold",
 				Success: false,
 				Error: fmt.Sprintf("nggak nemu petunjuk stronghold dalam radius %d blok",
@@ -136,7 +136,7 @@ func runStrongholdSearch(b *bot.Bot, user string) {
 			return
 		}
 	}
-	b.ReportActionStatus(user, event.ActionStatus{
+	reportStatus(b, user, event.ActionStatus{
 		Action:  "explorestronghold",
 		Success: false,
 		Error:   "ada petunjuk stronghold tapi portalnya nggak ketemu; budget pencarian habis",

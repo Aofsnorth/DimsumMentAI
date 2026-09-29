@@ -40,8 +40,8 @@ func StartLoop(ctx context.Context, b *bot.Bot) {
 	} else {
 		b.Logger.Info("unprompted speech is now owned by the AGI brain")
 	}
-	go runner.Run(ctx)
 	installEpisodeHooks(b, runner)
+	go runner.Run(ctx)
 }
 
 // installEpisodeHooks wires the chat layer to the brain.
@@ -50,6 +50,11 @@ func StartLoop(ctx context.Context, b *bot.Bot) {
 // nothing ever calls it — which is the shape of a feature that gets described,
 // built, tested, and then quietly does nothing.
 func installEpisodeHooks(b *bot.Bot, r *Runner) {
+	b.Mu.Lock()
+	b.AutonomyContextFunc = func() string {
+		return "Current goal: " + describeGoal(r.currentGoal()) + "\nActive plan:\n" + renderPlan(r.currentPlan())
+	}
+	b.Mu.Unlock()
 	b.BeginEpisodeFunc = func(line string, now time.Time) (int, time.Duration, string, bool) {
 		ep, ok := r.BeginEpisode(line, now)
 		if !ok {

@@ -246,7 +246,7 @@ func blockDistanceTo(p protocol.BlockPos, from mgl32.Vec3) float32 {
 
 // portalFailure reports a lightportal attempt that could not complete.
 func portalFailure(b *bot.Bot, user string, err error) {
-	b.ReportActionStatus(user, event.ActionStatus{
+	reportStatus(b, user, event.ActionStatus{
 		Action:  "lightportal",
 		Item:    "portal",
 		Success: false,
@@ -278,7 +278,7 @@ func handleLightPortal(b *bot.Bot, param, user string) {
 		}
 		go func() {
 			entered := b.NavigateToBlock(litPos.X(), litPos.Y(), litPos.Z(), 1.0)
-			b.ReportActionStatus(user, event.ActionStatus{
+			reportStatus(b, user, event.ActionStatus{
 				Action:  "lightportal",
 				Item:    fmt.Sprintf("%d,%d,%d", litPos.X(), litPos.Y(), litPos.Z()),
 				Success: entered,
@@ -300,7 +300,7 @@ func handleLightPortal(b *bot.Bot, param, user string) {
 		cell := portalInteriorCell(air, obsidianPos)
 		go func() {
 			entered := b.NavigateToBlock(cell.X(), cell.Y(), cell.Z(), 1.0)
-			b.ReportActionStatus(user, event.ActionStatus{
+			reportStatus(b, user, event.ActionStatus{
 				Action:  "lightportal",
 				Item:    fmt.Sprintf("%d,%d,%d", cell.X(), cell.Y(), cell.Z()),
 				Success: entered,
@@ -355,7 +355,7 @@ func lightPortalFrame(b *bot.Bot, user string, seed protocol.BlockPos, obsidian,
 	}
 
 	if waitForPortalLit(b, seed) {
-		b.ReportActionStatus(user, event.ActionStatus{
+		reportStatus(b, user, event.ActionStatus{
 			Action:  "lightportal",
 			Item:    fmt.Sprintf("%d,%d,%d", target.X(), target.Y(), target.Z()),
 			Success: true,

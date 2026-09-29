@@ -122,7 +122,7 @@ home protection, awareness toggles, give-to-player, expedition packing, and mult
 | Vault / decorated pot | ❌ | Recognition only | — |
 | Shulker box in-world operation | ❌ | Recognition only | — |
 | Ender chest session | 🟡 | Recognized; session path unverified | `storage/storage.go:155-176` |
-| Legacy chest scanner | ⚠️ | Fabricated data ("cobblestone x64, dirt x32" hardcoded) | `inventory/chest/scan.go:44-49` |
+| Legacy chest scanner | ✅ | Deleted (fabricated data, no callers); store path now finds real containers by block name | `inventory/chest/actions.go:findNearbyChest` |
 
 ### 3.5 Farming / Fishing / Husbandry
 
@@ -143,8 +143,8 @@ home protection, awareness toggles, give-to-player, expedition packing, and mult
 
 | Capability | Status | Gap | Evidence |
 |---|---|---|---|
-| Auto-eat | 🟡 | `SetHunger` never called from `handleUpdateAttributes` — hunger state stale | `inventory/manager.go:122-127` |
-| Auto-armor tick | ⚠️ | `tickAutoArmor` body empty | `survival/armor.go:29-35` |
+| Auto-eat | ✅ | `SetHunger` wired from `handleUpdateAttributes`; auto-eat decision extracted as `shouldAutoEat` | `network/player/recipes.go:178`, `survival/food.go:37` |
+| Auto-armor tick | ✅ | `tickAutoArmor` compares worn slots 36-39 against carried candidates; cooldown + busy deferral | `survival/armor.go:76` |
 | Sleep | 🟡 | Bed used without sleep confirmation | `survival/actions.go:19-97` |
 | Torch / shelter | ⚠️ | Success without block-update confirmation | `survival/actions.go:101-306` |
 | Fire/lava escape (find water, extinguish) | ❌ | Hazard marking only | — |
@@ -252,11 +252,11 @@ Every later phase depends on truthful results.
 | # | Task | Acceptance |
 |---|---|---|
 | 0.1 | Refactor `building/placer` to use `Bot.PlaceBlock` (server-confirmed); remove local solidity self-set | Place reports match server block updates |
-| 0.2 | Fix `findNearbyFurnace` / legacy `findNearbyChest` to filter by block name, not `IsSolid` | Correct block located in tests |
-| 0.3 | Wire `SetHunger` from `handleUpdateAttributes`; auto-eat triggers on real hunger | Hunger drops and bot eats without chat command |
-| 0.4 | Implement `tickAutoArmor` (or delete dead code) | Armor auto-equips after damage/loot |
+| 0.2 | Fix `findNearbyFurnace` / legacy `findNearbyChest` to filter by block name, not `IsSolid` | Correct block located in tests — **done** for `findNearbyChest` (`inventory/chest/actions.go:36`); `findNearbyFurnace` still open |
+| 0.3 | Wire `SetHunger` from `handleUpdateAttributes`; auto-eat triggers on real hunger — **done** | Hunger drops and bot eats without chat command |
+| 0.4 | Implement `tickAutoArmor` (or delete dead code) — **done** | Armor auto-equips after damage/loot |
 | 0.5 | Make `ExecuteAndWait` return real per-action status; planner treats non-craft failures as failures | Regression test: failed action → plan step fails |
-| 0.6 | Remove/replace legacy `chest/scan.go` fabricated data | No hardcoded chest contents in tree |
+| 0.6 | Remove/replace legacy `chest/scan.go` fabricated data — **done** | No hardcoded chest contents in tree |
 
 ### Phase 1 — Station Session Framework + Furnace Family
 

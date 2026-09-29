@@ -33,13 +33,15 @@ import (
 // now. It is a value type on purpose: a decision is made from one immutable
 // reading, so the world cannot change underneath the reasoning half way through.
 type Snapshot struct {
-	Now        time.Time
-	Coords     string
-	HP         int
-	Hunger     int
-	HeldItem   string
-	Inventory  string
-	VisibleMob string
+	Now       time.Time
+	Coords    string
+	HP        int
+	Hunger    int
+	HeldItem  string
+	Inventory string
+	// Conversation is the bounded canonical player chat shared by Jev and the planner.
+	Conversation string
+	VisibleMob   string
 	// NearBlocks is the COMMA-SEPARATED list of block names the bot can
 	// genuinely see, or "none".
 	//
@@ -147,6 +149,15 @@ type Person struct {
 	HasLineOf  bool
 	LookingAt  bool
 	SpeakingTo bool
+	// Greeted records that the vision reflex has already acknowledged this
+	// person, and stays true for the gaze cooldown after the head turns away.
+	// It is separate from LookingAt because the two answer different
+	// questions: LookingAt is what the head is doing right now, Greeted is
+	// whether the bot has already reacted to their arrival.
+	//
+	// Without it, ReflexLook re-fires every time a gaze lapses and consumes
+	// every tick, which starves the rest of the brain.
+	Greeted bool
 }
 
 // Urgency is how badly the bot needs to act on this snapshot, in the reflex
@@ -313,8 +324,16 @@ func DecideReflex(s Snapshot, t Thresholds) Reflex {
 	return Reflex{Kind: ReflexNone}
 }
 
-// nearestUnacknowledged returns the closest person the bot is not already
-// looking at, so a gaze is never re-issued while it is being held.
+// nearestUnacknowledged returns the closest person the bot has not greeted yet,
+// so a gaze is issued once per acknowledgement rather than re-issued whenever
+// the current one lapses.
+//
+// The acknowledgement is deliberately longer than the gaze. ReflexLook consumes
+// the whole tick (see Tick), so a rule of "re-fire once the head turns away"
+// turns into a bot that alternates between looking at a player and deciding,
+// and the deciding half never gets a long enough window to act. Holding the
+// acknowledgement for the gaze cooldown means one arrival is one reflex, and
+// the brain is free the rest of the time.
 //
 // Only people in actual line of sight qualify. A player standing behind a wall
 // is tracked and known about, but turning towards them would be the single most
@@ -322,7 +341,7 @@ func DecideReflex(s Snapshot, t Thresholds) Reflex {
 func nearestUnacknowledged(s Snapshot) (string, bool) {
 	candidates := make([]Person, 0, len(s.Nearby))
 	for _, p := range s.Nearby {
-		if p.LookingAt || !p.HasLineOf {
+		if p.Greeted || !p.HasLineOf {
 			continue
 		}
 		candidates = append(candidates, p)

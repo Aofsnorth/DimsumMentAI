@@ -100,149 +100,81 @@ func (cm *CombatManager) HasShield() bool {
 
 // ===================== BOW / RANGED COMBAT =====================
 
-// BowAttack shoots an arrow at the current combat target
-func (cm *CombatManager) BowAttack(targetID uint64) bool {
-	inv := cm.bot.GetInventorySlots()
-	names := cm.bot.GetItemNames()
+// rangedSlot finds the slot holding the weapon of a kind, whether one is
+// carried at all, and whether any ammunition is in the inventory. Both lookups
+// were open-coded per weapon before; the draw sequence is shared, so they are
+// too.
+func (cm *CombatManager) rangedSlot(kind WeaponKind) (slot uint32, found, hasArrows bool) {
+	inventory := cm.slotNames()
 
-	// Find bow
-	var bowSlot uint32
-	hasBow := false
-	for slot, item := range inv {
-		if item.Count <= 0 {
-			continue
+	for _, name := range inventory {
+		short := name
+		if i := strings.LastIndexByte(short, ':'); i >= 0 {
+			short = short[i+1:]
 		}
-		name := strings.ToLower(names[item.NetworkID])
-		if strings.Contains(name, "bow") && !strings.Contains(name, "crossbow") {
-			bowSlot = slot
-			hasBow = true
-			break
-		}
-	}
-
-	if !hasBow {
-		cm.logger.Debug("BowAttack: no bow found")
-		return false
-	}
-
-	// Check for arrows
-	hasArrows := false
-	for _, item := range inv {
-		if item.Count <= 0 {
-			continue
-		}
-		name := strings.ToLower(names[item.NetworkID])
-		if strings.Contains(name, "arrow") {
+		short = strings.ToLower(strings.TrimSpace(short))
+		if short == "arrow" || strings.HasSuffix(short, "_arrow") {
 			hasArrows = true
 			break
 		}
 	}
 
-	if !hasArrows {
-		cm.logger.Debug("BowAttack: no arrows found")
+	if best := findBest(inventory, kind); best >= 0 {
+		return uint32(best), true, hasArrows
+	}
+	return 0, false, hasArrows
+}
+
+// shootOnce runs a whole draw-and-release for a weapon of a kind in one call.
+//
+// It is the shape the on-demand "shoot" action needs: nothing else is driving
+// the tick, so the draw is waited out here rather than carried across ticks.
+// The combat loop uses the tick-driven path instead.
+func (cm *CombatManager) shootOnce(kind WeaponKind, targetID uint64) bool {
+	slot, found, hasArrows := cm.rangedSlot(kind)
+	if !found {
+		cm.logger.Debug("shoot: no weapon of that kind in the inventory")
+		return false
+	}
+	if kind == WeaponBow && !hasArrows {
+		cm.logger.Debug("shoot: no arrows, so the bow is just a stick")
 		return false
 	}
 
-	// Equip bow
-	if err := cm.bot.EquipItem(bowSlot); err != nil {
-		return false
-	}
-
-	// Look at target
-	entities := cm.bot.GetEntities()
-	target, ok := entities[targetID]
+	target, ok := cm.currentTarget(targetID)
 	if !ok {
 		return false
 	}
 	if !cm.hasLineOfSight(target) {
-		cm.logger.Debug("BowAttack: target not visible", "target", target.Name)
+		cm.logger.Debug("shoot: target not visible", "target", target.Name)
 		return false
 	}
-	cm.bot.LookAt(target.Position.Add(mgl32.Vec3{0, 1.2, 0}))
+
+	choice := WeaponChoice{Slot: slot, Kind: kind, Name: cm.slotNames()[slot]}
+	cm.bot.LookAt(bowAimPoint(cm.bot.GetCoords(), target.Position))
 	time.Sleep(200 * time.Millisecond)
 
-	// Draw bow (start using item)
-	tx := &packet.InventoryTransaction{
-		TransactionData: &protocol.UseItemTransactionData{
-			ActionType:      protocol.UseItemActionClickBlock,
-			BlockPosition:   protocol.BlockPos{0, -1, 0},
-			BlockFace:       255,
-			HotBarSlot:      safecast.To[int32](bowSlot),
-			HeldItem:        protocol.ItemInstance{Stack: inv[bowSlot]},
-			Position:        cm.bot.GetCoords(),
-			ClickedPosition: mgl32.Vec3{0, 0, 0},
-		},
+	now := time.Now()
+	cm.beginDraw(choice, now)
+
+	hold := fullBowDraw
+	if kind == WeaponCrossbow {
+		hold = crossbowLoadTime
 	}
-	_ = cm.bot.WritePacket(tx)
+	time.Sleep(hold)
 
-	// Hold for 1 second to charge
-	time.Sleep(1000 * time.Millisecond)
-
-	// Release arrow
-	_ = cm.bot.WritePacket(&packet.PlayerAction{
-		EntityRuntimeID: cm.bot.GetEntityRuntimeID(),
-		ActionType:      protocol.PlayerActionAbortBreak,
-	})
-
-	cm.logger.Info("Arrow shot at target", "target", target.Name)
+	cm.fireShot(shot{kind: kind, slot: slot}, time.Now(), target)
 	return true
 }
 
-// CrossbowAttack shoots a loaded crossbow at target
+// BowAttack shoots an arrow at the given target: draw, hold, release.
+func (cm *CombatManager) BowAttack(targetID uint64) bool {
+	return cm.shootOnce(WeaponBow, targetID)
+}
+
+// CrossbowAttack loads and fires the crossbow at the given target.
 func (cm *CombatManager) CrossbowAttack(targetID uint64) bool {
-	inv := cm.bot.GetInventorySlots()
-	names := cm.bot.GetItemNames()
-
-	var crossbowSlot uint32
-	hasCrossbow := false
-	for slot, item := range inv {
-		if item.Count <= 0 {
-			continue
-		}
-		name := strings.ToLower(names[item.NetworkID])
-		if strings.Contains(name, "crossbow") {
-			crossbowSlot = slot
-			hasCrossbow = true
-			break
-		}
-	}
-
-	if !hasCrossbow {
-		return false
-	}
-
-	if err := cm.bot.EquipItem(crossbowSlot); err != nil {
-		return false
-	}
-
-	entities := cm.bot.GetEntities()
-	target, ok := entities[targetID]
-	if !ok {
-		return false
-	}
-	if !cm.hasLineOfSight(target) {
-		cm.logger.Debug("CrossbowAttack: target not visible", "target", target.Name)
-		return false
-	}
-	cm.bot.LookAt(target.Position.Add(mgl32.Vec3{0, 1.2, 0}))
-	time.Sleep(200 * time.Millisecond)
-
-	// Fire crossbow
-	tx := &packet.InventoryTransaction{
-		TransactionData: &protocol.UseItemTransactionData{
-			ActionType:      protocol.UseItemActionClickBlock,
-			BlockPosition:   protocol.BlockPos{0, -1, 0},
-			BlockFace:       255,
-			HotBarSlot:      safecast.To[int32](crossbowSlot),
-			HeldItem:        protocol.ItemInstance{Stack: inv[crossbowSlot]},
-			Position:        cm.bot.GetCoords(),
-			ClickedPosition: mgl32.Vec3{0, 0, 0},
-		},
-	}
-	_ = cm.bot.WritePacket(tx)
-
-	cm.logger.Info("Crossbow shot at target", "target", target.Name)
-	return true
+	return cm.shootOnce(WeaponCrossbow, targetID)
 }
 
 // HasBow checks if a bow is available

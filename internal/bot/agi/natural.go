@@ -138,6 +138,9 @@ func (r *Runner) naturalTick(ctx context.Context, snap Snapshot, judgement Judge
 
 	episode := r.currentEpisode()
 	switch {
+	case episode.Objective == "" && r.shouldPlanNaturally(judgement):
+		r.planningTick(ctx, snap, judgement)
+
 	case episode.Objective == "":
 		// No brief yet. The bot is expected to be playing for hours before
 		// anybody hands it one, so this is the normal state and not a gap.
@@ -149,6 +152,12 @@ func (r *Runner) naturalTick(ctx context.Context, snap Snapshot, judgement Judge
 	default:
 		r.runEpisode(ctx, episode, snap)
 	}
+}
+
+// shouldPlanNaturally keeps one active plan in charge of the motor layer. A
+// configured objective needs a plan even when Jev is temporarily unavailable.
+func (r *Runner) shouldPlanNaturally(j Judgement) bool {
+	return r.currentPlan().Objective != "" || r.currentGoal().Pinned || WantsBigBrain(j, escalateThreshold)
 }
 
 // BeginEpisode installs a brief and reports whether it was usable.

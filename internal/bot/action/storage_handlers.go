@@ -45,7 +45,7 @@ func handleReadSign(b *bot.Bot, param, user string) {
 		ctx := context.Background()
 		signs := b.Storage().FindSigns()
 		if len(signs) == 0 {
-			b.ReportActionStatus(user, event.ActionStatus{
+			reportStatus(b, user, event.ActionStatus{
 				Action:  "read_sign",
 				Item:    "sign",
 				Success: false,
@@ -67,7 +67,7 @@ func handleReadSign(b *bot.Bot, param, user string) {
 		text, err := b.Storage().ReadSign(ctx, target)
 		if err != nil {
 			b.Logger.Warn("read sign failed", "error", err.Error())
-			b.ReportActionStatus(user, event.ActionStatus{
+			reportStatus(b, user, event.ActionStatus{
 				Action:  "read_sign",
 				Item:    "sign",
 				Success: false,
@@ -82,7 +82,7 @@ func handleReadSign(b *bot.Bot, param, user string) {
 		b.InjectAIEvent(fmt.Sprintf(
 			"[SIGN读到] Bot membaca sign di dekatnya. Isinya: %q. Loc: %d,%d,%d",
 			text, target.Pos.X(), target.Pos.Y(), target.Pos.Z()))
-		b.ReportActionStatus(user, event.ActionStatus{
+		reportStatus(b, user, event.ActionStatus{
 			Action:  "read_sign",
 			Item:    "sign",
 			Success: true,
@@ -122,7 +122,7 @@ func handleTakeFromChest(b *bot.Bot, param, user string) {
 			"signs", result.SignsRead,
 		)
 		if !result.Found {
-			b.ReportActionStatus(user, event.ActionStatus{
+			reportStatus(b, user, event.ActionStatus{
 				Action:  "take",
 				Item:    itemName,
 				Success: false,
@@ -130,7 +130,7 @@ func handleTakeFromChest(b *bot.Bot, param, user string) {
 			})
 			return
 		}
-		b.ReportActionStatus(user, event.ActionStatus{
+		reportStatus(b, user, event.ActionStatus{
 			Action:  "take",
 			Item:    itemName,
 			Success: true,
@@ -149,7 +149,7 @@ func handleStoreInChest(b *bot.Bot, param, user string) {
 		stored, err := storageSearcher(b).StoreItem(context.Background(), itemName, count)
 		b.Logger.Info("store in chest complete", "item", itemName, "stored", stored)
 		if err != nil {
-			b.ReportActionStatus(user, event.ActionStatus{
+			reportStatus(b, user, event.ActionStatus{
 				Action:  "store",
 				Item:    itemName,
 				Success: false,
@@ -157,7 +157,7 @@ func handleStoreInChest(b *bot.Bot, param, user string) {
 			})
 			return
 		}
-		b.ReportActionStatus(user, event.ActionStatus{
+		reportStatus(b, user, event.ActionStatus{
 			Action:  "store",
 			Item:    itemName,
 			Success: true,
@@ -188,7 +188,7 @@ func handleScanChests(b *bot.Bot, _, user string) {
 		ctx := context.Background()
 		chests := b.Storage().FindContainers()
 		if len(chests) == 0 {
-			b.ReportActionStatus(user, event.ActionStatus{
+			reportStatus(b, user, event.ActionStatus{
 				Action:  "scan",
 				Item:    "chest",
 				Success: false,
@@ -217,7 +217,7 @@ func handleScanChests(b *bot.Bot, _, user string) {
 			}
 		}
 		b.Logger.Info("scanned chests", "count", len(lines), "detail", strings.Join(lines, " | "))
-		b.ReportActionStatus(user, event.ActionStatus{
+		reportStatus(b, user, event.ActionStatus{
 			Action:  "scan",
 			Item:    "chest",
 			Success: true,

@@ -4,8 +4,51 @@ import (
 	"strings"
 	"testing"
 
+	"bedrock-ai/internal/bot"
+	"bedrock-ai/internal/bot/world"
+	"github.com/df-mc/dragonfly/server/block/cube"
+	"github.com/df-mc/dragonfly/server/world/chunk"
+	"github.com/go-gl/mathgl/mgl32"
+
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
 )
+
+// TestUnknownTerrainIsNotTransparent is a fast no-xray regression.
+func TestUnknownTerrainIsNotTransparent(t *testing.T) {
+	t.Parallel()
+	b := &bot.Bot{WorldCache: world.NewWorldCache(0, cube.Range{-64, 319}, nil)}
+	target := mgl32.Vec3{0.5, 1.5, 5.5}
+	if SeesPoint(b, target) {
+		t.Error("entity seen through unloaded terrain")
+	}
+	if hasLineOfSight(b, mgl32.Vec3{0.5, 1.5, 0.5}, target, protocol.BlockPos{0, 1, 5}) {
+		t.Error("block seen through unloaded terrain")
+	}
+}
+
+// Fast regression: loaded chunks do not imply visible semantic targets.
+func TestSeesBlockRequiresViewAndClearRay(t *testing.T) {
+	t.Parallel()
+	stone, ok := chunk.StateToRuntimeID("minecraft:stone", nil)
+	if !ok {
+		t.Fatal("stone runtime ID unavailable")
+	}
+	b := &bot.Bot{WorldCache: world.NewWorldCache(0, cube.Range{-64, 319}, nil)}
+	target := protocol.BlockPos{0, 1, 5}
+	b.WorldCache.SetBlockRID(0, 1, 5, stone)
+	if !SeesBlock(b, target) {
+		t.Fatal("visible solid endpoint rejected")
+	}
+	b.WorldCache.SetBlockRID(0, 1, 2, stone)
+	if SeesBlock(b, target) {
+		t.Fatal("target behind wall accepted")
+	}
+	rear := protocol.BlockPos{0, 1, -5}
+	b.WorldCache.SetBlockRID(0, 1, -5, stone)
+	if SeesBlock(b, rear) {
+		t.Fatal("target behind head accepted")
+	}
+}
 
 // These cover the two shapes one scan is rendered into. The scan geometry —
 // the vision cone and the line-of-sight walk — is unchanged and is covered

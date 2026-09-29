@@ -34,6 +34,7 @@ type Bot interface {
 	SendChat(msg string)
 	GetEntityRuntimeID() uint64
 	GetLocalWorldModel() entity.WorldModel
+	GetBlockName(x, y, z int32) (string, bool)
 	DropItem(name string, count int) error
 	FindPlayer(username string) (uint64, mgl32.Vec3, bool)
 	SetLookAngles(yaw, pitch float32)

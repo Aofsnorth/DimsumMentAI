@@ -20,11 +20,173 @@
     ],
     "status": "active",
     "created_at": "2026-09-28T23:09:40.370Z",
-    "updated_at": "2026-09-28T23:09:40.371Z",
-    "checkpoints": 0,
+    "updated_at": "2026-09-29T00:32:37.031Z",
+    "checkpoints": 8,
     "max_checkpoints": 30,
-    "progress_log": [],
-    "evidence": []
+    "progress_log": [
+      {
+        "at": "2026-09-28T23:53:23.472Z",
+        "checkpoint": 1,
+        "summary": "Rewrote internal/bot/inventory/furnace/furnace.go to use the authoritative container-session pattern: name-based furnace block filtering, BeginContainerWatch + ClickBlockAt + WaitContainerOpen, real server-assigned window ID, ItemStackRequest transfers into slots 0/1, output-slot confirmation before reporting success, and close by assigned ID. Added 5 interface methods to inventory.Bot for wiring.",
+        "validation_result": "go build ./... exit 0; go test ./internal/bot/inventory/furnace/... -timeout 90s => ok (7 tests + 12 subtests all PASS); go vet ./internal/bot/inventory/... clean; go test ./internal/bot/... all 23 packages ok; go run ./cmd/archcheck 0 findings"
+      },
+      {
+        "at": "2026-09-28T23:59:22.526Z",
+        "checkpoint": 2,
+        "summary": "Designed the truthful-status mechanism: an in-package status hook (action.reportStatus) that both forwards to b.ReportActionStatus and publishes to a per-bot waiter, so ExecuteAndWait can await the real verdict. Unknown labels fail loudly; empty labels stay no-op success.",
+        "validation_result": "Not yet run; design phase. go build baseline not yet measured."
+      },
+      {
+        "at": "2026-09-28T23:59:43.400Z",
+        "checkpoint": 3,
+        "summary": "T3a wired SetHunger from handleUpdateAttributes (gated on hunger attribute presence), T3b implemented tickAutoArmor with worn-slot 36-39 comparison plus cooldown and busy deferral, T4 deleted chest/scan.go and fixed the still-live findNearbyChest to filter by block name. 20 new tests across 4 files, all t.Parallel().",
+        "validation_result": "go build ./... exit 0; go vet ./... clean; go test ./internal/bot/survival/... ./internal/bot/inventory/... -timeout 90s -count=1 all ok (survival 0.228s, inventory 0.033s, chest 0.025s, crafting 0.027s, furnace 0.073s); go test ./internal/bot/... -timeout 180s -count=1 all 24 packages ok; go run ./cmd/archcheck 0 findings. Tests were confirmed red before implementation."
+      },
+      {
+        "at": "2026-09-29T00:14:38.241Z",
+        "checkpoint": 4,
+        "summary": "Implemented truthful per-action plan results: added action/status.go (per-bot subscriber registry + reportStatus hook + inventory-delta reporting), rewrote ExecuteAndWait to await the real reported verdict with a bounded 90s timeout, made unknown labels fail loudly, preserved craft's structured path and empty-label rest behavior, converted all 38 in-package b.ReportActionStatus call sites to reportStatus, and gave ~25 previously-silent handlers truthful reports. Added actionHandlers RWMutex accessors.",
+        "validation_result": "go build ./... exit 0. go test ./internal/bot/action/... ./tests/action/... -timeout 90s => ok internal/bot/action 0.820s, ok tests/action 0.260s (10 new tests all pass). go vet ./... clean. go test ./... -count=1 => 48/48 packages ok. go run ./cmd/archcheck => 0 findings."
+      },
+      {
+        "at": "2026-09-29T00:16:13.057Z",
+        "checkpoint": 5,
+        "summary": "T8 stronghold search handler completed: action registration, expanding ring search, hint convergence, honest failure. Added registration regression test.",
+        "validation_result": "go build ./... exit 0; go test ./internal/bot/action/... -timeout 90s → ok 0.706s; 11/11 stronghold tests PASS"
+      },
+      {
+        "at": "2026-09-29T00:18:43.007Z",
+        "checkpoint": 6,
+        "summary": "Batch 1 (T1-T8) selesai via 6 subagent paralel: truthful action status (status.go + plan.go rewrite + 38 handler reporting), furnace rewrite ke pola container session otoritatif, SetHunger wiring + tickAutoArmor, hapus chest/scan.go fabrikasi, bow shooting (draw/release packet + gravity aim) + mob tactics, lightportal handler, explorestronghold handler.",
+        "validation_result": "go build ./... exit 0; go vet ./... clean; go test ./... → 47 package ok, 0 FAIL; go run ./cmd/pnxcheck → every PNX login check passes; go run ./cmd/archcheck → 0 findings."
+      },
+      {
+        "at": "2026-09-29T00:32:32.834Z",
+        "checkpoint": 7,
+        "summary": "T10 dragon fight implemented in internal/bot/combat: pure PlanDragonFight phase decision, crystal priority targeting, healing-beam avoidance, retreat/dodge geometry, wired into Tick via a target-identity branch that leaves the mob tactics and bow path untouched.",
+        "validation_result": "go build ./... exit 0; go vet ./... clean; go run ./cmd/archcheck 0 findings; go test ./internal/bot/combat/... -timeout 90s => \"ok bedrock-ai/internal/bot/combat 0.034s\" exit 0 (77 passing tests+subtests, up from 57). Tests were confirmed red first."
+      },
+      {
+        "at": "2026-09-29T00:32:37.031Z",
+        "checkpoint": 8,
+        "summary": "T9 selesai: internal/bot/action/endportal_handlers.go (baru) mendaftarkan fillframe/fillendportal/activateendportal/fill_frame dan enterendportal/enter_endportal. Geometri murni & orientation-agnostic: scanEndPortal (box ±6 dari seed frame, world cache via botBlockLookup), largestFrameCluster (chaining lewat endPortalClusterGap=2, withstands ring yang rusak), portalParts (pecah rect/frames terisi/frames kosong), endPortalInteriorCell (sel paling terkurung, prefer terisi lalu terdekat), emptyFrameCells (urut bawah-ke-atas) + framesNeedingEyes (dibatasi stok), routeEndPortalState, dimensionChanged. fillframe: cek eye_of_ender, equip, klik tiap frame via interactor.ClickBlockAt, hitung hanya frame yang world konfirmasi jadi end_portal; parsial = failure dengan angka jujur. enterendportal: hanya jalan kalau Classify=EndPortalOpen, baca dimensi sebelum/sesudah lewat perception.VisibleBlockNames + dimension.Detect, sukses hanya kalau dimensinya benar-benar berubah. 18 test semua t.Parallel().",
+        "validation_result": "go build ./... exit 0 (no output); go test ./internal/bot/action/... -timeout 90s => \"ok bedrock-ai/internal/bot/action 0.707s\"; go vet ./internal/bot/action/... clean; go test ./... -timeout 180s => 0 FAIL di semua package; go run ./cmd/archcheck => 0 findings. Tests confirmed red before implementation."
+      }
+    ],
+    "evidence": [
+      {
+        "id": "e-mulwl1fpkw",
+        "at": "2026-09-28T23:53:19.239Z",
+        "kind": "test",
+        "description": "go build ./... — exit 0, no output. go test ./internal/bot/inventory/furnace/... -timeout 90s — ok bedrock-ai/internal/bot/inventory/furnace 0.074s (7 tests + 12 subtests, all PASS, all t.Parallel()). go vet ./internal/bot/inventory/... — clean. go test ./internal/bot/... — all 23 packages ok. go run ./cmd/archcheck — 0 findings.",
+        "result": "pass"
+      },
+      {
+        "id": "e-mulwlg06mo",
+        "at": "2026-09-28T23:53:38.118Z",
+        "kind": "test",
+        "description": "go build ./... clean; go vet ./... clean; go test -count=1 ./... = 46/46 packages pass, 0 failures. go run ./cmd/archcheck = 0 findings. go run ./cmd/pnxcheck = all login checks pass.",
+        "result": "pass"
+      },
+      {
+        "id": "e-mulwlg0wkf",
+        "at": "2026-09-28T23:53:38.144Z",
+        "kind": "test",
+        "description": "New regression suite internal/bot/movement/terrain_gate_test.go (4 tests) covers the freeze: unloaded world produces no route, loaded world still produces one, idle bot with zero-vector target is skipped, and an unloaded-world failure does not increment WalkToRepathFailures. Green.",
+        "result": "pass"
+      },
+      {
+        "id": "e-mulwlg14dg",
+        "at": "2026-09-28T23:53:38.152Z",
+        "kind": "build",
+        "description": "Fixed pre-existing build breakage blocking `go build ./...` and the test suite: combat_attack.go `choice` was scoped inside an if-statement yet used below it; shot_test.go used a go1.27 promoted-field literal (go.mod pins 1.26.5); furnace/furnace.go mismatched int/int32 in the search loop and used struct-literal fields on protocol.BlockPos, which is [3]int32.",
+        "result": "pass"
+      },
+      {
+        "id": "e-mulwt6j4xx",
+        "at": "2026-09-28T23:59:39.088Z",
+        "kind": "test",
+        "description": "T3a: handleUpdateAttributes now calls SurvivalMgr.SetHunger off b.Mu, gated on the hunger attribute actually being present (UpdateAttributes only sends changed attrs, so a health-only packet must not reset hunger to 0). Attribute folding extracted into pure applyAttributeValues(attrs, prevHealth, prevHunger) so it is testable without a live connection. 3 new tests in network/player/attributes_test.go. T3b: tickAutoArmor implemented — worn armor read from global slots 36-39 (ContainerArmor offset, per network/player/containerSlotOffset), candidates from carried slots 0-35 walked in index order for determinism, strict-tier-better comparison via armorTierScore/compareArmorTier, 10s cooldown consumed only when an upgrade exists, and defers while IsBusy. 9 new tests in survival/armor_test.go + 4 in survival/food_test.go (shouldAutoEat extracted as the decision half). T4: deleted chest/scan.go (ScanChest had zero callers; the scan_chests action routes to b.Storage().FindContainers()) and relocated the still-live findNearbyChest/distance into chest/actions.go with the finder fixed to filter by block name via storage.IsContainerBlock instead of IsSolid, which previously returned the first solid block. 4 new tests in chest/scan_test.go. Validation: go build ./... exit 0; go vet ./... clean; go test ./internal/bot/survival/... ./internal/bot/inventory/... -timeout 90s all ok; go test ./internal/bot/... all 24 packages ok; go run ./cmd/archcheck 0 findings. Confirmed via grep that no hardcoded chest contents remain in Go source.",
+        "result": "pass"
+      },
+      {
+        "id": "e-mulxclc8xb",
+        "at": "2026-09-29T00:14:44.744Z",
+        "kind": "test",
+        "description": "T1 truthful action results. New internal/bot/action/plan_test.go: 10 tests, all t.Parallel(). ExecuteAndWait_ReturnsReportedSuccess, _ReportedFailureIsNotSuccess (the core regression: a handler reporting failure must not read as success), _UnknownLabelFailsLoudly, _SilentHandlerFails (timeout path, via parameterized executeAndWait), _EmptyLabelIsSatisfiedByDoingNothing (rest preserved, returns immediately), _AwaitsAsyncReport (report from a handler goroutine), _FirstReportWins, _ReportsDoNotLeakBetweenSteps (per-step unsubscribe), TestStatusSubscribers_AreIsolatedPerBot, TestUnsubscribeStatus_StopsDelivery, TestCountInventoryItems_CountsMatchingStacksOnly, TestReportInventoryDelta_{ZeroDeltaIsFailure,RealGainIsSuccess,ReportsRequestedItem}. Confirmed red first (undefined: reportStatus/subscribeStatus/unsubscribeStatus, then assertions failing), then green. Validation: go build ./... exit 0; go test ./internal/bot/action/... ./tests/action/... -timeout 90s => ok internal/bot/action 0.820s, ok tests/action 0.260s; go vet ./... clean; go test ./... -count=1 => 48/48 packages ok; go run ./cmd/archcheck => 0 findings. -race unavailable on this Windows host (no C compiler).",
+        "result": "pass"
+      },
+      {
+        "id": "e-mulxef05jn",
+        "at": "2026-09-29T00:16:09.845Z",
+        "kind": "test",
+        "description": "go build ./... exits 0 with stronghold_handlers.go in internal/bot/action.",
+        "result": "pass"
+      },
+      {
+        "id": "e-mulxef0pd5",
+        "at": "2026-09-29T00:16:09.865Z",
+        "kind": "test",
+        "description": "go test ./internal/bot/action/... -timeout 90s → \"ok bedrock-ai/internal/bot/action 0.706s\"; all 11 stronghold tests pass (registration, waypoint rings, isStrongholdCore, bestStrongholdHint, convergeOnHint).",
+        "result": "pass"
+      },
+      {
+        "id": "e-mulxhp7vd8",
+        "at": "2026-09-29T00:18:43.051Z",
+        "kind": "test",
+        "description": "T1 truthful results: internal/bot/action/status.go adds a per-bot subscriber registry (reportStatus forwards to ReportActionStatus AND publishes to the plan waiter, non-blocking). ExecuteAndWait rewritten: empty label = success, craft unchanged, unknown label fails loudly, otherwise subscribes before dispatch and takes the first reported status, 90s expiry = failure. 38 handler call sites converted; ~25 handlers that only logged now actually report. Tests: plan_test.go with 13 cases incl. SilentHandlerFails, ReportsDoNotLeakBetweenSteps, subscriber isolation.",
+        "result": "pass"
+      },
+      {
+        "id": "e-mulxhpa9x3",
+        "at": "2026-09-29T00:18:43.137Z",
+        "kind": "test",
+        "description": "T2 furnace: internal/bot/inventory/furnace/furnace.go rewritten to the authoritative container-session pattern. IsFurnaceBlock name-filter (furnace/blast_furnace/smoker, lit+unlit, namespace-stripped, picks closest), BeginContainerWatch -> ClickBlockAt -> WaitContainerOpen(2s), transfers via PlaceIntoContainerSlot/TakeFromContainerSlot (ItemStackRequest), server-assigned window ID used for every transfer and the close, completion detected by polling the real output slot. 7 new tests incl. TestFindNearbyFurnaceSkipsNonFurnaceBlocks and TestSmeltItemReportsFailureWhenFurnaceNeverOpens.",
+        "result": "pass"
+      },
+      {
+        "id": "e-mulxhpbhpi",
+        "at": "2026-09-29T00:18:43.181Z",
+        "kind": "test",
+        "description": "T5 bow + T6 tactics (internal/bot/combat only): shot.go adds a duration-based draw→release state machine driven by the combat tick — draw via UseItemActionClickAir (the old BowAttack wrongly used ClickBlock, the shield-blocking shape), release via ReleaseItemTransactionData{ReleaseItemActionRelease}, fullBowDraw 1.1s / crossbowLoad 1.25s / 1.5s shot interval, bowAimPoint applies ½·g·t² gravity compensation, hasArrows gate. tactics.go: creeper <3 blocks disengages and retreats to 6, skeleton/stray holds a 7-12 block band and strafes with a ~2s direction flip, enderman aims at y+0.2 feet. 11 new tests incl. TestTick_BowAtRange_DrawsThenReleases and TestBowWithoutArrows_NeverDraws.",
+        "result": "pass"
+      },
+      {
+        "id": "e-mulxhpccid",
+        "at": "2026-09-29T00:18:43.212Z",
+        "kind": "test",
+        "description": "T7 + T8: portal_handlers.go registers lightportal/light_portal/igniteportal, routes via dimension.Classify (Lit → walk in, NeedsLighting → equip flint_and_steel, navigate adjacent, ClickBlockAt on the frame's bottom interior, 4s bounded wait for nether_portal), explicit failure for end portals. stronghold_handlers.go registers explorestronghold/findstronghold/stronghold with a pure expanding-square ring policy (32-block steps, bounded converges), world-cache-first hint scan with perception fallback, dimension.IsStrongholdHint ranking (strong beats weak, nearest wins, horizontal only). 9 + 11 new tests.",
+        "result": "pass"
+      },
+      {
+        "id": "e-mulxhpck1z",
+        "at": "2026-09-29T00:18:43.220Z",
+        "kind": "build",
+        "description": "Full validation gate after batch 1: go build ./... exit 0; go vet ./... clean; go test ./... → 47 packages ok, zero FAIL lines; go run ./cmd/pnxcheck → 'RESULT: every PNX login check passes locally'; go run ./cmd/archcheck → 0 findings, no architecture violations.",
+        "result": "pass"
+      },
+      {
+        "id": "e-mulxzeg8pd",
+        "at": "2026-09-29T00:32:28.906Z",
+        "kind": "test",
+        "description": "T10 Ender Dragon fight (internal/bot/combat only). New: enddragon.go (pure decision layer: PlanDragonFight over DragonSituation -> {DragonReposition, DragonShootCrystal, DragonMeleePerch, DragonRetreatAndHeal}; IsDragonPerched/IsDragonDiving height+distance geometry; InHealingBeam for the dragon's heal column; IsEndCrystal/IsEnderDragon/EndCrystals/PickCrystal with an ID tie-break for determinism; DragonDestination beam guard on both the current spot and the destination; dragonDodgePoint composing the existing strafePoint; crystalChoice/crystalAimPoint). enddragon_fight.go (tick wiring: crystal priority, LOS-blocked close, perch melee, retreat dodge, reposition). Refactors kept minimal: shot.go gains liftAimPoint (bowAimPoint behaviour unchanged, existing tests still pass); combat_attack.go extracts the melee range+cooldown+LOS+attack+durability block into swingAt so the dragon path shares the cooldown instead of duplicating it; combat.go gains dragonAction/dragonActionSet for change-only logging. 20 new tests, all t.Parallel(). Three defects found and fixed during TDD: strafePoint's first arg is the bot and it anchors on the second (the dodge was measuring 15.6 from the dragon instead of 12), the Reposition \"hold the middle\" branch was unreachable because anything within the melee distance is by definition diving, and fightCrystalGround's hold case issued NavigateTo where the comment promised StopMovement (a real void hazard on the small End island). Validation: go build ./... exit 0; go vet ./... clean; go run ./cmd/archcheck 0 findings; go test ./internal/bot/combat/... -timeout 90s => \"ok bedrock-ai/internal/bot/combat 0.034s\", exit 0, 77 passing tests+subtests. Pre-existing and untouched: combat.go/combat_attack.go/shot.go/tactics*.go/shot_test.go carry CRLF line endings and a gofmt misalignment from the prior batch's edits (my new files are LF, matching the repo). Tests confirmed red before implementation.",
+        "result": "pass"
+      },
+      {
+        "id": "e-mulxzfdho",
+        "at": "2026-09-29T00:32:30.101Z",
+        "kind": "test",
+        "description": "T9 End portal. New internal/bot/action/endportal_handlers.go + endportal_handlers_test.go, nothing else touched. 18 tests (incl. 3 orientation subtests), all t.Parallel(). TDD confirmed: tests written first and red (undefined symbols, then 9 failing assertions) before the implementation existed. Validation: go build ./... exit 0 (no output); go test ./internal/bot/action/... -timeout 90s => \"ok bedrock-ai/internal/bot/action 0.707s\"; go vet ./internal/bot/action/... clean; go test ./... -timeout 180s => zero FAIL lines across every package; go run ./cmd/archcheck => 0 findings. gofmt clean on both new files.",
+        "result": "pass"
+      },
+      {
+        "id": "e-mulxzfdwgc",
+        "at": "2026-09-29T00:32:30.116Z",
+        "kind": "review",
+        "description": "Two real bugs caught by the tests during T9, both fixed in the new file rather than papered over. (1) largestFrameCluster ranged over [][]protocol.BlockPos and appended to the ranged copy, so every group stayed one cell long and the bot would have clicked one frame of twelve; fixed by indexing. (2) endPortalInteriorCell originally looked for a hole in the ring's bounding box, which finds nothing on an ACTIVATED portal because Bedrock replaces the frames with end_portal blocks and there is no empty cell left — so enterendportal would have failed on every working portal. Rewritten to pick the most-enclosed cell of the structure, preferring filled cells then nearest, which identifies the middle of the ring in both states and in all three orientations without assuming a layout.",
+        "result": "pass"
+      }
+    ]
   },
   "tasks": [
     {
@@ -272,71 +434,71 @@
     {
       "id": "t-31",
       "subject": "T1: Make ExecuteAndWait return truthful per-action status (plan.go/execute.go)",
-      "status": "in_progress",
+      "status": "completed",
       "blocked_by": [],
       "created_at": "2026-09-28T23:09:40.421Z",
-      "updated_at": "2026-09-28T23:11:12.342Z"
+      "updated_at": "2026-09-29T00:18:23.256Z"
     },
     {
       "id": "t-32",
       "subject": "T2: Fix furnace - name-based find, ContainerOpen wait, ItemStackRequest, real window ID, smelt progress via ContainerSetData",
-      "status": "in_progress",
+      "status": "completed",
       "blocked_by": [],
       "created_at": "2026-09-28T23:09:40.427Z",
-      "updated_at": "2026-09-28T23:11:12.385Z"
+      "updated_at": "2026-09-29T00:18:23.293Z"
     },
     {
       "id": "t-33",
       "subject": "T3: Wire SetHunger from handleUpdateAttributes + implement tickAutoArmor",
-      "status": "in_progress",
+      "status": "completed",
       "blocked_by": [],
       "created_at": "2026-09-28T23:09:40.431Z",
-      "updated_at": "2026-09-28T23:11:12.390Z"
+      "updated_at": "2026-09-29T00:18:23.303Z"
     },
     {
       "id": "t-34",
       "subject": "T4: Remove legacy chest/scan.go fabricated data",
-      "status": "in_progress",
+      "status": "completed",
       "blocked_by": [],
       "created_at": "2026-09-28T23:09:40.434Z",
-      "updated_at": "2026-09-28T23:11:12.397Z"
+      "updated_at": "2026-09-29T00:18:23.306Z"
     },
     {
       "id": "t-35",
       "subject": "T5: Bow shoot mechanics - charge via UseItem, release timing, aim at target",
-      "status": "in_progress",
+      "status": "completed",
       "blocked_by": [],
       "created_at": "2026-09-28T23:09:40.446Z",
-      "updated_at": "2026-09-28T23:11:12.403Z"
+      "updated_at": "2026-09-29T00:18:23.309Z"
     },
     {
       "id": "t-36",
       "subject": "T6: Mob tactics - creeper flee, skeleton strafe, enderman gaze avoidance",
-      "status": "in_progress",
+      "status": "completed",
       "blocked_by": [],
       "created_at": "2026-09-28T23:09:40.452Z",
-      "updated_at": "2026-09-28T23:11:12.446Z"
+      "updated_at": "2026-09-29T00:18:23.317Z"
     },
     {
       "id": "t-37",
       "subject": "T7: Light unlit portal with flint_and_steel using dimension.Classify NeedsLighting",
-      "status": "pending",
+      "status": "completed",
       "blocked_by": [
         "t-31",
         "t-32"
       ],
       "created_at": "2026-09-28T23:09:56.532Z",
-      "updated_at": "2026-09-28T23:09:56.532Z"
+      "updated_at": "2026-09-29T00:18:23.321Z"
     },
     {
       "id": "t-38",
       "subject": "T8: Stronghold exploration - search spiral + stronghold hint detection",
-      "status": "in_progress",
+      "status": "completed",
       "blocked_by": [
         "t-31"
       ],
       "created_at": "2026-09-28T23:09:56.555Z",
-      "updated_at": "2026-09-28T23:20:01.417Z"
+      "updated_at": "2026-09-29T00:18:23.340Z"
     },
     {
       "id": "t-39",
@@ -352,13 +514,13 @@
     {
       "id": "t-40",
       "subject": "T10: Dragon fight - crystal targeting, phase awareness, melee on perch",
-      "status": "pending",
+      "status": "completed",
       "blocked_by": [
         "t-35",
         "t-36"
       ],
       "created_at": "2026-09-28T23:10:13.483Z",
-      "updated_at": "2026-09-28T23:10:13.483Z"
+      "updated_at": "2026-09-29T00:32:02.481Z"
     },
     {
       "id": "t-41",
@@ -382,6 +544,14 @@
       ],
       "created_at": "2026-09-28T23:10:13.497Z",
       "updated_at": "2026-09-28T23:10:13.497Z"
+    },
+    {
+      "id": "t-43",
+      "subject": "T9: End portal frame filling + entering (endportal_handlers.go)",
+      "status": "completed",
+      "blocked_by": [],
+      "created_at": "2026-09-29T00:21:06.612Z",
+      "updated_at": "2026-09-29T00:32:42.151Z"
     }
   ],
   "archived_goals": [

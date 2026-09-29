@@ -347,17 +347,29 @@ func SeesPoint(b *bot.Bot, to mgl32.Vec3) bool {
 			int32(math.Floor(float64(p.Z()))),
 		}
 		solid, loaded := b.WorldCache.IsBlockSolid(cell.X(), cell.Y(), cell.Z())
-		if loaded && solid {
+		if !loaded || solid {
 			return false
 		}
 	}
 	return true
 }
 
-// hasLineOfSight walks the segment from the bot's eyes to a block centre and
-// reports whether any loaded solid cell stands in the way. The target cell
-// itself is never an occluder, and unloaded cells cannot block sight — the bot
-// does not know what is in them, and claiming a wall would be inventing one.
+// SeesBlock applies the same view cone and occlusion rules as the block summary.
+// Chunk receipt alone is not evidence that a semantic target was observed.
+func SeesBlock(b *bot.Bot, target protocol.BlockPos) bool {
+	if _, loaded := b.GetBlockName(target.X(), target.Y(), target.Z()); !loaded {
+		return false
+	}
+	center := mgl32.Vec3{float32(target.X()) + 0.5, float32(target.Y()) + 0.5, float32(target.Z()) + 0.5}
+	if !InFieldOfView(b, center) {
+		return false
+	}
+	eye := b.GetCoords().Add(mgl32.Vec3{0, bot.PlayerEyeHeight, 0})
+	return hasLineOfSight(b, eye, center, target)
+}
+
+// hasLineOfSight excludes the target itself as an occluder. Unknown terrain
+// is not evidence of a clear ray: fail closed without claiming a wall exists.
 func hasLineOfSight(b *bot.Bot, from, to mgl32.Vec3, target protocol.BlockPos) bool {
 	delta := to.Sub(from)
 	length := delta.Len()
@@ -376,7 +388,7 @@ func hasLineOfSight(b *bot.Bot, from, to mgl32.Vec3, target protocol.BlockPos) b
 			continue
 		}
 		solid, loaded := b.WorldCache.IsBlockSolid(cell.X(), cell.Y(), cell.Z())
-		if loaded && solid {
+		if !loaded || solid {
 			return false
 		}
 	}

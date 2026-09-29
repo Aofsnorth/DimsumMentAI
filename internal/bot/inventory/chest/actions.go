@@ -1,17 +1,79 @@
 package chest
 
 import (
-	"bedrock-ai/internal/bot/entity"
-	"bedrock-ai/internal/bot/rand"
 	"context"
 	"math"
 	"strings"
 	"time"
 
+	"bedrock-ai/internal/bot/entity"
+	"bedrock-ai/internal/bot/rand"
+	"bedrock-ai/internal/bot/storage"
+
 	"github.com/go-gl/mathgl/mgl32"
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
 	"github.com/sandertv/gophertunnel/minecraft/protocol/packet"
 )
+
+// chestSearchRadius is how far around the bot a container is looked for when
+// storing. It matches the reach the interaction that follows needs, so the
+// finder never returns a block the bot would then have to walk a long way to.
+const chestSearchRadius = 12
+
+// findNearbyChest returns the position of the closest real container block, or
+// the zero BlockPos when there is none.
+//
+// It filters on the block's name, not on solidity. The previous version
+// returned the first solid block it touched — a wall, a floor, the ground under
+// the bot's feet — because "solid" was the only thing the world model could
+// answer cheaply. The result was that the bot confidently walked up to a
+// cobblestone block and tried to store items in it.
+//
+// storage.IsContainerBlock is the same predicate the authoritative storage
+// service uses, so the two agree on what counts as a chest.
+func (ic *Container) findNearbyChest() protocol.BlockPos {
+	botPos := ic.bot.GetCoords()
+	bx := int32(math.Floor(float64(botPos.X())))
+	by := int32(math.Floor(float64(botPos.Y())))
+	bz := int32(math.Floor(float64(botPos.Z())))
+
+	best := protocol.BlockPos{}
+	bestDist := float32(math.MaxFloat32)
+	found := false
+
+	for dx := -int32(chestSearchRadius); dx <= chestSearchRadius; dx++ {
+		for dy := int32(-4); dy <= 4; dy++ {
+			for dz := -int32(chestSearchRadius); dz <= chestSearchRadius; dz++ {
+				pos := protocol.BlockPos{bx + dx, by + dy, bz + dz}
+				name, ok := ic.bot.GetBlockName(pos.X(), pos.Y(), pos.Z())
+				if !ok || !storage.IsContainerBlock(name) {
+					continue
+				}
+				dist := ic.distance(botPos, mgl32.Vec3{
+					float32(pos.X()) + 0.5,
+					float32(pos.Y()) + 0.5,
+					float32(pos.Z()) + 0.5,
+				})
+				if !found || dist < bestDist {
+					best, bestDist, found = pos, dist, true
+				}
+			}
+		}
+	}
+
+	if !found {
+		return protocol.BlockPos{}
+	}
+	return best
+}
+
+// distance returns the euclidean distance between two points.
+func (ic *Container) distance(a mgl32.Vec3, b mgl32.Vec3) float32 {
+	dx := a.X() - b.X()
+	dy := a.Y() - b.Y()
+	dz := a.Z() - b.Z()
+	return float32(math.Sqrt(float64(dx*dx + dy*dy + dz*dz)))
+}
 
 func (ic *Container) GiveItem(ctx context.Context, itemName string, playerName string, count int32) bool {
 	botPos := ic.bot.GetCoords()

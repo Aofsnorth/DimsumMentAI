@@ -32,30 +32,34 @@ func plansTowardDestination(state string) bool {
 // the world model sees everything as air, every neighbor is vetoed, and the
 // search exhausts its full iteration budget finding nothing.
 //
-// The threshold is 1 (not 4): a bot standing in a single loaded chunk can path
-// within that chunk. The old value of 4 permanently blocked pathfinding on LAN
-// worlds where the initial burst delivers only 2-3 chunks, which presented as
-// a bot that joins and never moves.
+// It is a fallback, not the real test: the real one is "can the world describe
+// the tile the bot is standing on", which is what terrainReady asks first. The
+// threshold only applies when there is no world model to ask.
 const minChunksForPathfinding = 1
 
-// terrainReady reports whether enough terrain has been decoded for pathfinding.
+// terrainReady reports whether the world can describe the bot's own footing well
+// enough to path from it.
 //
-// Two paths to "ready": the WorldCache holds real decoded chunks (production),
-// or the WorldModel's own chunk querier can resolve the block under the start
-// node (synthetic setups, tests). Without this second path, every harness test
-// that supplies a flat-ground querier but no WorldCache chunks would be gated
-// out of pathfinding.
+// The test is deliberately about the bot's own cell rather than about how much
+// of the world has arrived. Chunk count is the wrong proxy: on a LAN join the
+// first sub-chunk to decode is often nowhere near the player, so a bot standing
+// in chunk (-7,12) can see ChunkCount()==1 from a decode in chunk (0,0) while
+// every cell under its feet is still air. A* then vetoes all four neighbours for
+// having no floor and burns its whole budget on a world that is not there.
+//
+// Asking the model directly is the honest version: the cell under the start
+// node is exactly the one A* needs to consider the start standable, and a bot
+// whose own footing is still unknown cannot be routed from anywhere sensible.
 func terrainReady(b *bot.Bot, start pathfinder.Node) bool {
-	if b.WorldCache == nil {
-		return true
-	}
-	if b.WorldCache.ChunkCount() >= minChunksForPathfinding {
-		return true
-	}
 	if b.WorldModel != nil {
 		return b.WorldModel.CanResolve(start.X, start.Y-1, start.Z)
 	}
-	return false
+	if b.WorldCache == nil {
+		// No terrain source at all: there is nothing to wait for, and the
+		// model-backed path (overrides only) is all the bot will ever have.
+		return true
+	}
+	return b.WorldCache.ChunkCount() >= minChunksForPathfinding
 }
 
 // RecalculatePath computes the shortest path to targetPos using A* search.

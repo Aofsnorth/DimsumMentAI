@@ -9,9 +9,11 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 	"time"
 
 	"bedrock-ai/internal/bot"
+	"bedrock-ai/internal/bot/interact"
 	"bedrock-ai/internal/event"
 	"bedrock-ai/internal/safecast"
 
@@ -57,9 +59,13 @@ var emoteDefaults = map[string]emoteConfig{
 }
 
 // emoteHandler returns a handler that triggers the emote described by label.
+//
+// An emote is a dispatched animation with no confirmation to wait for — the
+// bot either asked for it or it is not going to happen — so the step reports
+// once the request has been sent rather than staying silent.
 func emoteHandler(label string) actionHandler {
 	cfg := emoteDefaults[label]
-	return func(b *bot.Bot, param, _ string) {
+	return func(b *bot.Bot, param, user string) {
 		if cfg.lookAt != (mgl32.Vec3{}) {
 			b.LookAt(b.GetCoords().Add(cfg.lookAt))
 		}
@@ -68,19 +74,32 @@ func emoteHandler(label string) actionHandler {
 			ticks = durationTicks(param, cfg.duration)
 		}
 		b.TriggerEmoteFor(cfg.name, ticks)
+		reportStatus(b, user, event.ActionStatus{Action: label, Item: cfg.name, Success: true})
 	}
 }
 
 // movementHandler returns a handler that runs the movement pattern for label.
+//
+// The pattern runs for a fixed span and then stops itself, which is the whole
+// result: the step reports on completion so a plan waiting on it is released
+// when the bot is actually done moving rather than guessing from a timer.
 func movementHandler(label string) actionHandler {
 	return func(b *bot.Bot, param, user string) {
-		go runMovementPattern(b, label, param, user)
+		go func() {
+			runMovementPattern(b, label, param, user)
+			reportStatus(b, user, event.ActionStatus{Action: label, Success: true})
+		}()
 	}
 }
 
 // gatherHandler returns a handler that gathers a block or wood type.
+//
+// The gatherer reports to the chat layer from inside its own package, which
+// this package cannot route to a waiting plan step. So the outcome is measured
+// here instead: the handler samples the inventory before the work starts and
+// reports the difference, which is the same thing the gatherer counts.
 func gatherHandler(defaultItem string) actionHandler {
-	return func(b *bot.Bot, param, _ string) {
+	return func(b *bot.Bot, param, user string) {
 		parts := strings.Split(param, ",")
 		itemName := defaultItem
 		if parts[0] != "" {
@@ -90,20 +109,36 @@ func gatherHandler(defaultItem string) actionHandler {
 		if len(parts) > 1 {
 			_, _ = fmt.Sscanf(parts[1], "%d", &count)
 		}
-		if isWoodLike(itemName) {
-			go b.Gatherer.GatherWoodType(context.Background(), itemName, count)
-		} else {
-			go b.Gatherer.GatherBlock(context.Background(), itemName, count)
-		}
+		before := countInventoryItems(b.GetInventorySlots(), b.GetItemNames(), itemName)
+		go func() {
+			if isWoodLike(itemName) {
+				b.Gatherer.GatherWoodType(context.Background(), itemName, count)
+			} else {
+				b.Gatherer.GatherBlock(context.Background(), itemName, count)
+			}
+			reportInventoryDelta(b, user, "gather", itemName, before, 0)
+		}()
 	}
 }
 
-// lootHandler returns a handler that collects all drops within radius and logs msg.
+// lootHandler returns a handler that collects all drops within radius and logs
+// msg. The collector's return value is the count it actually picked up, so the
+// step reports that rather than assuming the sweep found something.
 func lootHandler(radius float32, msg string) actionHandler {
-	return func(b *bot.Bot, _, _ string) {
+	return func(b *bot.Bot, _, user string) {
 		go func() {
 			collected := b.Gatherer.CollectAllDrops(context.Background(), radius)
 			b.Logger.Debug(msg, "collected", collected)
+			action := "loot"
+			if collected == 0 {
+				reportStatus(b, user, event.ActionStatus{
+					Action:  action,
+					Success: false,
+					Error:   "tidak ada drop di sekitar",
+				})
+				return
+			}
+			reportStatus(b, user, event.ActionStatus{Action: action, Count: collected, Success: true})
 		}()
 	}
 }
@@ -117,29 +152,76 @@ func storeItem(b *bot.Bot, param string) {
 	}()
 }
 
-// harvestCrops harvests the crop type described by param.
-func harvestCrops(b *bot.Bot, param string) {
+// harvestCrops harvests the crop type described by param. The farmer returns
+// how much it actually picked, so that is what the step reports.
+func harvestCrops(b *bot.Bot, param, user string) {
 	go func() {
 		cropType := normalizeCropType(param)
 		count := parseCount(param, 20)
 		harvested := b.Farmer.HarvestCrops(context.Background(), cropType, count)
 		b.Logger.Debug("harvest complete", "count", harvested)
+		reportCountOutcome(b, user, "farm", cropType, harvested, "tidak ada dewasa yang bisa dipanen")
 	}()
 }
 
-// goFish makes the bot fish count times.
-func goFish(b *bot.Bot, param string) {
+// goFish makes the bot fish count times. The fisher returns the number of
+// catches it landed, which is the only outcome worth reporting — a cast that
+// comes back empty is not a fishing trip.
+func goFish(b *bot.Bot, param, user string) {
 	count := parseCount(param, 5)
 	go func() {
 		caught := b.Fisher.GoFish(context.Background(), count)
 		b.Logger.Debug("fishing complete", "caught", caught)
+		reportCountOutcome(b, user, "fish", "fish", caught, "tidak dapat ikan")
 	}()
+}
+
+// reportBoolOutcome reports a finished action whose handler holds a single
+// pass/fail answer from the subsystem that performed it. These calls used to
+// discard that answer, which left the plan step with nothing to report and
+// turned every one of them into a silent failure.
+func reportBoolOutcome(b *bot.Bot, user, action, item string, ok bool, failError string) {
+	if !ok {
+		reportStatus(b, user, event.ActionStatus{
+			Action:  action,
+			Item:    item,
+			Success: false,
+			Error:   failError,
+		})
+		return
+	}
+	reportStatus(b, user, event.ActionStatus{Action: action, Item: item, Success: true})
+}
+
+// smeltError explains a failed smelt. The furnace only reports a bool, so the
+// reason is inferred from the most common cause rather than invented.
+func smeltError(success bool, itemName string) string {
+	if success {
+		return ""
+	}
+	return fmt.Sprintf("gagal men-smelt %s, cek furnace dan bahan", itemName)
+}
+
+// reportCountOutcome reports a finished action whose handler already knows how
+// many items it produced. A run that produced nothing failed, whatever the
+// underlying call reported back.
+func reportCountOutcome(b *bot.Bot, user, action, item string, count int, emptyError string) {
+	if count <= 0 {
+		reportStatus(b, user, event.ActionStatus{
+			Action:  action,
+			Item:    item,
+			Success: false,
+			Error:   emptyError,
+		})
+		return
+	}
+	reportStatus(b, user, event.ActionStatus{Action: action, Item: item, Count: count, Success: true})
 }
 
 // handleShoot finds the nearest hostile mob and fires a ranged weapon.
 func handleShoot(b *bot.Bot, user string) {
 	if !b.CombatMgr.HasRangedWeapon() {
-		b.ReportActionStatus(user, event.ActionStatus{Action: "shoot", Success: false, Error: "gak punya bow atau arrow"})
+		reportStatus(b, user, event.ActionStatus{Action: "shoot", Success: false, Error: "gak punya bow atau arrow"})
 		return
 	}
 
@@ -160,21 +242,37 @@ func handleShoot(b *bot.Bot, user string) {
 	if closestID != 0 {
 		b.CombatMgr.BowAttack(closestID)
 	} else {
-		b.ReportActionStatus(user, event.ActionStatus{Action: "shoot", Success: false, Error: "gak ada target dalam jarak tembak"})
+		reportStatus(b, user, event.ActionStatus{Action: "shoot", Success: false, Error: "gak ada target dalam jarak tembak"})
 	}
 }
 
 // interactHandler clicks whatever the request points at. The parameter is loose
 // on purpose: a player name, a thing type ("npc", "sign", "the one in front of
 // you"), or empty for whatever the bot is facing.
+//
+// The interactor reports its own outcome to the chat layer from inside its own
+// package, which a waiting plan step cannot see. So the target is resolved
+// here first: an interaction with nothing to click is a failure the planner
+// should hear about immediately, instead of a step that hangs until it times
+// out. Once a target exists the interactor owns the reporting.
 func interactHandler(b *bot.Bot, param, user string) {
 	// Guarded because this runs in its own goroutine: a nil subsystem here is a
 	// process-wide crash, not a recoverable error.
 	if b.Interactor == nil {
-		b.ReportActionStatus(user, event.ActionStatus{
+		reportStatus(b, user, event.ActionStatus{
 			Action:  "interact",
 			Success: false,
 			Error:   "bot belum siap, coba lagi sebentar",
+		})
+		return
+	}
+
+	if _, err := b.Interactor.Resolve(interact.ParseRequest(param)); err != nil {
+		reportStatus(b, user, event.ActionStatus{
+			Action:  "interact",
+			Item:    param,
+			Success: false,
+			Error:   err.Error(),
 		})
 		return
 	}
@@ -186,7 +284,7 @@ func interactHandler(b *bot.Bot, param, user string) {
 func joinHandler(b *bot.Bot, param, user string) {
 	address := strings.TrimSpace(param)
 	if address == "" {
-		b.ReportActionStatus(user, event.ActionStatus{
+		reportStatus(b, user, event.ActionStatus{
 			Action:  "join",
 			Success: false,
 			Error:   "butuh alamat server, contoh: join:192.168.1.10:19132",
@@ -194,7 +292,7 @@ func joinHandler(b *bot.Bot, param, user string) {
 		return
 	}
 	if err := b.RequestJoin(address); err != nil {
-		b.ReportActionStatus(user, event.ActionStatus{
+		reportStatus(b, user, event.ActionStatus{
 			Action:  "join",
 			Item:    address,
 			Success: false,
@@ -211,7 +309,7 @@ func joinHandler(b *bot.Bot, param, user string) {
 func commandHandler(b *bot.Bot, param, user string) {
 	param = strings.TrimSpace(param)
 	if param == "" {
-		b.ReportActionStatus(user, event.ActionStatus{
+		reportStatus(b, user, event.ActionStatus{
 			Action:  "cmd",
 			Success: false,
 			Error:   "butuh command, contoh: cmd:/register pass pass",
@@ -219,7 +317,7 @@ func commandHandler(b *bot.Bot, param, user string) {
 		return
 	}
 	if err := b.SendCommand(param); err != nil {
-		b.ReportActionStatus(user, event.ActionStatus{Action: "cmd", Item: param, Success: false, Error: err.Error()})
+		reportStatus(b, user, event.ActionStatus{Action: "cmd", Item: param, Success: false, Error: err.Error()})
 		return
 	}
 
@@ -236,7 +334,7 @@ func reportCommandResult(b *bot.Bot, command, user string) {
 	deadline := time.Now().Add(commandOutputTimeout)
 	for time.Now().Before(deadline) {
 		if output, ok := b.LastCommandOutput(); ok {
-			b.ReportActionStatus(user, event.ActionStatus{
+			reportStatus(b, user, event.ActionStatus{
 				Action:  "cmd",
 				Item:    command,
 				Success: true,
@@ -248,7 +346,7 @@ func reportCommandResult(b *bot.Bot, command, user string) {
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
-	b.ReportActionStatus(user, event.ActionStatus{
+	reportStatus(b, user, event.ActionStatus{
 		Action:  "cmd",
 		Item:    command,
 		Success: true,
@@ -258,16 +356,36 @@ func reportCommandResult(b *bot.Bot, command, user string) {
 
 // actionHandlers maps action labels to their handler functions.
 var actionHandlers = map[string]actionHandler{
-	// Build / undo
-	"build":        func(b *bot.Bot, param, user string) { go b.BuilderAgent.Build(context.Background(), user, param) },
-	"stopbuild":    func(b *bot.Bot, _, _ string) { b.BuilderAgent.StopBuilding() },
-	"stopbuilding": func(b *bot.Bot, _, _ string) { b.BuilderAgent.StopBuilding() },
-	"undo": func(b *bot.Bot, param, _ string) {
+	// Build / undo. The builder agent reports to the chat layer from its
+	// own package, which a waiting step cannot see, so the step confirms
+	// what the agent did by counting the blocks it holds.
+	"build": func(b *bot.Bot, param, user string) {
+		before := countInventoryItems(b.GetInventorySlots(), b.GetItemNames(), "cobblestone")
+		go func() {
+			b.BuilderAgent.Build(context.Background(), user, param)
+			reportInventoryDelta(b, user, "build", "cobblestone", before, 0)
+		}()
+	},
+	"stopbuild": func(b *bot.Bot, _, user string) {
+		b.BuilderAgent.StopBuilding()
+		reportStatus(b, user, event.ActionStatus{Action: "stopbuild", Success: true})
+	},
+	"stopbuilding": func(b *bot.Bot, _, user string) {
+		b.BuilderAgent.StopBuilding()
+		reportStatus(b, user, event.ActionStatus{Action: "stopbuild", Success: true})
+	},
+	"undo": func(b *bot.Bot, param, user string) {
 		count := 0
 		if param != "" {
 			_, _ = fmt.Sscanf(param, "%d", &count)
 		}
-		go b.BuilderAgent.UndoBuild(context.Background(), count)
+		before := countInventoryItems(b.GetInventorySlots(), b.GetItemNames(), "cobblestone")
+		go func() {
+			b.BuilderAgent.UndoBuild(context.Background(), count)
+			// Undo puts blocks back, so the cobblestone count rising is the
+			// proof that the undo did something.
+			reportInventoryDelta(b, user, "undo", "cobblestone", before, 0)
+		}()
 	},
 
 	// Movement / follow
@@ -276,7 +394,19 @@ var actionHandlers = map[string]actionHandler{
 		if target == "" {
 			target = user
 		}
-		b.ComeToPlayer(target)
+		// ComeToPlayer answers whether it found the player at all, so a
+		// "come here" for somebody who is not nearby fails instead of
+		// standing there looking like it worked.
+		if !b.ComeToPlayer(target) {
+			reportStatus(b, user, event.ActionStatus{
+				Action:  "come",
+				Item:    target,
+				Success: false,
+				Error:   fmt.Sprintf("nggak nemu pemain %s", target),
+			})
+			return
+		}
+		reportStatus(b, user, event.ActionStatus{Action: "come", Item: target, Success: true})
 	},
 	"follow": func(b *bot.Bot, param, user string) {
 		target := param
@@ -284,55 +414,97 @@ var actionHandlers = map[string]actionHandler{
 			target = user
 		}
 		b.FollowPlayer(target)
+		reportStatus(b, user, event.ActionStatus{Action: "follow", Item: target, Success: true})
 	},
 	"goto": func(b *bot.Bot, param, user string) { goToCoords(b, param, user) },
-	"stop": func(b *bot.Bot, _, _ string) {
+	"stop": func(b *bot.Bot, _, user string) {
 		b.Stop()
 		if b.Planner != nil {
 			b.Planner.Cancel()
 		}
+		reportStatus(b, user, event.ActionStatus{Action: "stop", Success: true})
 	},
-	"stay": func(b *bot.Bot, _, _ string) {
+	"stay": func(b *bot.Bot, _, user string) {
 		b.Stop()
 		if b.Planner != nil {
 			b.Planner.Cancel()
 		}
+		reportStatus(b, user, event.ActionStatus{Action: "stay", Success: true})
 	},
-	"flee": func(b *bot.Bot, _, user string) { go runAwayFromPlayer(b, user, 5*time.Second) },
+	"flee": func(b *bot.Bot, param, user string) { go runAwayFromPlayer(b, user, 5*time.Second) },
 	"lookat": func(b *bot.Bot, param, user string) {
 		target := param
 		if target == "" {
 			target = user
 		}
 		if !b.LookAtPlayer(target, 5*time.Second) {
-			b.Logger.Warn("ExecuteAction: no player found to look at", "target", target)
+			reportStatus(b, user, event.ActionStatus{
+				Action:  "lookat",
+				Item:    target,
+				Success: false,
+				Error:   fmt.Sprintf("nggak nemu pemain %s buat diliat", target),
+			})
+			return
 		}
+		reportStatus(b, user, event.ActionStatus{Action: "lookat", Item: target, Success: true})
 	},
 
 	// Emote
-	"emote": func(b *bot.Bot, param, _ string) { parts := strings.Split(param, ","); b.TriggerEmote(parts[0]) },
+	"emote": func(b *bot.Bot, param, user string) {
+		parts := strings.Split(param, ",")
+		b.TriggerEmote(parts[0])
+		reportStatus(b, user, event.ActionStatus{Action: "emote", Item: parts[0], Success: true})
+	},
 
 	// Combat / items
 	"attack": handleAttack,
 	"hunt":   handleAttack,
-	"pvp":    handleAttack,
+	"pvp":    handlePVP,
 	"guard":  handleAttack,
-	"equip": func(b *bot.Bot, param, _ string) {
-		if param != "" {
-			go func() {
-				if err := b.InventoryMgr.EquipItem(param); err != nil {
-					b.Logger.Warn("equip action failed", "item", param, "error", err)
-				}
-			}()
+	"equip": func(b *bot.Bot, param, user string) {
+		itemName := normalizeItemName(param)
+		if itemName == "" {
+			reportStatus(b, user, event.ActionStatus{
+				Action:  "equip",
+				Success: false,
+				Error:   "butuh nama barang, contoh: equip:diamond_sword",
+			})
+			return
 		}
+		go func() {
+			if err := b.InventoryMgr.EquipItem(itemName); err != nil {
+				b.Logger.Warn("equip action failed", "item", itemName, "error", err)
+				reportStatus(b, user, event.ActionStatus{
+					Action:  "equip",
+					Item:    itemName,
+					Success: false,
+					Error:   err.Error(),
+				})
+				return
+			}
+			reportStatus(b, user, event.ActionStatus{Action: "equip", Item: itemName, Success: true})
+		}()
 	},
 	"give":           handleGive,
 	"drop":           handleDrop,
 	"place":          handlePlace,
 	"list_craftable": handleListCraftable,
-	"eat": func(b *bot.Bot, param, _ string) {
+	"eat": func(b *bot.Bot, param, user string) {
+		food := strings.ToLower(strings.TrimSpace(param))
+		if food == "" {
+			reportStatus(b, user, event.ActionStatus{
+				Action:  "eat",
+				Success: false,
+				Error:   "butuh nama makanan, contoh: eat:cooked_beef",
+			})
+			return
+		}
 		go func() {
-			_ = b.InventoryMgr.Eat(strings.ToLower(strings.TrimSpace(param)))
+			if err := b.InventoryMgr.Eat(food); err != nil {
+				reportStatus(b, user, event.ActionStatus{Action: "eat", Item: food, Success: false, Error: err.Error()})
+				return
+			}
+			reportStatus(b, user, event.ActionStatus{Action: "eat", Item: food, Success: true})
 		}()
 	},
 	"loot":  lootHandler(10.0, "loot action complete"),
@@ -346,11 +518,17 @@ var actionHandlers = map[string]actionHandler{
 
 	// Craft / smelt / store
 	"craft": handleCraft,
-	"smelt": func(b *bot.Bot, param, _ string) {
+	"smelt": func(b *bot.Bot, param, user string) {
 		go func() {
 			itemName := normalizeItemName(param)
 			success := b.InventoryMgr.Furnace().SmeltItem(context.Background(), itemName)
 			b.Logger.Debug("smelt action complete", "success", success, "item", itemName)
+			reportStatus(b, user, event.ActionStatus{
+				Action:  "smelt",
+				Item:    itemName,
+				Success: success,
+				Error:   smeltError(success, itemName),
+			})
 		}()
 	},
 	// store/storeall/take/retrieve are registered in init() (storage_handlers.go
@@ -386,10 +564,10 @@ var actionHandlers = map[string]actionHandler{
 	// Status / inventory
 	"status": func(b *bot.Bot, _, user string) {
 		hp, hunger, coords := b.GetStatusDetails()
-		b.ReportActionStatus(user, event.ActionStatus{Action: "status", Item: fmt.Sprintf("HP:%d Hunger:%d Coords:%s", hp, hunger, coords), Success: true})
+		reportStatus(b, user, event.ActionStatus{Action: "status", Item: fmt.Sprintf("HP:%d Hunger:%d Coords:%s", hp, hunger, coords), Success: true})
 	},
 	"inventory": func(b *bot.Bot, _, user string) {
-		b.ReportActionStatus(user, event.ActionStatus{Action: "inventory", Item: b.GetInventorySummary(), Success: true})
+		reportStatus(b, user, event.ActionStatus{Action: "inventory", Item: b.GetInventorySummary(), Success: true})
 	},
 
 	// Movement patterns
@@ -434,81 +612,141 @@ var actionHandlers = map[string]actionHandler{
 	"shake":         emoteHandler("shake"),
 
 	// Look / idle actions
-	"lookcrazy": func(b *bot.Bot, param, user string) { handleLookOrIdleAction(b, "lookcrazy", param, user) },
-	"stare":     func(b *bot.Bot, param, user string) { handleLookOrIdleAction(b, "stare", param, user) },
-	"freeze":    func(b *bot.Bot, param, user string) { handleLookOrIdleAction(b, "freeze", param, user) },
-	"vibrate":   func(b *bot.Bot, param, user string) { handleLookOrIdleAction(b, "vibrate", param, user) },
+	"lookcrazy": func(b *bot.Bot, param, user string) {
+		handleLookOrIdleAction(b, "lookcrazy", param, user)
+		reportStatus(b, user, event.ActionStatus{Action: "lookcrazy", Success: true})
+	},
+	"stare": func(b *bot.Bot, param, user string) {
+		handleLookOrIdleAction(b, "stare", param, user)
+		reportStatus(b, user, event.ActionStatus{Action: "stare", Success: true})
+	},
+	"freeze": func(b *bot.Bot, param, user string) {
+		handleLookOrIdleAction(b, "freeze", param, user)
+		reportStatus(b, user, event.ActionStatus{Action: "freeze", Success: true})
+	},
+	"vibrate": func(b *bot.Bot, param, user string) {
+		handleLookOrIdleAction(b, "vibrate", param, user)
+		reportStatus(b, user, event.ActionStatus{Action: "vibrate", Success: true})
+	},
 
-	// Dig / tower actions
-	"buryself":   func(b *bot.Bot, param, _ string) { go digDownAction(b, "buryself", param) },
-	"digout":     func(b *bot.Bot, param, _ string) { go digDownAction(b, "digout", param) },
-	"dighole":    func(b *bot.Bot, param, _ string) { go digDownAction(b, "dighole", param) },
-	"gotohell":   func(b *bot.Bot, param, _ string) { go digDownAction(b, "gotohell", param) },
-	"descend":    func(b *bot.Bot, param, _ string) { go digDownAction(b, "descend", param) },
-	"buildtower": func(b *bot.Bot, param, _ string) { go towerAction(b, param) },
-	"gotoheaven": func(b *bot.Bot, param, _ string) { go towerAction(b, param) },
-	"ascend":     func(b *bot.Bot, param, _ string) { go towerAction(b, param) },
+	// Dig / tower actions. These are sustained movements rather than a
+	// discrete result, so the step reports that the bot started and
+	// stopped, not that a shaft reached a particular depth.
+	"buryself":   func(b *bot.Bot, param, user string) { go digDownAction(b, "buryself", param, user) },
+	"digout":     func(b *bot.Bot, param, user string) { go digDownAction(b, "digout", param, user) },
+	"dighole":    func(b *bot.Bot, param, user string) { go digDownAction(b, "dighole", param, user) },
+	"gotohell":   func(b *bot.Bot, param, user string) { go digDownAction(b, "gotohell", param, user) },
+	"descend":    func(b *bot.Bot, param, user string) { go digDownAction(b, "descend", param, user) },
+	"buildtower": func(b *bot.Bot, param, user string) { go towerAction(b, param, user) },
+	"gotoheaven": func(b *bot.Bot, param, user string) { go towerAction(b, param, user) },
+	"ascend":     func(b *bot.Bot, param, user string) { go towerAction(b, param, user) },
 
 	// Survival features
-	"farm":    func(b *bot.Bot, param, _ string) { harvestCrops(b, param) },
-	"harvest": func(b *bot.Bot, param, _ string) { harvestCrops(b, param) },
-	"plant": func(b *bot.Bot, param, _ string) {
+	"farm":    func(b *bot.Bot, param, user string) { harvestCrops(b, param, user) },
+	"harvest": func(b *bot.Bot, param, user string) { harvestCrops(b, param, user) },
+	"plant": func(b *bot.Bot, param, user string) {
 		go func() {
 			cropType := normalizeCropType(param)
 			count := parseCount(param, 20)
 			planted := b.Farmer.PlantSeeds(context.Background(), cropType, count)
 			b.Logger.Debug("plant complete", "count", planted)
+			reportCountOutcome(b, user, "plant", cropType, planted, "tidak ada lahan yang bisa ditanami")
 		}()
 	},
-	"hoe": func(b *bot.Bot, param, _ string) {
+	"hoe": func(b *bot.Bot, param, user string) {
 		radius := safecast.To[int32](parseCount(param, 5))
 		go func() {
 			hoed := b.Farmer.HoeGround(context.Background(), radius)
 			b.Logger.Debug("hoe complete", "count", hoed)
+			reportCountOutcome(b, user, "hoe", "hoe", hoed, "tidak ada tanah yang bisa dicangkul")
 		}()
 	},
-	"fish":    func(b *bot.Bot, param, _ string) { goFish(b, param) },
-	"fishing": func(b *bot.Bot, param, _ string) { goFish(b, param) },
-	"breed": func(b *bot.Bot, param, _ string) {
-		animalType := normalizeItemName(param)
-		go b.HusbandryMgr.BreedAnimals(context.Background(), animalType)
-	},
-	"feed": func(b *bot.Bot, param, _ string) {
-		animalType := normalizeItemName(param)
-		go b.HusbandryMgr.FeedAnimal(context.Background(), animalType)
-	},
-	"milk":  func(b *bot.Bot, _, _ string) { go b.HusbandryMgr.MilkCow(context.Background()) },
-	"shear": func(b *bot.Bot, _, _ string) { go b.HusbandryMgr.ShearSheep(context.Background()) },
-	"tame": func(b *bot.Bot, param, _ string) {
+	"fish":    func(b *bot.Bot, param, user string) { goFish(b, param, user) },
+	"fishing": func(b *bot.Bot, param, user string) { goFish(b, param, user) },
+	"breed": func(b *bot.Bot, param, user string) {
 		animalType := normalizeItemName(param)
 		go func() {
-			if animalType == "cat" || animalType == "ocelot" {
-				b.HusbandryMgr.TameCat(context.Background())
-			} else {
-				b.HusbandryMgr.TameWolf(context.Background())
-			}
+			ok := b.HusbandryMgr.BreedAnimals(context.Background(), animalType)
+			reportBoolOutcome(b, user, "breed", animalType, ok, "tidak ada pasangan yang bisa dikawinkan")
 		}()
 	},
-	"sleep":      func(b *bot.Bot, _, _ string) { go b.SurvivalMgr.SleepInBed(context.Background()) },
-	"bed":        func(b *bot.Bot, _, _ string) { go b.SurvivalMgr.SleepInBed(context.Background()) },
-	"torch":      func(b *bot.Bot, _, _ string) { go b.SurvivalMgr.AutoPlaceTorches(context.Background()) },
-	"placetorch": func(b *bot.Bot, _, _ string) { go b.SurvivalMgr.AutoPlaceTorches(context.Background()) },
+	"feed": func(b *bot.Bot, param, user string) {
+		animalType := normalizeItemName(param)
+		go func() {
+			ok := b.HusbandryMgr.FeedAnimal(context.Background(), animalType)
+			reportBoolOutcome(b, user, "feed", animalType, ok, "tidak ada hewan yang bisa diberi makan")
+		}()
+	},
+	"milk": func(b *bot.Bot, _, user string) {
+		go func() {
+			ok := b.HusbandryMgr.MilkCow(context.Background())
+			reportBoolOutcome(b, user, "milk", "milk", ok, "tidak ada sapi yang bisa diperas")
+		}()
+	},
+	"shear": func(b *bot.Bot, _, user string) {
+		go func() {
+			ok := b.HusbandryMgr.ShearSheep(context.Background())
+			reportBoolOutcome(b, user, "shear", "sheep", ok, "tidak ada domba yang bisa dicukur")
+		}()
+	},
+	"tame": func(b *bot.Bot, param, user string) {
+		animalType := normalizeItemName(param)
+		go func() {
+			var ok bool
+			if animalType == "cat" || animalType == "ocelot" {
+				ok = b.HusbandryMgr.TameCat(context.Background())
+			} else {
+				ok = b.HusbandryMgr.TameWolf(context.Background())
+			}
+			reportBoolOutcome(b, user, "tame", animalType, ok, "tidak ada hewan jinak yang bisa dijinakkan")
+		}()
+	},
+	"sleep": func(b *bot.Bot, _, user string) {
+		go func() {
+			ok := b.SurvivalMgr.SleepInBed(context.Background())
+			reportBoolOutcome(b, user, "sleep", "", ok, "tidak bisa tidur, butuh malam dan kasur")
+		}()
+	},
+	"bed": func(b *bot.Bot, _, user string) {
+		go func() {
+			ok := b.SurvivalMgr.SleepInBed(context.Background())
+			reportBoolOutcome(b, user, "sleep", "", ok, "tidak bisa tidur, butuh malam dan kasur")
+		}()
+	},
+	"torch": func(b *bot.Bot, _, user string) {
+		go func() {
+			// The survival manager places torches on its own and reports to
+			// the chat layer, which a waiting plan step cannot see. It does
+			// not return a count, so the step confirms the outcome by
+			// measuring the torches that are now held.
+			before := countInventoryItems(b.GetInventorySlots(), b.GetItemNames(), "torch")
+			b.SurvivalMgr.AutoPlaceTorches(context.Background())
+			reportInventoryDelta(b, user, "torch", "torch", before, 0)
+		}()
+	},
+	"placetorch": func(b *bot.Bot, _, user string) {
+		go func() {
+			before := countInventoryItems(b.GetInventorySlots(), b.GetItemNames(), "torch")
+			b.SurvivalMgr.AutoPlaceTorches(context.Background())
+			reportInventoryDelta(b, user, "torch", "torch", before, 0)
+		}()
+	},
 
 	// Combat survival
 	"shield": func(b *bot.Bot, _, user string) {
 		if b.CombatMgr.HasShield() {
 			b.CombatMgr.RaiseShield()
-			b.ReportActionStatus(user, event.ActionStatus{Action: "shield", Success: true})
+			reportStatus(b, user, event.ActionStatus{Action: "shield", Success: true})
 		} else {
-			b.ReportActionStatus(user, event.ActionStatus{Action: "shield", Success: false, Error: "gak punya shield"})
+			reportStatus(b, user, event.ActionStatus{Action: "shield", Success: false, Error: "gak punya shield"})
 		}
 	},
 	"block": func(b *bot.Bot, _, user string) {
 		if b.CombatMgr.HasShield() {
 			b.CombatMgr.RaiseShield()
-			b.ReportActionStatus(user, event.ActionStatus{Action: "shield", Success: true})
+			reportStatus(b, user, event.ActionStatus{Action: "shield", Success: true})
 		} else {
-			b.ReportActionStatus(user, event.ActionStatus{Action: "shield", Success: false, Error: "gak punya shield"})
+			reportStatus(b, user, event.ActionStatus{Action: "shield", Success: false, Error: "gak punya shield"})
 		}
 	},
 	"shoot":    func(b *bot.Bot, _, user string) { go handleShoot(b, user) },
@@ -516,43 +754,49 @@ var actionHandlers = map[string]actionHandler{
 	"crossbow": func(b *bot.Bot, _, user string) { go handleShoot(b, user) },
 	"potion": func(b *bot.Bot, _, user string) {
 		if b.SurvivalMgr.UseHealingPotion() {
-			b.ReportActionStatus(user, event.ActionStatus{Action: "heal", Item: "potion", Success: true})
+			reportStatus(b, user, event.ActionStatus{Action: "heal", Item: "potion", Success: true})
 		} else {
-			b.ReportActionStatus(user, event.ActionStatus{Action: "heal", Item: "potion", Success: false, Error: "gak punya healing potion"})
+			reportStatus(b, user, event.ActionStatus{Action: "heal", Item: "potion", Success: false, Error: "gak punya healing potion"})
 		}
 	},
 	"heal": func(b *bot.Bot, _, user string) {
 		if b.SurvivalMgr.UseHealingPotion() {
-			b.ReportActionStatus(user, event.ActionStatus{Action: "heal", Item: "potion", Success: true})
+			reportStatus(b, user, event.ActionStatus{Action: "heal", Item: "potion", Success: true})
 		} else {
-			b.ReportActionStatus(user, event.ActionStatus{Action: "heal", Item: "potion", Success: false, Error: "gak punya healing potion"})
+			reportStatus(b, user, event.ActionStatus{Action: "heal", Item: "potion", Success: false, Error: "gak punya healing potion"})
 		}
 	},
 	"autoeat": func(b *bot.Bot, param, user string) {
 		enabled := param != "off" && param != "false" && param != "0"
 		b.SurvivalMgr.EnableAutoEat(enabled)
-		b.ReportActionStatus(user, event.ActionStatus{Action: "toggle", Item: "auto-eat", Success: true})
+		reportStatus(b, user, event.ActionStatus{Action: "toggle", Item: "auto-eat", Success: true})
 	},
 	"autoarmor": func(b *bot.Bot, param, user string) {
 		enabled := param != "off" && param != "false" && param != "0"
 		b.SurvivalMgr.EnableAutoArmor(enabled)
 		if enabled {
 			count := b.SurvivalMgr.EquipBestArmor()
-			b.ReportActionStatus(user, event.ActionStatus{Action: "toggle", Item: "auto-armor", Count: count, Success: true})
+			reportStatus(b, user, event.ActionStatus{Action: "toggle", Item: "auto-armor", Count: count, Success: true})
 		} else {
-			b.ReportActionStatus(user, event.ActionStatus{Action: "toggle", Item: "auto-armor", Success: true})
+			reportStatus(b, user, event.ActionStatus{Action: "toggle", Item: "auto-armor", Success: true})
 		}
 	},
 	"autotool": func(b *bot.Bot, _, user string) {
-		b.ReportActionStatus(user, event.ActionStatus{Action: "toggle", Item: "auto-tool", Success: true})
+		reportStatus(b, user, event.ActionStatus{Action: "toggle", Item: "auto-tool", Success: true})
 	},
 
 	// Exploration
-	"explore": func(b *bot.Bot, param, _ string) {
+	"explore": func(b *bot.Bot, param, user string) {
 		duration := parseCount(param, 60)
-		go b.Explorer.ExploreRandom(context.Background(), time.Duration(duration)*time.Second)
+		go func() {
+			// The explorer reports its own progress to chat, which a waiting
+			// step cannot see. It returns the number of blocks it covered, so
+			// the step reports that: standing still is not exploring.
+			covered := b.Explorer.ExploreRandom(context.Background(), time.Duration(duration)*time.Second)
+			reportCountOutcome(b, user, "explore", "explore", covered, "tidak bergerak saat menjelajah")
+		}()
 	},
-	"exploredir": func(b *bot.Bot, param, _ string) {
+	"exploredir": func(b *bot.Bot, param, user string) {
 		parts := strings.Split(param, ",")
 		direction := "north"
 		dist := 200
@@ -562,20 +806,65 @@ var actionHandlers = map[string]actionHandler{
 		if len(parts) > 1 {
 			_, _ = fmt.Sscanf(parts[1], "%d", &dist)
 		}
-		go b.Explorer.ExploreDirection(context.Background(), direction, dist)
+		go func() {
+			covered := b.Explorer.ExploreDirection(context.Background(), direction, dist)
+			reportCountOutcome(b, user, "exploredir", direction, covered, "tidak bergerak saat menjelajah")
+		}()
 	},
-	"returnhome": func(b *bot.Bot, _, _ string) { go b.Explorer.ReturnToOrigin(context.Background()) },
-	"shelter":    func(b *bot.Bot, _, _ string) { go b.SurvivalMgr.BuildEmergencyShelter(context.Background()) },
+	"returnhome": func(b *bot.Bot, _, user string) {
+		go func() {
+			ok := b.Explorer.ReturnToOrigin(context.Background())
+			reportBoolOutcome(b, user, "returnhome", "", ok, "gagal kembali ke titik awal")
+		}()
+	},
+	"shelter": func(b *bot.Bot, _, user string) {
+		go func() {
+			ok := b.SurvivalMgr.BuildEmergencyShelter(context.Background())
+			reportBoolOutcome(b, user, "shelter", "", ok, "gagal membuat tempat berlindung")
+		}()
+	},
 	"time": func(b *bot.Bot, _, user string) {
 		tod := b.SurvivalMgr.GetTimeOfDay()
-		b.ReportActionStatus(user, event.ActionStatus{Action: "time", Item: tod, Success: true})
+		reportStatus(b, user, event.ActionStatus{Action: "time", Item: tod, Success: true})
 	},
 	"whatstime": func(b *bot.Bot, _, user string) {
 		tod := b.SurvivalMgr.GetTimeOfDay()
-		b.ReportActionStatus(user, event.ActionStatus{Action: "time", Item: tod, Success: true})
+		reportStatus(b, user, event.ActionStatus{Action: "time", Item: tod, Success: true})
 	},
-	"deathpoint": func(b *bot.Bot, _, _ string) { go b.SurvivalMgr.RecoverFromDeath(context.Background()) },
-	"recover":    func(b *bot.Bot, _, _ string) { go b.SurvivalMgr.RecoverFromDeath(context.Background()) },
+	"deathpoint": func(b *bot.Bot, _, user string) {
+		go func() {
+			ok := b.SurvivalMgr.RecoverFromDeath(context.Background())
+			reportBoolOutcome(b, user, "recover", "", ok, "gagal mengambil barang di titik kematian")
+		}()
+	},
+	"recover": func(b *bot.Bot, _, user string) {
+		go func() {
+			ok := b.SurvivalMgr.RecoverFromDeath(context.Background())
+			reportBoolOutcome(b, user, "recover", "", ok, "gagal mengambil barang di titik kematian")
+		}()
+	},
+}
+
+// actionHandlersMu guards actionHandlers. The map is written by every init()
+// that registers a family of labels and read on every action, and the plan
+// executor reads it while handlers may still be registering, so the accesses
+// are not naturally ordered.
+var actionHandlersMu sync.RWMutex
+
+// lookupHandler returns the handler for label, if one is registered.
+func lookupHandler(label string) (actionHandler, bool) {
+	actionHandlersMu.RLock()
+	defer actionHandlersMu.RUnlock()
+	handler, ok := actionHandlers[label]
+	return handler, ok
+}
+
+// registerHandler adds or replaces a handler. Used by the init() functions
+// that wire up a family of labels.
+func registerHandler(label string, handler actionHandler) {
+	actionHandlersMu.Lock()
+	defer actionHandlersMu.Unlock()
+	actionHandlers[label] = handler
 }
 
 // Execute maps an AI-parsed action tag to bot behaviors.
@@ -583,7 +872,7 @@ func Execute(b *bot.Bot, label string, param string, user string) {
 	label = strings.ToLower(strings.TrimSpace(label))
 	param = strings.TrimSpace(param)
 
-	if handler, ok := actionHandlers[label]; ok {
+	if handler, ok := lookupHandler(label); ok {
 		handler(b, param, user)
 		return
 	}

@@ -117,6 +117,9 @@ type Bot struct {
 	BeginEpisodeFunc func(line string, now time.Time) (number int, budget time.Duration, objective string, ok bool)
 	SuspendFunc      func(who string)
 	EndEpisodeFunc   func(reason string)
+	// AutonomyContextFunc renders the same goal and plan used by the motor loop.
+	// Publish and snapshot this callback under Mu; invoke it outside Mu.
+	AutonomyContextFunc func() string
 	// OneBlockFunc reports how the brain reads the world, so a caller outside
 	// the brain can ask the same question it asks itself.
 	OneBlockFunc      func(nearBlocks string) string

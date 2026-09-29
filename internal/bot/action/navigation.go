@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"bedrock-ai/internal/bot"
+	"bedrock-ai/internal/bot/perception"
 	"bedrock-ai/internal/event"
 
 	"github.com/go-gl/mathgl/mgl32"
@@ -163,13 +164,12 @@ func abs32(v int) int32 {
 	return int32(v)
 }
 
-// botBlockLookup reads block names straight from the bot's world cache. Only
-// loaded cells resolve, which is what keeps "go to the nearest oak log" from
-// walking the bot into terrain it has never seen.
+// botBlockLookup resolves semantic targets only when currently visible.
+// Movement may still use received terrain for collision, not hidden resources.
 func botBlockLookup(b *bot.Bot) blockLookup {
 	return func(x, y, z int32) (string, bool) {
 		name, ok := b.GetBlockName(x, y, z)
-		if !ok || NormaliseBlockName(name) == "air" {
+		if !ok || NormaliseBlockName(name) == "air" || !perception.SeesBlock(b, protocol.BlockPos{x, y, z}) {
 			return "", false
 		}
 		return name, true
@@ -203,7 +203,7 @@ func navFailure(b *bot.Bot, user, actionName, param string, err error) {
 	if item == "" {
 		item = actionName
 	}
-	b.ReportActionStatus(user, event.ActionStatus{
+	reportStatus(b, user, event.ActionStatus{
 		Action:  actionName,
 		Item:    item,
 		Success: false,
@@ -226,7 +226,7 @@ func goToCoords(b *bot.Bot, param, user string) {
 		float32(target.Y()),
 		float32(target.Z()) + 0.5,
 	})
-	b.ReportActionStatus(user, event.ActionStatus{Action: "goto", Item: param, Success: true})
+	reportStatus(b, user, event.ActionStatus{Action: "goto", Item: param, Success: true})
 }
 
 // goToBlock walks up to a block and stops beside it. NavigateToBlock picks a
@@ -259,7 +259,7 @@ func runBlockNav(b *bot.Bot, actionName, param, user string, arrival func(protoc
 	cell := arrival(target)
 	go func() {
 		ok := b.NavigateToBlock(cell.X(), cell.Y(), cell.Z(), 1.5)
-		b.ReportActionStatus(user, event.ActionStatus{
+		reportStatus(b, user, event.ActionStatus{
 			Action:  actionName,
 			Item:    param,
 			Success: ok,
@@ -305,7 +305,7 @@ func enterPortal(b *bot.Bot, param, user string) {
 		// Aim one cell into the portal so the player actually crosses the
 		// threshold; stopping on the frame is not the same as going through.
 		entered := b.NavigateToBlock(pos.X(), pos.Y(), pos.Z(), 1.0)
-		b.ReportActionStatus(user, event.ActionStatus{
+		reportStatus(b, user, event.ActionStatus{
 			Action:  "enterportal",
 			Item:    fmt.Sprintf("%d,%d,%d", pos.X(), pos.Y(), pos.Z()),
 			Success: entered,

@@ -26,9 +26,17 @@ var foodPriority = []string{
 	"cookie",
 }
 
-func (m *Manager) tickAutoEat() {
+// eatCooldown is the minimum gap between automatic meals. Eating takes about
+// 1.6 seconds and the tick runs twice a second, so without this the bot would
+// start a second meal before finishing the first.
+const eatCooldown = 3 * time.Second
+
+// shouldAutoEat is the decision half of auto-eat: is the bot hungry enough, and
+// has enough time passed since the last meal? Kept separate from the action so
+// the judgement can be tested without the 1.6-second eating animation.
+func (m *Manager) shouldAutoEat() bool {
 	if !m.autoEatOn {
-		return
+		return false
 	}
 
 	m.mu.Lock()
@@ -36,13 +44,20 @@ func (m *Manager) tickAutoEat() {
 	lastEat := m.lastEatTime
 	m.mu.Unlock()
 
-	// Only eat when hunger is below threshold and cooldown passed
 	if hunger > m.EatThreshold {
+		return false
+	}
+	return time.Since(lastEat) >= eatCooldown
+}
+
+func (m *Manager) tickAutoEat() {
+	if !m.shouldAutoEat() {
 		return
 	}
-	if time.Since(lastEat) < 3*time.Second {
-		return
-	}
+
+	m.mu.Lock()
+	hunger := m.hungerLevel
+	m.mu.Unlock()
 
 	m.logger.Info("Auto-eat triggered", "hunger", hunger, "threshold", m.EatThreshold)
 

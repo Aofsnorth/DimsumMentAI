@@ -153,6 +153,28 @@ func registerRecipeName(b *bot.Bot, name string, recipeNetID uint32) {
 	}
 }
 
+// applyAttributeValues folds the attributes of an UpdateAttributes packet into
+// the bot's current health and hunger.
+//
+// It is a pure function of the packet and the previous values, so the attribute
+// naming lives in one place that can be tested without a live connection. The
+// boolean reports whether the packet actually carried a hunger value: the
+// protocol only sends attributes that changed, so a health-only packet must
+// leave hunger where it was rather than resetting it to zero.
+func applyAttributeValues(attrs []protocol.Attribute, prevHealth, prevHunger int) (health, hunger int, hungerSeen bool) {
+	health, hunger = prevHealth, prevHunger
+	for _, attr := range attrs {
+		switch attr.Name {
+		case "minecraft:health":
+			health = int(attr.Value)
+		case "minecraft:player.hunger":
+			hunger = int(attr.Value)
+			hungerSeen = true
+		}
+	}
+	return health, hunger, hungerSeen
+}
+
 func handleUpdateAttributes(b *bot.Bot, p *packet.UpdateAttributes) {
 	if p.EntityRuntimeID == b.Conn.GameData().EntityRuntimeID {
 		if p.Tick > 0 {
@@ -160,13 +182,9 @@ func handleUpdateAttributes(b *bot.Bot, p *packet.UpdateAttributes) {
 		}
 		b.Mu.Lock()
 		prevHealth := b.Health
-		for _, attr := range p.Attributes {
-			if attr.Name == "minecraft:health" {
-				b.Health = int(attr.Value)
-			} else if attr.Name == "minecraft:player.hunger" {
-				b.Hunger = int(attr.Value)
-			}
-		}
+		health, hunger, hungerSeen := applyAttributeValues(p.Attributes, b.Health, b.Hunger)
+		b.Health = health
+		b.Hunger = hunger
 
 		if b.Health < prevHealth && b.Health > 0 {
 			feetX := int32(math.Floor(float64(b.Pos.X())))
@@ -195,5 +213,14 @@ func handleUpdateAttributes(b *bot.Bot, p *packet.UpdateAttributes) {
 			b.Mu.Lock()
 		}
 		b.Mu.Unlock()
+
+		// The survival manager keeps its own copy of the hunger level, and
+		// nothing ever told it about these updates. It therefore stayed at the
+		// 20 it was constructed with, so auto-eat never fired on real hunger and
+		// the bot starved with food in its bag. SetHunger takes the manager's
+		// own lock, so it is called off b.Mu rather than nested inside it.
+		if hungerSeen && b.SurvivalMgr != nil {
+			b.SurvivalMgr.SetHunger(hunger)
+		}
 	}
 }

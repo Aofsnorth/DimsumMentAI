@@ -11,8 +11,41 @@ import (
 	"bedrock-ai/internal/event"
 	"bedrock-ai/internal/handler"
 
+	"github.com/go-gl/mathgl/mgl32"
 	"github.com/sandertv/gophertunnel/minecraft"
 )
+
+// Regression: a nearby player must not make perception re-enter the bot mutex.
+func TestObserveWithNearbyPlayerReturns(t *testing.T) {
+	t.Parallel()
+	b, err := bot.New(
+		bot.WithLogger(slog.New(slog.NewTextHandler(io.Discard, nil))),
+		bot.WithDialer(func() (*minecraft.Conn, error) { return nil, nil }),
+		bot.WithRegistry(handler.NewRegistry()),
+		bot.WithEventBus(event.NewBus()),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b.PlayerEntityIDs["NearbyPlayer"] = 42
+	b.PlayerPositions[42] = b.Pos.Add(mgl32.Vec3{0, 0, 2})
+	b.LastChatPartner = "NearbyPlayer"
+	r := agi.New(b, agi.Config{Enabled: true, Vision: true, VisionRadius: 16, EyeHeight: bot.PlayerEyeHeight})
+	done := make(chan agi.Snapshot, 1)
+	go func() { done <- r.Observe() }()
+	select {
+	case snap := <-done:
+		if len(snap.Nearby) != 1 || snap.Nearby[0].Name != "NearbyPlayer" || !snap.Nearby[0].SpeakingTo {
+			t.Fatalf("nearby player lost from snapshot: %+v", snap.Nearby)
+		}
+		if !b.Mu.TryLock() {
+			t.Fatal("Observe left the bot mutex locked")
+		}
+		b.Mu.Unlock()
+	case <-time.After(2 * time.Second):
+		t.Fatal("Observe deadlocked with a nearby player; visibility must run outside b.Mu")
+	}
+}
 
 // TestObserveReturnsInsteadOfWedgingTheBrain is the regression guard for a bug
 // that made the entire autonomy layer look switched on while doing nothing.

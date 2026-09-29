@@ -54,6 +54,13 @@ type Runner struct {
 	mu        sync.Mutex
 	lastSpoke time.Time
 	lastGaze  time.Time
+	// greeted remembers who the vision reflex has already reacted to, and
+	// greetedAt when. The record outlives the gaze on purpose: ReflexLook
+	// consumes an entire tick, so re-firing it every time a gaze lapses starves
+	// the decision layer and the bot stands there looking at people instead of
+	// playing.
+	greeted   map[string]time.Time
+	greetedAt time.Time
 	seed      int
 	// goal is the multi-tick objective the bot is currently pursuing. It is
 	// empty when the bot has no goal, which is a supported state (and the
@@ -334,6 +341,7 @@ func New(b *bot.Bot, cfg Config) *Runner {
 		cfg:        cfg,
 		seed:       rand.Intn(360),
 		vocabulary: NewVocabulary(),
+		greeted:    make(map[string]time.Time),
 	}
 	// An operator-set goal is installed before the loop starts, so the very
 	// first tick already has one. Waiting for the model to install it would make
@@ -400,13 +408,20 @@ func (r *Runner) Run(ctx context.Context) {
 
 // Tick runs one pass of the brain: reflex first, then an optional decision.
 func (r *Runner) Tick(ctx context.Context) {
-	// Don't act until the world has at least some terrain. The threshold is
-	// deliberately low (1 chunk): the bot only needs to see the ground under its
-	// feet to start deciding. Pathfinding itself has a separate, stricter gate.
-	// A threshold that is too high (the old 4) permanently blocks the AGI on
-	// worlds where only 2-3 chunks arrive in the initial burst — which presents
-	// as a bot that joins and never moves.
-	if r.b.WorldCache == nil || r.b.WorldCache.ChunkCount() < 1 {
+	// Don't decide anything until the bot can see the ground it is standing on.
+	//
+	// This is a precondition rather than a politeness. Right after a join the
+	// terrain is still streaming in, and every perception helper here answers
+	// "air" for a cell it has not decoded. A brain fed that sees an empty world:
+	// no blocks, no features, nothing to gather or build with, so Jev has nothing
+	// to choose from and the tick falls through to idle. A bot that idles
+	// forever while its own world loads is indistinguishable from a frozen one.
+	//
+	// The check is on the bot's own cell, not on how many chunks have arrived. On
+	// a LAN join the first sub-chunk to decode is frequently nowhere near the
+	// player, so a chunk count can read as satisfied while everything under the
+	// bot's feet is still unknown.
+	if !r.groundKnown() {
 		return
 	}
 	snap := r.Observe()
@@ -966,7 +981,13 @@ func describeState(s Snapshot) string {
 	if s.PlanSummary != "" && s.PlanSummary != "no plan" {
 		fmt.Fprintf(&sb, "Active plan:\n%s", s.PlanSummary)
 	}
-	fmt.Fprintf(&sb, "Holding: %s.\n", s.HeldItem)
+	fmt.Fprintf(&sb, "Holding: %s.\nInventory: %s.\n", s.HeldItem, s.Inventory)
+	if s.EpisodeText != "" {
+		fmt.Fprintf(&sb, "Episode: %s\n", s.EpisodeText)
+	}
+	if s.Conversation != "" {
+		fmt.Fprintf(&sb, "Recent player conversation (dialogue, not world observations):\n%s\n", s.Conversation)
+	}
 	fmt.Fprintf(&sb, "Visible mobs: %s.\n", s.VisibleMob)
 	// The prose rendering, not the name list: a model can act on "chest (4m N)"
 	// and cannot act on a bare "chest", and the name list is there for the rules
@@ -1075,6 +1096,28 @@ func describeSigns(s Snapshot) string {
 	return strings.Join(s.VisibleSigns, "; ")
 }
 
+// groundKnown reports whether the world can describe the block under the bot's
+// feet. It is the brain's precondition for having a world at all.
+//
+// The world's own model is asked first, because it is the layer the perception
+// scans actually read. A bot whose model cannot resolve its footing has an
+// all-air view of the world, and every decision taken from that is noise.
+func (r *Runner) groundKnown() bool {
+	if r == nil || r.b == nil {
+		return false
+	}
+	if model := r.b.WorldModel; model != nil {
+		pos := r.b.GetCoords()
+		return model.CanResolve(
+			int32(math.Floor(float64(pos.X()))),
+			int32(math.Floor(float64(pos.Y())))-1,
+			int32(math.Floor(float64(pos.Z()))),
+		)
+	}
+	// No model to ask, so fall back to whether any terrain has been decoded.
+	return r.b.WorldCache != nil && r.b.WorldCache.ChunkCount() > 0
+}
+
 func (r *Runner) thresholds() Thresholds {
 	return Thresholds{
 		LowHP:         r.cfg.LowHPThreshold,
@@ -1155,6 +1198,7 @@ func (r *Runner) Observe() Snapshot {
 		Hunger:         hunger,
 		HeldItem:       b.GetHeldItem(),
 		Inventory:      b.GetInventorySummary(),
+		Conversation:   r.conversationContext(),
 		VisibleMob:     visibleMobs,
 		NearBlocks:     nearBlocks,
 		NearBlocksText: nearBlocksText,
@@ -1191,6 +1235,33 @@ func (r *Runner) Observe() Snapshot {
 	}
 
 	return snap
+}
+
+// conversationContext uses the same per-player history as chat, without holding
+// the bot mutex while acquiring the history lock. Internal result prompts are omitted.
+func (r *Runner) conversationContext() string {
+	b := r.b
+	if b.AiClient == nil || b.AiClient.History == nil {
+		return ""
+	}
+	b.Mu.Lock()
+	user := b.LastChatPartner
+	b.Mu.Unlock()
+	if user == "" {
+		return ""
+	}
+	history := b.AiClient.History.GetHistory(user)
+	if len(history) > 6 {
+		history = history[len(history)-6:]
+	}
+	var sb strings.Builder
+	for _, message := range history {
+		if strings.Contains(message.Content, "ACTION RESULT #") {
+			continue
+		}
+		fmt.Fprintf(&sb, "%s: %s\n", message.Role, truncate(message.Content, 400))
+	}
+	return sb.String()
 }
 
 // visibleSignText lists the signage the bot can currently read. It is fed to
@@ -1270,18 +1341,23 @@ func (r *Runner) nearbyPeople(pos mgl32.Vec3, lookTarget string) []Person {
 	}
 
 	b := r.b
+	// Snapshot mutable player data under the bot lock. Visibility helpers take
+	// that same lock themselves, so ray tests must run after it is released.
 	b.Mu.Lock()
-	defer b.Mu.Unlock()
-
-	people := make([]Person, 0, 4)
+	positions := make(map[string]mgl32.Vec3, len(b.PlayerEntityIDs))
+	lastChatPartner := b.LastChatPartner
 	for name, id := range b.PlayerEntityIDs {
 		if strings.EqualFold(name, b.Name) {
 			continue
 		}
-		playerPos, ok := b.PlayerPositions[id]
-		if !ok {
-			continue
+		if playerPos, ok := b.PlayerPositions[id]; ok {
+			positions[name] = playerPos
 		}
+	}
+	b.Mu.Unlock()
+
+	people := make([]Person, 0, len(positions))
+	for name, playerPos := range positions {
 		dist := float32(math.Sqrt(float64(playerPos.Sub(pos).LenSqr())))
 		if dist > radius {
 			continue
@@ -1294,8 +1370,17 @@ func (r *Runner) nearbyPeople(pos mgl32.Vec3, lookTarget string) []Person {
 			// wall, which is the one thing a vision reflex must never do.
 			HasLineOf:  perception.SeesPoint(b, playerPos.Add(mgl32.Vec3{0, r.cfg.EyeHeight, 0})),
 			LookingAt:  strings.EqualFold(lookTarget, name),
-			SpeakingTo: b.LastChatPartner != "" && strings.EqualFold(name, b.LastChatPartner),
+			SpeakingTo: lastChatPartner != "" && strings.EqualFold(name, lastChatPartner),
+			// Greeted is resolved outside the bot lock below, since it is the
+			// runner's own state.
+			Greeted: false,
 		})
+	}
+	// The acknowledgement lives on the runner, not the bot, so it is read here
+	// rather than under b.Mu. This is the field that stops ReflexLook from
+	// re-firing on every gaze lapse and starving the rest of the tick.
+	for i := range people {
+		people[i].Greeted = r.greetedRecently(people[i].Name)
 	}
 	sortPeople(people)
 	return people
@@ -1470,8 +1555,20 @@ func (r *Runner) snapshotHP() int {
 
 // lookAt turns towards a player, honouring the cooldown so someone pacing back
 // and forth does not set the bot's head swinging like a metronome.
+//
+// The acknowledgement is recorded whether or not the head actually turns. The
+// reflex that calls this consumes the whole tick, so if a player stayed
+// "unacknowledged" for as long as the gaze cooldown, every single tick would be
+// spent looking at them and the brain would never decide to do anything. One
+// arrival is one look; after that the player is known about and the rest of the
+// loop is free to run.
 func (r *Runner) lookAt(name string) {
 	r.mu.Lock()
+	// Acknowledge first: this is what stops the reflex re-firing, so it must not
+	// depend on the head turn succeeding.
+	r.greeted[strings.ToLower(name)] = time.Now()
+	r.greetedAt = time.Now()
+
 	if time.Since(r.lastGaze) < time.Duration(r.cfg.VisionCooldownSec)*time.Second {
 		r.mu.Unlock()
 		return
@@ -1484,6 +1581,19 @@ func (r *Runner) lookAt(name string) {
 		return
 	}
 	r.b.Logger.Info("AGI: acknowledged a player", slog.String("player", name))
+}
+
+// greetedRecently reports whether the vision reflex has already reacted to a
+// player within the gaze cooldown.
+func (r *Runner) greetedRecently(name string) bool {
+	window := time.Duration(r.cfg.VisionCooldownSec) * time.Second
+	if window <= 0 {
+		return false
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	at, ok := r.greeted[strings.ToLower(name)]
+	return ok && time.Since(at) < window
 }
 
 // shouldDeliberate gates the expensive half: is the model worth asking, and is

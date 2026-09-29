@@ -9,6 +9,7 @@ import (
 
 	"bedrock-ai/internal/bot"
 	"bedrock-ai/internal/bot/rand"
+	"bedrock-ai/internal/event"
 
 	"github.com/go-gl/mathgl/mgl32"
 )
@@ -38,6 +39,8 @@ func parseCount(param string, fallback int) int {
 	return fallback
 }
 
+// runMovementPattern walks the requested pattern until its duration is up. It
+// stops the bot when it finishes, which is what the caller reports.
 func runMovementPattern(b *bot.Bot, label, param, user string) {
 	duration := time.Duration(durationTicks(param, 5*time.Second)/20) * time.Second
 	if duration > 30*time.Second {
@@ -100,26 +103,45 @@ func handleLookOrIdleAction(b *bot.Bot, label, param, user string) {
 	}
 }
 
-func digDownAction(b *bot.Bot, label, param string) {
+// digDownAction digs a shaft (or handles the "dig out" variant, which is
+// really an emote) and then reports, so a plan step waiting on it is released
+// when the digging stops rather than timing out.
+func digDownAction(b *bot.Bot, label, param, user string) {
 	depth := parseCount(param, 3)
 	if label == "gotohell" {
 		depth = 50
 	}
 	if label == "digout" {
 		b.TriggerEmoteFor("jump", 60)
+		reportStatus(b, user, event.ActionStatus{Action: label, Success: true})
 		return
 	}
-	if b.Gatherer != nil {
-		b.Gatherer.DigDown(context.Background(), depth)
+	if b.Gatherer == nil {
+		reportStatus(b, user, event.ActionStatus{
+			Action:  label,
+			Success: false,
+			Error:   "pengumpul blok belum siap",
+		})
+		return
 	}
+	b.Gatherer.DigDown(context.Background(), depth)
+	reportStatus(b, user, event.ActionStatus{Action: label, Count: depth, Success: true})
 }
 
-func towerAction(b *bot.Bot, param string) {
+// towerAction scaffolds a tower and then reports, for the same reason.
+func towerAction(b *bot.Bot, param, user string) {
 	height := parseCount(param, 6)
 	if height > 50 {
 		height = 50
 	}
-	if b.Gatherer != nil {
-		b.Gatherer.TowerUp(context.Background(), height)
+	if b.Gatherer == nil {
+		reportStatus(b, user, event.ActionStatus{
+			Action:  "buildtower",
+			Success: false,
+			Error:   "pengumpul blok belum siap",
+		})
+		return
 	}
+	b.Gatherer.TowerUp(context.Background(), height)
+	reportStatus(b, user, event.ActionStatus{Action: "buildtower", Count: height, Success: true})
 }

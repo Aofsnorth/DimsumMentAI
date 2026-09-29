@@ -2,11 +2,32 @@ package action
 
 import (
 	"math"
+	"reflect"
 	"testing"
 
 	"github.com/go-gl/mathgl/mgl32"
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
 )
+
+// --- registration ---
+
+func TestStrongholdActions_Registered(t *testing.T) {
+	t.Parallel()
+	handler, ok := actionHandlers["explorestronghold"]
+	if !ok {
+		t.Fatal("actionHandlers has no \"explorestronghold\" entry")
+	}
+	for _, name := range []string{"findstronghold", "stronghold"} {
+		alias, ok := actionHandlers[name]
+		if !ok {
+			t.Errorf("actionHandlers has no %q alias", name)
+			continue
+		}
+		if reflect.ValueOf(alias).Pointer() != reflect.ValueOf(handler).Pointer() {
+			t.Errorf("actionHandlers[%q] is a different handler than explorestronghold", name)
+		}
+	}
+}
 
 // --- strongholdWaypoints ---
 

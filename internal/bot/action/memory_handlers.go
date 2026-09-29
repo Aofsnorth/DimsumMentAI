@@ -56,26 +56,26 @@ func init() {
 // handleRemember stores player text as a curated long-term memory.
 func handleRemember(b *bot.Bot, param, user string) {
 	if b.Memory == nil {
-		b.ReportActionStatus(user, event.ActionStatus{Action: "remember", Success: false, Error: "memori belum siap"})
+		reportStatus(b, user, event.ActionStatus{Action: "remember", Success: false, Error: "memori belum siap"})
 		return
 	}
 	fact, err := b.Memory.Add(param, user)
 	if err != nil {
-		b.ReportActionStatus(user, event.ActionStatus{Action: "remember", Success: false, Error: err.Error()})
+		reportStatus(b, user, event.ActionStatus{Action: "remember", Success: false, Error: err.Error()})
 		return
 	}
-	b.ReportActionStatus(user, event.ActionStatus{Action: "remember", Item: fmt.Sprintf("(%d) %s", fact.ID, fact.Text), Success: true})
+	reportStatus(b, user, event.ActionStatus{Action: "remember", Item: fmt.Sprintf("(%d) %s", fact.ID, fact.Text), Success: true})
 }
 
 // handleRecall lists memories, optionally filtered by a substring query.
 func handleRecall(b *bot.Bot, param, user string) {
 	if b.Memory == nil {
-		b.ReportActionStatus(user, event.ActionStatus{Action: "recall", Success: false, Error: "memori belum siap"})
+		reportStatus(b, user, event.ActionStatus{Action: "recall", Success: false, Error: "memori belum siap"})
 		return
 	}
 	facts := b.Memory.Search(param)
 	if len(facts) == 0 {
-		b.ReportActionStatus(user, event.ActionStatus{Action: "recall", Item: "belum ada memori", Success: true})
+		reportStatus(b, user, event.ActionStatus{Action: "recall", Item: "belum ada memori", Success: true})
 		return
 	}
 	const maxShow = 10
@@ -91,36 +91,36 @@ func handleRecall(b *bot.Bot, param, user string) {
 	if hidden := len(facts) - len(shown); hidden > 0 {
 		item += fmt.Sprintf(" (+%d lagi)", hidden)
 	}
-	b.ReportActionStatus(user, event.ActionStatus{Action: "recall", Item: item, Count: len(facts), Success: true})
+	reportStatus(b, user, event.ActionStatus{Action: "recall", Item: item, Count: len(facts), Success: true})
 }
 
 // handleForget removes one memory by ID or substring match.
 func handleForget(b *bot.Bot, param, user string) {
 	if b.Memory == nil {
-		b.ReportActionStatus(user, event.ActionStatus{Action: "forget", Success: false, Error: "memori belum siap"})
+		reportStatus(b, user, event.ActionStatus{Action: "forget", Success: false, Error: "memori belum siap"})
 		return
 	}
 	removed, ok := b.Memory.Forget(param)
 	if !ok {
-		b.ReportActionStatus(user, event.ActionStatus{Action: "forget", Success: false, Error: "memori tidak ketemu"})
+		reportStatus(b, user, event.ActionStatus{Action: "forget", Success: false, Error: "memori tidak ketemu"})
 		return
 	}
-	b.ReportActionStatus(user, event.ActionStatus{Action: "forget", Item: fmt.Sprintf("(%d) %s", removed.ID, removed.Text), Success: true})
+	reportStatus(b, user, event.ActionStatus{Action: "forget", Item: fmt.Sprintf("(%d) %s", removed.ID, removed.Text), Success: true})
 }
 
 // handleSetHome remembers the bot's current position as "home".
 func handleSetHome(b *bot.Bot, _, user string) {
 	if b.Memory == nil {
-		b.ReportActionStatus(user, event.ActionStatus{Action: "sethome", Success: false, Error: "memori belum siap"})
+		reportStatus(b, user, event.ActionStatus{Action: "sethome", Success: false, Error: "memori belum siap"})
 		return
 	}
 	pos := b.GetCoords()
 	place, err := b.Memory.RememberPlace("home", pos.X(), pos.Y(), pos.Z())
 	if err != nil {
-		b.ReportActionStatus(user, event.ActionStatus{Action: "sethome", Success: false, Error: err.Error()})
+		reportStatus(b, user, event.ActionStatus{Action: "sethome", Success: false, Error: err.Error()})
 		return
 	}
-	b.ReportActionStatus(user, event.ActionStatus{
+	reportStatus(b, user, event.ActionStatus{
 		Action:  "sethome",
 		Item:    fmt.Sprintf("home di X:%.0f Y:%.0f Z:%.0f", place.X, place.Y, place.Z),
 		Success: true,
@@ -130,12 +130,12 @@ func handleSetHome(b *bot.Bot, _, user string) {
 // handleHome walks back to the remembered "home" position.
 func handleHome(b *bot.Bot, _, user string) {
 	if b.Memory == nil {
-		b.ReportActionStatus(user, event.ActionStatus{Action: "home", Success: false, Error: "memori belum siap"})
+		reportStatus(b, user, event.ActionStatus{Action: "home", Success: false, Error: "memori belum siap"})
 		return
 	}
 	place, ok := b.Memory.Place("home")
 	if !ok {
-		b.ReportActionStatus(user, event.ActionStatus{Action: "home", Success: false, Error: "belum ada home, pakai sethome dulu"})
+		reportStatus(b, user, event.ActionStatus{Action: "home", Success: false, Error: "belum ada home, pakai sethome dulu"})
 		return
 	}
 	b.WalkTo(mgl32.Vec3{place.X, place.Y, place.Z})
@@ -218,5 +218,5 @@ func handleAnalyze(b *bot.Bot, _, user string) {
 	}
 	summary := fmt.Sprintf("HP %d/20, lapar %d/20, pos %s, pegang %s | Inventory: %s | Pemain dekat: %s | Mob dekat: %s | Drop: %d | Blok terlihat: %s",
 		hp, hunger, coords, held, inv, playerStr, mobStr, drops, perception.BlocksSummary(b, 12.0, 6))
-	b.ReportActionStatus(user, event.ActionStatus{Action: "analyze", Item: summary, Success: true})
+	reportStatus(b, user, event.ActionStatus{Action: "analyze", Item: summary, Success: true})
 }

@@ -202,6 +202,13 @@ func buildChatContext(b *bot.Bot, sourceName, msg, botName string) string {
 		}
 	}
 
+	b.Mu.Lock()
+	autonomyContext := b.AutonomyContextFunc
+	b.Mu.Unlock()
+	if autonomyContext != nil {
+		systemPrompt += "\n\n[SHARED AGENT INTENT]\n" + autonomyContext()
+	}
+
 	// Append curated long-term memories (MinePal-style Active Memory).
 	systemPrompt = appendMemoryContext(b, systemPrompt)
 

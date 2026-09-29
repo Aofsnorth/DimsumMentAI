@@ -53,7 +53,11 @@ type Bot interface {
 	BeginContainerWatch()
 	ClickBlockAt(ctx context.Context, pos protocol.BlockPos) (bool, string)
 	WaitContainerOpen(ctx context.Context, timeout time.Duration) (byte, protocol.BlockPos, bool)
+	ContainerItems() map[uint32]protocol.ItemInstance
+	ContainerItemName(item protocol.ItemInstance) string
 	CloseContainerWindow(windowID byte)
+	PlaceIntoContainerSlot(windowID byte, containerSlot uint32, destStackNetID int32, srcSlot uint32, count int) error
+	TakeFromContainerSlot(windowID byte, slot uint32, count int, stackNetID int32, itemName string) error
 }
 
 type InventoryManager struct {

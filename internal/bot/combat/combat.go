@@ -50,9 +50,17 @@ type CombatManager struct {
 	inCombat     bool
 	friendlyMode bool
 	shieldUp     bool
-	mu           sync.Mutex
-	lastAttack   time.Time
-	recentKills  map[uint64]time.Time
+	mu         sync.Mutex
+	lastAttack time.Time
+	// shot is the state of the ranged shot currently in flight: the draw is
+	// held across several ticks before the release goes out.
+	shot        shot
+	// dragonAction is the posture the End fight last chose. It is kept only so
+	// the fight can log the moment the plan changes instead of logging the same
+	// line five times a second, which is how a log becomes unreadable.
+	dragonAction    DragonAction
+	dragonActionSet bool
+	recentKills     map[uint64]time.Time
 	// durability counts swings per held slot so a tool can be swapped before
 	// it breaks mid-vein. It is shared with the gatherer through the bot, so
 	// one pickaxe has one life whether it is used on a skeleton or on stone.

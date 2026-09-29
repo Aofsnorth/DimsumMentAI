@@ -14,15 +14,18 @@ import (
 	"github.com/sandertv/gophertunnel/minecraft/protocol/packet"
 )
 
-// fakeBot is a minimal survival.Bot. It records nothing about the actions,
-// because these tests exercise the decisions: the actions walk and block for
-// seconds, and a test that ran them would take a minute per case while
-// asserting on side effects rather than on the judgement.
+// fakeBot is a minimal survival.Bot. It records the actions that matter to the
+// assertions — which slot was equipped — but nothing about the ones that only
+// cost wall-clock time, because these tests mostly exercise the decisions: the
+// actions walk and block for seconds, and a test that ran them would take a
+// minute per case while asserting on side effects rather than on judgement.
 type fakeBot struct {
 	busy      bool
 	blocks    map[protocol.BlockPos]string
 	inventory map[uint32]protocol.ItemStack
 	names     map[int32]string
+	// equipped records every slot passed to EquipItem, in order.
+	equipped []uint32
 }
 
 func newFakeBot() *fakeBot {
@@ -44,7 +47,7 @@ func (f *fakeBot) InjectAIEvent(msg string)                          {}
 func (f *fakeBot) GetHeldItemSlot() uint32                           { return 0 }
 func (f *fakeBot) GetInventorySlots() map[uint32]protocol.ItemStack  { return f.inventory }
 func (f *fakeBot) GetItemNames() map[int32]string                    { return f.names }
-func (f *fakeBot) EquipItem(slot uint32) error                       { return nil }
+func (f *fakeBot) EquipItem(slot uint32) error                       { f.equipped = append(f.equipped, slot); return nil }
 func (f *fakeBot) UnequipItem() error                                { return nil }
 func (f *fakeBot) SendChat(msg string)                               {}
 func (f *fakeBot) ReportActionStatus(u string, s event.ActionStatus) {}

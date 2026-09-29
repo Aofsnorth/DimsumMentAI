@@ -574,3 +574,5 @@ and discoverable at runtime. Before saying "I can't do that," ALWAYS search.
 - Never expose secrets; pass arguments exactly as the schema specifies.
 - Respect approval gates: only skip them when the response explicitly says
   approval is not required.
+
+DON'T PLACE TESTS FILES IN OTHER PLACE EXCEPT TESTS FOLDER!

@@ -145,7 +145,7 @@ agi:
   # Kalau Jev lambat, tick-nya tertahan menunggu — botnya tidak berpikir lebih
   # cepat, hanya menunggu. Ada lantai 500ms supaya interval nol tidak berubah
   # jadi busy loop.
-  tick_interval_sec: 1-2s
+  tick_interval_sec: 1
   llm_chance: 0.35
   self_preservation: true
   low_hp_threshold: 8

@@ -53,6 +53,17 @@ func (cm *CombatManager) Tick(ctx context.Context) {
 		return
 	}
 
+	// The dragon is the one target the loop below must not be pointed at. It
+	// spends most of the fight out of reach, and charging an unreachable target
+	// is how a bot that is winning the argument on paper loses the fight. The
+	// branch goes before the distance check, because a dragon forty blocks up
+	// is not a target to give up on — the crystals are what decide that, and
+	// they are a hundred blocks away from it.
+	if isEnderDragonTarget(target) {
+		cm.tickDragonFight(target)
+		return
+	}
+
 	botPos := cm.bot.GetCoords()
 	dist := cm.distance(botPos, target.Position)
 
@@ -78,42 +89,73 @@ func (cm *CombatManager) Tick(ctx context.Context) {
 	// creeper that backs off gets met with a bow instead of the sword it was
 	// holding two seconds ago.
 	situation := cm.situation(dist)
-	if choice := ChooseWeapon(cm.slotNames(), situation); choice.Kind == WeaponNone {
+	choice := ChooseWeapon(cm.slotNames(), situation)
+	if choice.Kind == WeaponNone {
 		cm.logger.Warn("Combat with nothing to fight with")
 	} else {
 		cm.holdWeapon(choice)
 	}
 	cm.applyShield(situation)
 
-	aimHeight := float32(1.2)
-	if plan.look == LookFeet {
+	ranged := choice.Kind == WeaponBow || choice.Kind == WeaponCrossbow
+
+	aimPoint := target.Position.Add(mgl32.Vec3{0, 1.2, 0})
+	if ranged {
+		// A dropped arrow needs the aim lifted by the distance, or the shot
+		// lands in front of the target rather than in it.
+		aimPoint = bowAimPoint(botPos, target.Position)
+	} else if plan.look == LookFeet {
 		// Endermen take eye contact as a challenge, so aim at the feet while
 		// still tracking the target.
-		aimHeight = 0.2
+		aimPoint = target.Position.Add(mgl32.Vec3{0, 0.2, 0})
 	}
-	cm.bot.LookAt(target.Position.Add(mgl32.Vec3{0, aimHeight, 0}))
+	cm.bot.LookAt(aimPoint)
 
 	cm.moveByPlan(botPos, target.Position, dist, plan)
 
-	if choice.Kind == WeaponBow || choice.Kind == WeaponCrossbow {
+	if ranged {
 		// A bow is a hold and a release, not a swing. It replaces the melee
 		// path entirely while it is the chosen weapon.
 		cm.shootRanged(choice, situation.HasArrows, target)
 		return
 	}
 
-	if dist <= 3.5 && time.Since(cm.lastAttack) >= 500*time.Millisecond {
-		if !cm.hasLineOfSight(target) {
-			cm.logger.Info("Target out of sight; not attacking", "name", target.Name)
-			return
-		}
-		cm.attack(targetID, target.Position)
-		cm.lastAttack = time.Now()
-		// Every swing costs the held tool a point of life. Counting it here is
-		// the only place durability is actually consumed, which is what makes
-		// the count mean anything.
-		cm.durability.Record(cm.bot.GetHeldItemSlot())
+	cm.swingAt(target)
+}
+
+// swingAt is the melee half of a tick: the range check, the cooldown, the sight
+// check, the hit, and the durability that has to be paid for it.
+//
+// These are one decision rather than five, and the dragon path needed the same
+// five. A duplicated cooldown is the kind of thing that works right up until a
+// second call site runs it at a different rate, and then the bot is swinging
+// faster than the server will answer.
+func (cm *CombatManager) swingAt(target *entity.Info) {
+	if cm.distance(cm.bot.GetCoords(), target.Position) > 3.5 {
+		return
 	}
+	if time.Since(cm.lastAttack) < 500*time.Millisecond {
+		return
+	}
+	if !cm.hasLineOfSight(target) {
+		cm.logger.Info("Target out of sight; not attacking", "name", target.Name)
+		return
+	}
+	cm.attack(target.ID, target.Position)
+	cm.lastAttack = time.Now()
+	// Every swing costs the held tool a point of life. Counting it here is the
+	// only place durability is actually consumed, which is what makes the count
+	// mean anything.
+	cm.durability.Record(cm.bot.GetHeldItemSlot())
+}
+
+// isEnderDragonTarget reports whether the engaged entity is the dragon.
+//
+// It reads the name and the type rather than the type alone, because the type
+// is whatever the server put in the AddActor packet and a misread here would
+// point the whole fight at the wrong thing.
+func isEnderDragonTarget(target *entity.Info) bool {
+	return IsEnderDragon(target.Name) || IsEnderDragon(target.Type)
 }
 
 // slotNames is the inventory as a plain slot-to-name map, which is the shape

@@ -118,18 +118,71 @@ func TestDecideReflexLooksAtNearestNewcomer(t *testing.T) {
 }
 
 // TestDecideReflexDoesNotReissueAHeldGaze stops the head snapping back and
-// forth. The bot is already looking at someone; turning again mid-gaze is the
-// single most obviously robotic tell there is.
+// forth. The bot has already greeted this player; turning again is the single
+// most obviously robotic tell there is.
+//
+// The acknowledgement is Greeted rather than LookingAt: the gaze itself only
+// lasts vision_hold_sec, and re-firing every time it lapsed starved the rest of
+// the brain (see TestReflexLookDoesNotStarveTheDecisionLayer).
 func TestDecideReflexDoesNotReissueAHeldGaze(t *testing.T) {
 	t.Parallel()
 
 	got := agi.DecideReflex(agi.Snapshot{
 		HP:     20,
 		Hunger: 20,
-		Nearby: []agi.Person{{Name: "Near", Distance: 2, HasLineOf: true, LookingAt: true}},
+		Nearby: []agi.Person{{Name: "Near", Distance: 2, HasLineOf: true, Greeted: true}},
 	}, thresholds)
 	if got.Kind != agi.ReflexNone {
-		t.Errorf("DecideReflex() = %v, want ReflexNone while already looking at them", got.Kind)
+		t.Errorf("DecideReflex() = %v, want ReflexNone for a player already greeted", got.Kind)
+	}
+
+	// Still looking at them, which is the older and narrower condition.
+	held := agi.DecideReflex(agi.Snapshot{
+		HP:     20,
+		Hunger: 20,
+		Nearby: []agi.Person{{Name: "Near", Distance: 2, HasLineOf: true, LookingAt: true, Greeted: true}},
+	}, thresholds)
+	if held.Kind != agi.ReflexNone {
+		t.Errorf("DecideReflex() = %v, want ReflexNone while the gaze is still held", held.Kind)
+	}
+}
+
+// TestReflexLookDoesNotStarveTheDecisionLayer is the freeze this fixes.
+//
+// ReflexLook consumes the whole tick: Tick returns as soon as any reflex fires,
+// so the natural-mode brain behind it never runs. When "already looked at" was
+// decided by the current gaze, a standing player re-armed the reflex the moment
+// the 5s hold lapsed — and on a 1-2s tick that is most ticks, so the bot looked
+// at the player forever and never once decided to do anything.
+//
+// A player who has been greeted stays greeted for the cooldown, so one arrival
+// costs one reflex.
+func TestReflexLookDoesNotStarveTheDecisionLayer(t *testing.T) {
+	t.Parallel()
+
+	// The player is in view, in the same place, and the head has since turned
+	// away (LookingAt false). Before the fix this re-fired ReflexLook.
+	snap := agi.Snapshot{
+		HP:     20,
+		Hunger: 20,
+		Nearby: []agi.Person{{Name: "Near", Distance: 2, HasLineOf: true, Greeted: true}},
+	}
+
+	for i := 0; i < 50; i++ {
+		if got := agi.DecideReflex(snap, thresholds); got.Kind != agi.ReflexNone {
+			t.Fatalf("tick %d: DecideReflex() = %v, want ReflexNone; the vision reflex is re-firing and consuming every tick",
+				i, got.Kind)
+		}
+	}
+
+	// A genuinely new arrival still gets looked at.
+	fresh := agi.Snapshot{
+		HP:     20,
+		Hunger: 20,
+		Nearby: []agi.Person{{Name: "Newcomer", Distance: 2, HasLineOf: true}},
+	}
+	if got := agi.DecideReflex(fresh, thresholds); got.Kind != agi.ReflexLook {
+		t.Errorf("DecideReflex() = %v, want ReflexLook for a player who has not been greeted", got.Kind)
 	}
 }
 

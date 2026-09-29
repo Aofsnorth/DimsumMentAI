@@ -25,13 +25,23 @@ func init() {
 	actionHandlers["pvp"] = handlePVP
 }
 
+// handleAttack engages the nearest visible mob. The combat manager runs the
+// fight on its own, so the step reports whether a target was actually engaged —
+// "nothing to attack" is a failure, not a quiet success.
 func handleAttack(b *bot.Bot, param, user string) {
 	target, ok := selectAttackTarget(b, param, user)
 	if !ok {
 		b.Logger.Warn("ExecuteAction: no visible non-item mob found to attack", "param", param)
+		reportStatus(b, user, event.ActionStatus{
+			Action:  "attack",
+			Item:    param,
+			Success: false,
+			Error:   "nggak nemu mob yang bisa diserang",
+		})
 		return
 	}
 	b.CombatMgr.EngageTarget(target.ID)
+	reportStatus(b, user, event.ActionStatus{Action: "attack", Item: target.Name, Success: true})
 }
 
 func selectAttackTarget(b *bot.Bot, param, user string) (*entity.Info, bool) {
@@ -63,6 +73,9 @@ func (v visibilityReader) GetBlockName(x, y, z int32) (string, bool) {
 	return "minecraft:air", true
 }
 
+// handlePVP engages a named player. EngagePlayer answers whether the target
+// was found, so a missing player fails the step instead of leaving the plan to
+// assume the duel started.
 func handlePVP(b *bot.Bot, param, user string) {
 	target := param
 	if target == "" {
@@ -70,11 +83,24 @@ func handlePVP(b *bot.Bot, param, user string) {
 	}
 	if target == "" || strings.EqualFold(target, b.Name) {
 		b.Logger.Warn("ExecuteAction: no PVP target found", "param", param)
+		reportStatus(b, user, event.ActionStatus{
+			Action:  "pvp",
+			Success: false,
+			Error:   "butuh nama pemain untuk pvp",
+		})
 		return
 	}
 	if !b.CombatMgr.EngagePlayer(target) {
 		b.Logger.Warn("ExecuteAction: PVP player target not found", "target", target)
+		reportStatus(b, user, event.ActionStatus{
+			Action:  "pvp",
+			Item:    target,
+			Success: false,
+			Error:   fmt.Sprintf("nggak nemu pemain %s", target),
+		})
+		return
 	}
+	reportStatus(b, user, event.ActionStatus{Action: "pvp", Item: target, Success: true})
 }
 
 func copyActorsLocked(actors map[uint64]*entity.Info) map[uint64]*entity.Info {
@@ -152,14 +178,14 @@ func runCraftAction(b *bot.Bot, param, user string, report bool) event.ActionSta
 		b.Logger.Warn("CraftItem failed", "err", err, "item", itemName)
 		status.Error = err.Error()
 		if report {
-			b.ReportActionStatus(user, status)
+			reportStatus(b, user, status)
 		}
 		return status
 	}
 	status.Count = actual
 	status.Success = true
 	if report {
-		b.ReportActionStatus(user, status)
+		reportStatus(b, user, status)
 	}
 	return status
 }
@@ -638,9 +664,17 @@ func computeCrafts(desiredCount, outputPerCraft int) int {
 	return crafts
 }
 
+// handleTake is the legacy single-container give, kept for callers that reach
+// it directly. The labelled search in storage_handlers.go is what the "take"
+// label uses; this one still reports so a plan step is never left waiting.
 func handleTake(b *bot.Bot, param, user string) {
 	go func() {
 		if strings.TrimSpace(param) == "" {
+			reportStatus(b, user, event.ActionStatus{
+				Action:  "take",
+				Success: false,
+				Error:   "butuh nama barang, contoh: take:oak_log,3",
+			})
 			return
 		}
 		parts := strings.Split(param, ",")
@@ -654,12 +688,21 @@ func handleTake(b *bot.Bot, param, user string) {
 		}
 		success := b.InventoryMgr.Chest().GiveItem(context.Background(), itemName, user, count)
 		b.Logger.Debug("take action complete", "success", success, "item", itemName)
+		reportBoolOutcome(b, user, "take", itemName, success, fmt.Sprintf("gagal mengambil %s", itemName))
 	}()
 }
 
+// handleGive hands items to a player. The chest manager returns whether the
+// handoff actually happened, so the step reports that rather than assuming the
+// toss landed.
 func handleGive(b *bot.Bot, param, user string) {
 	go func() {
 		if strings.TrimSpace(param) == "" {
+			reportStatus(b, user, event.ActionStatus{
+				Action:  "give",
+				Success: false,
+				Error:   "butuh nama barang, contoh: give:oak_log,3",
+			})
 			return
 		}
 		parts := strings.Split(param, ",")
@@ -673,6 +716,7 @@ func handleGive(b *bot.Bot, param, user string) {
 		}
 		success := b.InventoryMgr.Chest().GiveItem(context.Background(), itemName, user, count)
 		b.Logger.Debug("give action complete", "success", success, "item", itemName)
+		reportBoolOutcome(b, user, "give", itemName, success, fmt.Sprintf("gagal memberi %s ke %s", itemName, user))
 	}()
 }
 

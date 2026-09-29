@@ -105,10 +105,9 @@ func (e *Explorer) ExploreSpiral(ctx context.Context, maxRadius int, waypointInt
 		e.mu.Unlock()
 
 		if !visited {
-			e.bot.NavigateTo(target)
-			time.Sleep(3 * time.Second) // walk for a bit
-			e.bot.StopMovement()
-			waypoints++
+			if e.walkWaypoint(ctx, target, 3*time.Second) {
+				waypoints++
+			}
 
 			e.logger.Info("Exploration waypoint reached", "pos", target, "waypoints", waypoints)
 		}
@@ -125,7 +124,7 @@ func (e *Explorer) ExploreSpiral(ctx context.Context, maxRadius int, waypointInt
 		Action:  "explore",
 		Item:    "spiral",
 		Count:   waypoints,
-		Success: true,
+		Success: waypoints > 0,
 	})
 	return waypoints
 }
@@ -138,7 +137,13 @@ func (e *Explorer) ExploreSpiral(ctx context.Context, maxRadius int, waypointInt
 // finding nothing, which presents as a bot that wanders in place forever.
 // Short hops stay inside the loaded radius and actually produce movement.
 func (e *Explorer) ExploreRandom(ctx context.Context, duration time.Duration) int {
+	ctx, cancel := context.WithTimeout(ctx, duration)
+	defer cancel()
 	e.mu.Lock()
+	if e.isExploring {
+		e.mu.Unlock()
+		return 0
+	}
 	e.isExploring = true
 	e.mu.Unlock()
 
@@ -151,7 +156,7 @@ func (e *Explorer) ExploreRandom(ctx context.Context, duration time.Duration) in
 	waypoints := 0
 	deadline := time.Now().Add(duration)
 
-	for time.Now().Before(deadline) {
+	for time.Now().Before(deadline) && e.IsExploring() {
 		select {
 		case <-ctx.Done():
 			e.bot.ReportActionStatus("", event.ActionStatus{
@@ -175,10 +180,9 @@ func (e *Explorer) ExploreRandom(ctx context.Context, duration time.Duration) in
 		z := pos.Z() + float32(math.Sin(angle))*float32(dist)
 		target := mgl32.Vec3{x, pos.Y(), z}
 
-		e.bot.NavigateTo(target)
-		time.Sleep(4 * time.Second)
-		e.bot.StopMovement()
-		waypoints++
+		if e.walkWaypoint(ctx, target, 4*time.Second) {
+			waypoints++
+		}
 
 		e.logger.Info("Random exploration waypoint", "pos", target)
 	}
@@ -187,7 +191,7 @@ func (e *Explorer) ExploreRandom(ctx context.Context, duration time.Duration) in
 		Action:  "explore",
 		Item:    "random",
 		Count:   waypoints,
-		Success: true,
+		Success: waypoints > 0,
 	})
 	return waypoints
 }
@@ -249,17 +253,16 @@ func (e *Explorer) ExploreDirection(ctx context.Context, direction string, dista
 		z := pos.Z() + float32(math.Sin(angle*math.Pi/180))*float32(traveled)
 		target := mgl32.Vec3{x, pos.Y(), z}
 
-		e.bot.NavigateTo(target)
-		time.Sleep(4 * time.Second)
-		e.bot.StopMovement()
-		waypoints++
+		if e.walkWaypoint(ctx, target, 4*time.Second) {
+			waypoints++
+		}
 	}
 
 	e.bot.ReportActionStatus("", event.ActionStatus{
 		Action:  "exploredir",
 		Item:    direction,
-		Count:   distance,
-		Success: true,
+		Count:   waypoints,
+		Success: waypoints > 0,
 	})
 	return waypoints
 }
@@ -328,6 +331,39 @@ func (e *Explorer) Stop() {
 	e.isExploring = false
 	e.mu.Unlock()
 	e.bot.StopMovement()
+}
+
+// walkWaypoint counts arrival, never an issued navigation request.
+func (e *Explorer) walkWaypoint(ctx context.Context, target mgl32.Vec3, budget time.Duration) bool {
+	if ctx.Err() != nil || !e.IsExploring() {
+		return false
+	}
+	origin := e.bot.GetCoords()
+	e.bot.NavigateTo(target)
+	defer e.bot.StopMovement()
+	timer := time.NewTimer(budget)
+	defer timer.Stop()
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return false
+		case <-timer.C:
+			return waypointReached(origin, e.bot.GetCoords(), target)
+		case <-ticker.C:
+			if !e.IsExploring() {
+				return false
+			}
+			if waypointReached(origin, e.bot.GetCoords(), target) {
+				return true
+			}
+		}
+	}
+}
+
+func waypointReached(origin, current, target mgl32.Vec3) bool {
+	return current.Sub(origin).Len() >= 1 && current.Sub(target).Len() <= 2
 }
 
 func areaKey(pos mgl32.Vec3) string {

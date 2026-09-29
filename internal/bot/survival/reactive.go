@@ -68,6 +68,7 @@ type reactiveState struct {
 	lastSleepAttempt   time.Time
 	lastShelterAttempt time.Time
 	lastTorchAttempt   time.Time
+	lastArmorAttempt   time.Time
 }
 
 // NightPlan is the decision about what to do about the dark, before any of it

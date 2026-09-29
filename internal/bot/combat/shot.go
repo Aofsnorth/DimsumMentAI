@@ -9,7 +9,11 @@
 
 package combat
 
-import "time"
+import (
+	"time"
+
+	"github.com/go-gl/mathgl/mgl32"
+)
 
 const (
 	// fullBowDraw is how long a bow must be held before release for a full-
@@ -25,6 +29,45 @@ const (
 	// shorter than the animation allows.
 	bowShotInterval = 1500 * time.Millisecond
 )
+
+// Arrow flight, used to aim.
+const (
+	// arrowSpeed is the horizontal blocks-per-tick of a fully drawn arrow. It
+	// is the number that makes a shot at twenty blocks reach at all.
+	arrowSpeed = 3.0
+	// arrowGravity is the vertical pull on an arrow in flight, per tick.
+	arrowGravity = 0.05
+)
+
+// bowAimHeight is how far up a normal mob body the aim point sits: the middle
+// of a two-block-tall target rather than its base, so a shot at a zombie does
+// not sail over its head.
+const bowAimHeight float32 = 1.2
+
+// bowAimPoint is where to aim so the arrow arrives at the target rather than
+// burying itself in the ground short of them.
+//
+// An arrow does not travel in a straight line. It is launched fast and pulled
+// down the whole way, so a shot aimed straight at the body's centre lands
+// below the feet at any real distance — badly so at twenty blocks, which is
+// exactly where a bow is worth holding. Dropping the calculation into a pure
+// function keeps the arithmetic honest and testable: the aim point is the
+// target's centre lifted by half a gravity times the flight time squared.
+func bowAimPoint(from, target mgl32.Vec3) mgl32.Vec3 {
+	return liftAimPoint(from, target, bowAimHeight)
+}
+
+// liftAimPoint is bowAimPoint for a target that is not a two-block mob.
+//
+// The gravity correction is the same either way; only the height the arrow is
+// aimed at changes, so the arithmetic lives here once and the callers say how
+// tall their target is.
+func liftAimPoint(from, target mgl32.Vec3, centre float32) mgl32.Vec3 {
+	point := target.Add(mgl32.Vec3{0, centre, 0})
+	ticks := float64(horizontalDistance(from, target)) / arrowSpeed
+	drop := float32(0.5 * arrowGravity * ticks * ticks)
+	return point.Add(mgl32.Vec3{0, drop, 0})
+}
 
 // ShotAction is what the ranged state machine does next.
 type ShotAction int
