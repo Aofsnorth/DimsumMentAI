@@ -2,6 +2,7 @@ package chest
 
 import (
 	"context"
+	"log/slog"
 	"math"
 	"strings"
 	"time"
@@ -20,7 +21,7 @@ import (
 // finder never returns a block the bot would then have to walk a long way to.
 const chestSearchRadius = 12
 
-// findNearbyChest returns the position of the closest real container block, or
+// FindNearbyChest returns the position of the closest real container block, or
 // the zero BlockPos when there is none.
 //
 // It filters on the block's name, not on solidity. The previous version
@@ -31,7 +32,7 @@ const chestSearchRadius = 12
 //
 // storage.IsContainerBlock is the same predicate the authoritative storage
 // service uses, so the two agree on what counts as a chest.
-func (ic *Container) findNearbyChest() protocol.BlockPos {
+func (ic *Container) FindNearbyChest() protocol.BlockPos {
 	botPos := ic.bot.GetCoords()
 	bx := int32(math.Floor(float64(botPos.X())))
 	by := int32(math.Floor(float64(botPos.Y())))
@@ -189,12 +190,35 @@ func (ic *Container) GiveItem(ctx context.Context, itemName string, playerName s
 		return false
 	}
 
+	before := ic.snapshotItemActors()
+
 	err := ic.bot.DropItem(names[inv[targetSlot].NetworkID], int(count))
 	if err != nil {
 		return false
 	}
 
-	ic.logger.Info("Gave item successfully", "item", itemName, "count", count, "to", playerName)
+	// Confirm the item actually exists in the world before claiming it was given.
+	//
+	// Everything above this line is a plan: the bot walked to a standoff, aimed,
+	// and asked to drop. None of it is evidence. The drop is a thrown object with
+	// an initial velocity, and a throw that clips a wall, lands short, or is
+	// refused outright leaves the player holding nothing while this function says
+	// otherwise — and logged "Gave item successfully" while doing it.
+	//
+	// The server is the witness: a dropped item arrives as AddItemActor, which the
+	// bot already tracks in its actor map. So the check is a new item entity of
+	// the right name, near the recipient, that was not there before the drop.
+	given, reason := ic.waitForDroppedItem(before, names[inv[targetSlot].NetworkID], playerPos)
+	if !given {
+		ic.logger.Warn("GiveItem: the drop was sent but no item appeared for the player",
+			slog.String("item", itemName),
+			slog.String("to", playerName),
+			slog.String("reason", reason))
+		ic.bot.ResetLook()
+		return false
+	}
+
+	ic.logger.Info("gave item", "item", itemName, "count", count, "to", playerName)
 
 	// No backstep: the bot already stands one block farther than the recipient
 	// (see the standoff navigation above), so the tossed item lands in the
@@ -204,8 +228,94 @@ func (ic *Container) GiveItem(ctx context.Context, itemName string, playerName s
 	return true
 }
 
+// ItemActor is one dropped-item entity as the bot saw it.
+//
+// Exported because the delivery rule is a pure function over two snapshots and
+// that rule is worth testing without a live connection — which means a test has
+// to be able to build the "before" side of the comparison.
+type ItemActor struct {
+	id   uint64
+	name string
+	pos  mgl32.Vec3
+}
+
+// snapshotItemActors records every dropped item currently in the world, so the
+// confirmation afterwards can tell a new drop from one that was already lying
+// on the ground. Without this, a previous drop of the same item would satisfy
+// any check at all.
+func (ic *Container) snapshotItemActors() map[uint64]ItemActor {
+	out := make(map[uint64]ItemActor, 8)
+	for id, info := range ic.bot.GetEntities() {
+		if info == nil || !strings.Contains(strings.ToLower(info.Type), "item") {
+			continue
+		}
+		out[id] = ItemActor{id: id, name: info.Name, pos: info.Position}
+	}
+	return out
+}
+
+// dropConfirmTimeout bounds the wait for the item to show up. A local world
+// delivers AddItemActor within a few frames; a LAN host within a second. Past
+// that the drop is treated as not delivered rather than waited on forever.
+const dropConfirmTimeout = 2 * time.Second
+
+// dropConfirmRadius is how close to the recipient the item has to land. A throw
+// carries velocity, so the item is not at the player's feet, but it has to be
+// within pickup range or the player never gets it.
+const dropConfirmRadius = 4.0
+
+// waitForDroppedItem watches for a new dropped item of the given name landing
+// near the recipient.
+func (ic *Container) waitForDroppedItem(before map[uint64]ItemActor, itemName string, playerPos mgl32.Vec3) (bool, string) {
+	deadline := time.Now().Add(dropConfirmTimeout)
+	for {
+		if DroppedItemAppeared(before, ic.bot.GetEntities(), itemName, playerPos) {
+			return true, ""
+		}
+		if time.Now().After(deadline) {
+			return false, "no matching item entity appeared near the player"
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+// DroppedItemAppeared reports whether a new dropped item of itemName has landed
+// within reach of the recipient.
+//
+// It is a pure function over two snapshots so the rule can be tested without a
+// connection, and the rule has three parts, each of which a weaker check would
+// get wrong on its own:
+//
+//   - New. A drop of the same item already lying on the ground would satisfy any
+//     check that only looked for "an item with this name somewhere", which is how
+//     a bot ends up confident it delivered something it never threw.
+//   - The right name. A torch is not a diamond, and "some item appeared" is not
+//     evidence of anything.
+//   - Near the recipient. A throw carries velocity, so the item is not at the
+//     player's feet, but past pickup range the player never gets it and the
+//     claim is as false as a drop that clipped a wall.
+func DroppedItemAppeared(before map[uint64]ItemActor, now map[uint64]*entity.Info, itemName string, recipient mgl32.Vec3) bool {
+	want := strings.ToLower(itemName)
+	for id, info := range now {
+		if info == nil || !strings.Contains(strings.ToLower(info.Type), "item") {
+			continue
+		}
+		if _, existed := before[id]; existed {
+			continue
+		}
+		if !strings.Contains(strings.ToLower(info.Name), want) {
+			continue
+		}
+		if info.Position.Sub(recipient).Len() > dropConfirmRadius {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
 func (ic *Container) StoreItem(ctx context.Context, itemName string, count int32) bool {
-	chestPos := ic.findNearbyChest()
+	chestPos := ic.FindNearbyChest()
 	if chestPos == (protocol.BlockPos{}) {
 		ic.logger.Warn("StoreItem: no chests found nearby")
 		return false

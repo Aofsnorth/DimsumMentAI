@@ -2,9 +2,9 @@ package pathfinder
 
 import (
 	"container/heap"
-	"fmt"
 	"math"
 
+	"bedrock-ai/internal/debuglog"
 	"bedrock-ai/internal/safecast"
 )
 
@@ -33,11 +33,11 @@ func (pq *PriorityQueue) Pop() interface{} {
 	return item
 }
 
-// packKey encodes a 3D block coordinate into a single int64 for use as a
+// PackKey encodes a 3D block coordinate into a single int64 for use as a
 // map key. This is ~10x faster than fmt.Sprintf-based string keys and
 // eliminates GC pressure from string allocations during pathfinding.
 // Coordinate range: x/z ±2,097,151 (21 bits), y -2048..+2047 (12 bits).
-func packKey(x, y, z int32) int64 {
+func PackKey(x, y, z int32) int64 {
 	// Bit-cast int32→uint64 via uint32 (two's complement) instead of
 	// safecast.To: negative coordinates are the norm around spawn, and
 	// safecast clamps them all to 0, collapsing every negative-x/z node
@@ -68,12 +68,12 @@ func FindPath(startNode, targetNode Node, world WorldModel, allowFallback bool) 
 		Y: startNode.Y,
 		Z: startNode.Z,
 		G: 0,
-		H: heuristic(startNode, targetNode),
+		H: Heuristic(startNode, targetNode),
 	}
 	start.F = start.G + start.H
 
 	heap.Push(openSet, start)
-	startKey := packKey(start.X, start.Y, start.Z)
+	startKey := PackKey(start.X, start.Y, start.Z)
 	openMap[startKey] = start
 
 	maxIterations := maxIterationsForDistance(Distance(startNode, targetNode))
@@ -85,12 +85,12 @@ func FindPath(startNode, targetNode Node, world WorldModel, allowFallback bool) 
 	for openSet.Len() > 0 && iterations < maxIterations {
 		iterations++
 		current := heap.Pop(openSet).(*Node)
-		currentKey := packKey(current.X, current.Y, current.Z)
+		currentKey := PackKey(current.X, current.Y, current.Z)
 		delete(openMap, currentKey)
 		closedMap[currentKey] = true
 
-		if isTargetReached(current, targetNode) {
-			path := reconstructPath(current)
+		if IsTargetReached(current, targetNode) {
+			path := ReconstructPath(current)
 			if !current.Equal(&targetNode) {
 				path = append(path, targetNode)
 			}
@@ -110,21 +110,29 @@ func FindPath(startNode, targetNode Node, world WorldModel, allowFallback bool) 
 
 	// Diagnostic: A* exhausted without reaching target. Report iterations,
 	// open set residue, and best-node distance so we can see whether the
-	// search space exploded or neighbors are being vetoed wholesale.
-	fmt.Printf("[A* exhausted] iterations=%d maxIterations=%d openSetLen=%d closedSetLen=%d bestNodeDist=%.2f allowFallback=%v\n",
-		iterations, maxIterations, openSet.Len(), len(closedMap), closestDistance, allowFallback)
+	// search space exploded or neighbors are being vetoed wholesale. Sampled
+	// through debuglog: every failed pass of every repath lands here (up to
+	// three passes per repath), and unbuffered stdout writes in this spot
+	// stalled the search they were diagnosing.
+	debuglog.Log("P", "pathfinder/astar.go:FindPath", "A* exhausted without reaching target", map[string]any{
+		"iterations": iterations, "maxIterations": maxIterations,
+		"openSetLen": openSet.Len(), "closedSetLen": len(closedMap),
+		"bestNodeDist": closestDistance, "allowFallback": allowFallback,
+	})
 	if iterations <= 2 {
 		// Start had no neighbors — dump WHY. Probe each cardinal directly
 		// through the same predicates GetNeighbors uses.
 		if w, ok := world.(interface {
 			DebugNeighborVeto(n Node) string
 		}); ok {
-			fmt.Printf("[A* neighbor veto] %s\n", w.DebugNeighborVeto(startNode))
+			debuglog.Log("P", "pathfinder/astar.go:FindPath", "A* start had no neighbors", map[string]any{
+				"veto": w.DebugNeighborVeto(startNode),
+			})
 		}
 	}
 
 	if allowFallback && bestNode != start {
-		return smoothPath(reconstructPath(bestNode), world)
+		return smoothPath(ReconstructPath(bestNode), world)
 	}
 
 	return nil
@@ -142,7 +150,7 @@ func maxIterationsForDistance(distance float32) int32 {
 }
 
 func tryProcessNeighbor(openSet *PriorityQueue, openMap map[int64]*Node, closedMap map[int64]bool, current *Node, neighbor Node, targetNode Node) {
-	nKey := packKey(neighbor.X, neighbor.Y, neighbor.Z)
+	nKey := PackKey(neighbor.X, neighbor.Y, neighbor.Z)
 	if closedMap[nKey] {
 		return
 	}
@@ -159,7 +167,7 @@ func tryProcessNeighbor(openSet *PriorityQueue, openMap map[int64]*Node, closedM
 			Y:        neighbor.Y,
 			Z:        neighbor.Z,
 			G:        tentativeG,
-			H:        heuristic(neighbor, targetNode),
+			H:        Heuristic(neighbor, targetNode),
 			Parent:   current,
 			Action:   neighbor.Action,
 			LinkType: neighbor.LinkType,
@@ -180,7 +188,7 @@ func tryProcessNeighbor(openSet *PriorityQueue, openMap map[int64]*Node, closedM
 	}
 }
 
-func reconstructPath(endNode *Node) []Node {
+func ReconstructPath(endNode *Node) []Node {
 	path := make([]Node, 0, 64)
 	curr := endNode
 	for curr != nil {
@@ -193,17 +201,35 @@ func reconstructPath(endNode *Node) []Node {
 	return path
 }
 
-func isTargetReached(current *Node, target Node) bool {
+// IsTargetReached reports whether a node counts as having arrived.
+//
+// The horizontal slack is deliberate: a bot walking up to a tree rarely lands on
+// the exact cell, and standing beside the trunk is being at the tree in every
+// sense that matters — it is in reach to chop.
+//
+// The vertical slack was not, and it is what stopped a climb from ever
+// finishing. A node one block BELOW the target was accepted as arrival, and
+// FindPath then appended the target itself to the route as a step it had never
+// verified. So a five-block ascent was planned as four scaffold steps and a free
+// one-block step up onto a cell with nothing under it. The bot could not take
+// that step, the stuck detector fired, the route was rebuilt, and the whole
+// thing repeated — a bot that scaffolds perfectly well and never gets anywhere.
+//
+// Height is not something to be fuzzy about. The bot's Y comes from the server,
+// and a block of Y is a block the bot is not standing there.
+func IsTargetReached(current *Node, target Node) bool {
 	if current.X == target.X && current.Y == target.Y && current.Z == target.Z {
 		return true
 	}
-	dx := abs32(current.X - target.X)
-	dy := abs32(current.Y - target.Y)
-	dz := abs32(current.Z - target.Z)
-	return dx <= 1 && dz <= 1 && dy <= 1
+	if current.Y != target.Y {
+		return false
+	}
+	dx := Abs32(current.X - target.X)
+	dz := Abs32(current.Z - target.Z)
+	return dx <= 1 && dz <= 1
 }
 
-func abs32(val int32) int32 {
+func Abs32(val int32) int32 {
 	if val < 0 {
 		return -val
 	}
@@ -226,7 +252,7 @@ func smoothPath(path []Node, world WorldModel) []Node {
 		// Try to skip as many intermediate nodes as possible
 		j := len(path) - 1
 		for j > i+1 {
-			if canWalkDirectly(path[i], path[j], world) {
+			if CanWalkDirectly(path[i], path[j], world) {
 				break
 			}
 			j--
@@ -247,16 +273,16 @@ func smoothPath(path []Node, world WorldModel) []Node {
 	return smoothed
 }
 
-// canWalkDirectly checks if the bot can walk in a straight line between
+// CanWalkDirectly checks if the bot can walk in a straight line between
 // two path nodes without hitting solid blocks. It samples intermediate
 // positions and verifies floor + head clearance at each step.
-func canWalkDirectly(from, to Node, world WorldModel) bool {
+func CanWalkDirectly(from, to Node, world WorldModel) bool {
 	if !canSmoothLink(from, to) {
 		return false
 	}
 	dx := to.X - from.X
 	dz := to.Z - from.Z
-	horizDist := max(abs32(dx), abs32(dz))
+	horizDist := max(Abs32(dx), Abs32(dz))
 	if horizDist > 8 {
 		return false
 	}

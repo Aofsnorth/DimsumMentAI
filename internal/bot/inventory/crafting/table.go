@@ -169,6 +169,12 @@ func (m *Manager) OpenCraftingTable(ctx context.Context, pos protocol.BlockPos) 
 	return nil
 }
 
+// WindowID reports the workbench window the server assigned, or zero when no
+// workbench is open.
+func (m *Manager) WindowID() byte {
+	return m.windowID
+}
+
 // CloseWindow closes the workbench window the server assigned. Called after
 // CraftItem returns. A real client always closes what it opens, and the ID has
 // to be the assigned one — a guessed ID closes nothing and leaves the server

@@ -7,7 +7,7 @@ import (
 	"github.com/sandertv/gophertunnel/minecraft/protocol/packet"
 )
 
-// buildDropStackAction builds the vanilla server-authoritative drop action.
+// BuildDropStackAction builds the vanilla server-authoritative drop action.
 //
 // On inventory-authoritative Bedrock servers (the same servers that require
 // ItemStackRequest for crafting), a legacy world-drop InventoryTransaction is
@@ -19,7 +19,7 @@ import (
 //
 // count is clamped to the stack size; a non-positive count drops the whole
 // stack. The returned dropped count reflects what was actually requested.
-func buildDropStackAction(slot uint32, item protocol.ItemInstance, requestedCount int) (*protocol.DropStackRequestAction, uint16, error) {
+func BuildDropStackAction(slot uint32, item protocol.ItemInstance, requestedCount int) (*protocol.DropStackRequestAction, uint16, error) {
 	if item.Stack.Count == 0 {
 		return nil, 0, errors.New("item stack is empty")
 	}
@@ -34,14 +34,14 @@ func buildDropStackAction(slot uint32, item protocol.ItemInstance, requestedCoun
 
 	action := &protocol.DropStackRequestAction{
 		Count:    byte(dropped),
-		Source:   playerStackRequestSlot(slot, item.StackNetworkID),
+		Source:   PlayerStackRequestSlot(slot, item.StackNetworkID),
 		Randomly: false,
 	}
 	return action, dropped, nil
 }
 
-// buildDropSwing builds the arm animation shown when tossing an item.
-func buildDropSwing(entityRuntimeID uint64) *packet.Animate {
+// BuildDropSwing builds the arm animation shown when tossing an item.
+func BuildDropSwing(entityRuntimeID uint64) *packet.Animate {
 	return &packet.Animate{
 		ActionType:      packet.AnimateActionSwingArm,
 		EntityRuntimeID: entityRuntimeID,

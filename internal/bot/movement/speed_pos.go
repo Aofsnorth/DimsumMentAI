@@ -47,7 +47,7 @@ func (tc *TickContext) ladderPredictedPos() mgl32.Vec3 {
 }
 
 func (tc *TickContext) horizontalMovePredictedPos() mgl32.Vec3 {
-	yawDiff := angleDifference(tc.TargetYaw, tc.Yaw)
+	yawDiff := AngleDifference(tc.TargetYaw, tc.Yaw)
 	absYawDiff := math.Abs(float64(yawDiff))
 	speed, needsStepUp, isMidJump := tc.computeMoveSpeed(absYawDiff)
 	targetX, targetZ := tc.computeTargetPosition(speed, needsStepUp, isMidJump)
@@ -168,10 +168,17 @@ func (tc *TickContext) checkWallCollision(targetX, targetZ float32, needsStepUp,
 	// in place against the ledge forever. Ignore that single bottom level here
 	// and rely on the head level (minY+1) to catch genuine 2+ block walls.
 	groundedStepUp := needsStepUp && !isMidJump
+	// Controlled descent sinks the whole body toward the landing level while the
+	// horizontal step is still sliding off the ledge, so the sunk body keeps
+	// intersecting the very support it is leaving behind and the scan cancels the
+	// horizontal step forever (the permanent freeze seen at every fall link). The
+	// corridor between the two path nodes was validated by A*, so rows below the
+	// level the link descends from are terrain the bot walks off, never walls.
+	descentFromY, linkDescends := tc.descentLinkFromY()
 
 	for bx := minX; bx <= maxX; bx++ {
 		for by := minY; by <= maxY; by++ {
-			if groundedStepUp && by == minY {
+			if WallScanSkipsRow(by, minY, descentFromY, groundedStepUp, linkDescends) {
 				continue
 			}
 			for bz := minZ; bz <= maxZ; bz++ {
@@ -189,6 +196,39 @@ func (tc *TickContext) checkWallCollision(targetX, targetZ float32, needsStepUp,
 		return false
 	}
 	return false
+}
+
+// WallScanSkipsRow reports whether the body-volume wall scan must ignore a block row.
+// Two rows are never walls:
+//   - the bottom row of a grounded step-up: that row is the support the bot climbs onto;
+//   - rows below descentFromY while following a descending path link: that is the
+//     corridor between the two A*-validated nodes — the ledge being left behind — so a
+//     body sunk toward the landing level must never read it as a wall.
+func WallScanSkipsRow(by, minY, descentFromY int32, groundedStepUp, linkDescends bool) bool {
+	if groundedStepUp && by == minY {
+		return true
+	}
+	return linkDescends && by < descentFromY
+}
+
+// descentLinkFromY returns the feet level the active path link descends from, and
+// whether the link descends at all. False whenever the next node is not strictly
+// below the node the bot departed: flat, rising and jump links keep the strict scan.
+func (tc *TickContext) descentLinkFromY() (int32, bool) {
+	if !tc.HasPath {
+		return 0, false
+	}
+	tc.B.Mu.Lock()
+	defer tc.B.Mu.Unlock()
+	if tc.B.PathIndex == 0 || tc.B.PathIndex >= len(tc.B.CurrentPath) {
+		return 0, false
+	}
+	prev := tc.B.CurrentPath[tc.B.PathIndex-1]
+	next := tc.B.CurrentPath[tc.B.PathIndex]
+	if next.Y >= prev.Y {
+		return 0, false
+	}
+	return prev.Y, true
 }
 
 func (tc *TickContext) plannedDescent(baseY int32) (int32, int32, bool) {

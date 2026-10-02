@@ -40,6 +40,12 @@ func (b *Bot) IsBotEcho(text string) bool {
 
 // SendSafeChat sends a message in chunks if it exceeds 250 characters.
 func (b *Bot) SendSafeChat(msg string) {
+	// No connection means there is nowhere to say it. A status report can be
+	// composed on a bot that has not finished dialling, and a nil Conn here
+	// takes the whole process down over a chat line nobody would have received.
+	if b.Conn == nil {
+		return
+	}
 	chunks := splitMessage(msg, 220)
 	for _, chunk := range chunks {
 		if chunk == "" {

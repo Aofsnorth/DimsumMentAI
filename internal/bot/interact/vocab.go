@@ -106,7 +106,7 @@ var stateChangingFamilies = []string{
 // change its block state, which decides whether a click can be verified by
 // watching the block's network ID.
 func activationChangesState(name string) bool {
-	n := normalise(name)
+	n := Normalise(name)
 	if strings.Contains(n, "iron_door") || strings.Contains(n, "iron_trapdoor") {
 		return false
 	}
@@ -131,7 +131,7 @@ func activationChangesState(name string) bool {
 // "klik sign di depan" targets a sign rather than whatever is closest to the
 // camera.
 func ParseRequest(param string) Request {
-	clean := normalise(param)
+	clean := Normalise(param)
 	request := Request{Raw: param}
 
 	if canonical, ok := matchConcept(clean, blockConcepts); ok {
@@ -204,7 +204,7 @@ func EntityNameMatches(ent *entity.Info, canonical string) bool {
 	if !ok {
 		aliases = []string{canonical}
 	}
-	return containsAny(normalise(ent.Type), aliases) || containsAny(normalise(ent.Name), aliases)
+	return containsAny(Normalise(ent.Type), aliases) || containsAny(Normalise(ent.Name), aliases)
 }
 
 // BlockNameMatches reports whether a block is what the request named.
@@ -213,19 +213,19 @@ func BlockNameMatches(blockName, canonical string) bool {
 	if !ok {
 		aliases = []string{canonical}
 	}
-	return containsAny(normalise(blockName), aliases)
+	return containsAny(Normalise(blockName), aliases)
 }
 
 // IsInteractiveBlockName reports whether a block has an interaction worth
 // clicking. Signs are included: clicking one is how a player reads it, even
 // though the text itself arrives out of band.
 func IsInteractiveBlockName(blockName string) bool {
-	return containsAny(normalise(blockName), interactiveBlockNames)
+	return containsAny(Normalise(blockName), interactiveBlockNames)
 }
 
 // IsNPCType reports whether an entity should also get an NPC dialogue request.
 func IsNPCType(entityType string) bool {
-	name := normalise(entityType)
+	name := Normalise(entityType)
 	return strings.Contains(name, "npc") || strings.Contains(name, "education")
 }
 
@@ -235,7 +235,7 @@ func isInteractableEntity(ent *entity.Info) bool {
 	if ent == nil {
 		return false
 	}
-	name := normalise(ent.Type)
+	name := Normalise(ent.Type)
 	if name == "item" || strings.Contains(name, "item_entity") {
 		return false
 	}
@@ -252,8 +252,8 @@ func ForwardVector(yaw float32) mgl32.Vec3 {
 	return mgl32.Vec3{float32(math.Cos(rad)), 0, float32(math.Sin(rad))}.Normalize()
 }
 
-// withinCone reports whether a position sits inside a cone around forward.
-func withinCone(from, to mgl32.Vec3, forward mgl32.Vec3, coneDegrees float32) bool {
+// WithinCone reports whether a position sits inside a cone around forward.
+func WithinCone(from, to mgl32.Vec3, forward mgl32.Vec3, coneDegrees float32) bool {
 	dx := to.X() - from.X()
 	dz := to.Z() - from.Z()
 	length := float32(math.Hypot(float64(dx), float64(dz)))
@@ -293,9 +293,9 @@ func BlockFaceToward(pos protocol.BlockPos, from mgl32.Vec3) int32 {
 	dy := from.Y() - (float32(pos.Y()) + 0.5)
 	dz := from.Z() - (float32(pos.Z()) + 0.5)
 
-	absX := abs32(dx)
-	absY := abs32(dy)
-	absZ := abs32(dz)
+	absX := Abs32(dx)
+	absY := Abs32(dy)
+	absZ := Abs32(dz)
 
 	switch {
 	case absY > absX && absY > absZ:
@@ -316,7 +316,7 @@ func BlockFaceToward(pos protocol.BlockPos, from mgl32.Vec3) int32 {
 	}
 }
 
-func abs32(v float32) float32 {
+func Abs32(v float32) float32 {
 	if v < 0 {
 		return -v
 	}

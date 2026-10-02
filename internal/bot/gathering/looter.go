@@ -44,6 +44,12 @@ func (l *Looter) CollectMatchingDropsUntil(ctx context.Context, maxDist float32,
 func (l *Looter) collectDrops(ctx context.Context, maxDist float32, itemName string, beforeCount int, timeout time.Duration) int {
 	collected := 0
 	l.logger.Info("Starting item sweep", "max_distance", maxDist, "item", itemName)
+	// The sweep walks to the drops, which re-aims navigation mid-journey. The
+	// journey that called this is saved here and put back afterwards: without
+	// that, the sweep overwrites the caller's destination and the bot stands
+	// still where the interrupted journey died.
+	savedJourney := l.rg.bot.SnapshotJourney()
+	defer l.rg.bot.RestoreJourney(savedJourney)
 	deadline := time.Now().Add(timeout)
 	attempted := make(map[uint64]bool)
 	pollInv := beforeCount >= 0 && itemName != ""
@@ -70,7 +76,6 @@ func (l *Looter) collectDrops(ctx context.Context, maxDist float32, itemName str
 		}
 	}
 
-	l.rg.bot.StopMovement()
 	return collected
 }
 
@@ -179,8 +184,16 @@ func (l *Looter) closestDrop(maxDist float32, itemName string, attempted map[uin
 			continue
 		}
 
-		dy := e.Position.Y() - botPos.Y()
-		if dy > 3 || dy < -4 {
+		// DropWithinReach is the vertical window, and it used to be a hardcoded
+		// three blocks up and four down. That is where every dropped log went.
+		//
+		// A trunk is chopped by towering: the bot climbs, breaks the logs high
+		// up, and the drops fall to the ground at the base — five, six, seven
+		// blocks below the body. The window rejected every one of them before
+		// the distance check ran, so the sweep logged "Starting item sweep",
+		// found nothing, and spun for its full timeout. The log showed exactly
+		// that: a sweep that starts and then never says it is heading anywhere.
+		if !DropWithinReach(botPos, e.Position, maxDist) {
 			continue
 		}
 
@@ -198,4 +211,17 @@ func (l *Looter) distance(a, b mgl32.Vec3) float32 {
 	dy := a.Y() - b.Y()
 	dz := a.Z() - b.Z()
 	return float32(math.Sqrt(float64(dx*dx + dy*dy + dz*dz)))
+}
+
+// DropWithinReach reports whether a drop at target is close enough to the body
+// for a sweep to go and get it.
+//
+// The vertical bound is derived from the same radius as the horizontal one, so
+// a sweep cannot reject a drop it is plainly able to walk to. That pairing is
+// the whole point: the two used to be independent, and a fixed three-block
+// vertical window against a caller-chosen horizontal radius is what made a
+// tower-chopped log invisible to the bot standing directly above it.
+func DropWithinReach(from, target mgl32.Vec3, maxDist float32) bool {
+	dy := target.Y() - from.Y()
+	return dy <= maxDist && dy >= -maxDist
 }

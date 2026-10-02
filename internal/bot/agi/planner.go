@@ -56,14 +56,14 @@ const stepMaxAttempts = 2
 // plan can tell the difference between "walked there" and "tried to walk there".
 const arrivalRadius = 4.0
 
-// plannerSystemPrompt is the planner's contract: one situation in, one plan out.
+// PlannerSystemPrompt is the planner's contract: one situation in, one plan out.
 //
 // It is a function rather than a constant because the step budget is
 // configuration. Baking the number into the text would let the prompt and the
 // clamp disagree, and a plan the prompt called a wishlist while the code called
 // it finished is exactly the kind of quiet disagreement that makes a system
 // hard to reason about later.
-func plannerSystemPrompt(maxSteps int) string {
+func PlannerSystemPrompt(maxSteps int) string {
 	return fmt.Sprintf(`You are the planner for a Minecraft Bedrock bot. You do not play the game and you do not chat. You are given one situation and you write one plan for it.
 
 Reply with ONLY a JSON object, no prose and no markdown:
@@ -81,6 +81,10 @@ Step kinds:
 - rest: stand still and recover
 - observe: look around and read signs
 - enter: go through a portal
+- light_portal: ignite an unlit Nether portal frame with flint_and_steel
+- fill_frame: fill End portal frames with eyes of ender
+- explore_stronghold: search for a stronghold by walking and scanning
+- destroy_crystal: shoot an End crystal with a bow
 - wait: let time pass
 
 Rules:
@@ -152,11 +156,9 @@ func ParsePlanReply(reply string, maxSteps int) (Plan, bool) {
 	for _, s := range parsed.Steps {
 		kind, known := normalizeStepKind(s.Kind)
 		if !known {
-			// Dropping an unimplementable step is not the same as failing the
-			// plan. The remaining steps are still a real sequence, and the
-			// dropped one is visible in the plan's own progress. A step the brain
-			// would have to guess at is worse than a shorter plan.
-			continue
+			// A later step may depend on this one (eyes before entering the End).
+			// Removing it fabricates a reachable plan and eventual completion.
+			return Plan{}, false
 		}
 		step := PlanStep{
 			Description: strings.TrimSpace(s.Description),
@@ -353,8 +355,8 @@ func StepAction(step PlanStep) (label, param string, ok bool) {
 //  4. A failed step goes back to the planner. It is never skipped.
 //  5. Otherwise the current step runs, one at a time.
 func (r *Runner) planningTick(ctx context.Context, snap Snapshot, judgement Judgement) {
-	plan := r.currentPlan()
-	if plan.Objective != "" && plan.planExpired(snap.Now) {
+	plan := r.CurrentPlan()
+	if plan.Objective != "" && plan.PlanExpired(snap.Now) {
 		r.b.Logger.Info("AGI: plan expired",
 			"plan", plan.ID,
 			"objective", plan.Objective,
@@ -363,7 +365,7 @@ func (r *Runner) planningTick(ctx context.Context, snap Snapshot, judgement Judg
 		plan = Plan{}
 	}
 
-	if plan.Objective == "" || plan.planDueForReplanning(snap.Now) {
+	if plan.Objective == "" || plan.PlanDueForReplanning(snap.Now) {
 		r.requestPlan(ctx, snap, judgement)
 	}
 
@@ -374,7 +376,7 @@ func (r *Runner) planningTick(ctx context.Context, snap Snapshot, judgement Judg
 		return
 	}
 
-	if planHasFailedStep(plan) {
+	if PlanHasFailedStep(plan) {
 		// A failure is the planner's to answer for, not the executor's to skip
 		// past. The cooldown inside requestPlan keeps this from becoming a
 		// request per tick.
@@ -392,7 +394,10 @@ func (r *Runner) planningTick(ctx context.Context, snap Snapshot, judgement Judg
 		r.requestPlan(ctx, snap, judgement)
 		return
 	}
-	if snap.Busy || r.busy {
+	r.mu.Lock()
+	stepBusy := r.busy
+	r.mu.Unlock()
+	if snap.Busy || snap.Exploring || stepBusy {
 		// One action at a time. A second one started here would fight the first
 		// over the same body.
 		return
@@ -403,8 +408,8 @@ func (r *Runner) planningTick(ctx context.Context, snap Snapshot, judgement Judg
 	r.dispatchStep(ctx, step, index)
 }
 
-// planHasFailedStep reports whether the planner has something to answer for.
-func planHasFailedStep(p Plan) bool {
+// PlanHasFailedStep reports whether the planner has something to answer for.
+func PlanHasFailedStep(p Plan) bool {
 	for _, step := range p.Steps {
 		if step.State == StepFailed {
 			return true
@@ -436,7 +441,7 @@ func (r *Runner) requestPlan(ctx context.Context, snap Snapshot, judgement Judge
 		// The state text already carries the active plan, so a replan sees the
 		// steps that are done and the ones that are not. That is what lets the
 		// planner revise rather than restart.
-		reply, err := r.b.AiClient.AskPlanner(plannerSystemPrompt(r.cfg.PlanMaxSteps), r.plannerMessageFor(snap))
+		reply, err := r.b.AiClient.AskPlanner(PlannerSystemPrompt(r.cfg.PlanMaxSteps), r.PlannerMessageFor(snap))
 		if err != nil {
 			r.b.Logger.Warn("AGI: planner unavailable", "error", err.Error())
 			return
@@ -450,11 +455,11 @@ func (r *Runner) requestPlan(ctx context.Context, snap Snapshot, judgement Judge
 	}()
 }
 
-// plannerMessageFor is what the planner is shown: the world, whatever plan is
+// PlannerMessageFor is what the planner is shown: the world, whatever plan is
 // already in play, and — when the operator named one — the standing goal that
 // every step has to serve.
-func (r *Runner) plannerMessageFor(snap Snapshot) string {
-	return describeState(snap) + r.operatorGoalInstruction() + "\nWrite the plan for this bot now, as JSON."
+func (r *Runner) PlannerMessageFor(snap Snapshot) string {
+	return DescribeState(snap) + r.OperatorGoalInstruction() + "\nWrite the plan for this bot now, as JSON."
 }
 
 // installPlan stamps a generated plan with the bookkeeping the executor needs
@@ -579,7 +584,7 @@ func (r *Runner) dispatchStep(ctx context.Context, step PlanStep, index int) {
 
 // finishStep marks a step done and reports the result.
 func (r *Runner) finishStep(index int, step PlanStep, note string) {
-	planID := r.currentPlan().ID
+	planID := r.CurrentPlan().ID
 	next, planDone := r.CompleteStep(index)
 	if planDone {
 		r.b.Logger.Info("AGI: plan complete", "kind", step.Kind, "note", note)
@@ -588,7 +593,7 @@ func (r *Runner) finishStep(index int, step PlanStep, note string) {
 		})
 		return
 	}
-	done, total := r.currentPlan().progress()
+	done, total := r.CurrentPlan().progress()
 	r.b.Logger.Info("AGI: step done",
 		"kind", step.Kind,
 		"progress", fmt.Sprintf("%d/%d", done, total),
@@ -623,7 +628,7 @@ func (r *Runner) failStepWork(index int, step PlanStep, reason string) {
 			"attempt", step.Attempts+1,
 		)
 		r.b.Evidence.Record(evidence.KindStepRetry, step.Description, map[string]any{
-			"plan":    r.currentPlan().ID,
+			"plan":    r.CurrentPlan().ID,
 			"kind":    step.Kind,
 			"index":   index,
 			"reason":  reason,
@@ -640,7 +645,7 @@ func (r *Runner) failStepWork(index int, step PlanStep, reason string) {
 	// did this fail before anyone noticed" is the question this whole file
 	// exists to answer and it is unanswerable from a console log.
 	r.b.Evidence.Record(evidence.KindStepFailed, step.Description, map[string]any{
-		"plan":     r.currentPlan().ID,
+		"plan":     r.CurrentPlan().ID,
 		"kind":     step.Kind,
 		"index":    index,
 		"reason":   reason,

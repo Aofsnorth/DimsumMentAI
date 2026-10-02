@@ -14,9 +14,9 @@ const (
 	mineVisibilitySampleStep float32 = 0.2
 )
 
-// mineWorld is the perception boundary for mining candidates. Unknown cells
+// MineWorld is the perception boundary for mining candidates. Unknown cells
 // return false from IsLoaded and must not be mined or counted as exposure.
-type mineWorld interface {
+type MineWorld interface {
 	IsSolid(x, y, z int32) bool
 	IsLoaded(x, y, z int32) bool
 }
@@ -35,7 +35,10 @@ func (w botMineWorld) IsLoaded(x, y, z int32) bool {
 	return loaded
 }
 
-type mineStep struct {
+// MineStep is one resolved approach to a mining target: which face to click,
+// where to aim, and whether the block counts toward the target the miner was
+// asked for.
+type MineStep struct {
 	Position           protocol.BlockPos
 	Face               int32
 	Aim                mgl32.Vec3
@@ -57,9 +60,9 @@ var mineFaces = []blockFace{
 	{offset: protocol.BlockPos{0, -1, 0}, face: 0, aim: mgl32.Vec3{0.5, 0.0, 0.5}},
 }
 
-func planMineStep(world mineWorld, botPos mgl32.Vec3, target protocol.BlockPos) (mineStep, bool) {
+func PlanMineStep(world MineWorld, botPos mgl32.Vec3, target protocol.BlockPos) (MineStep, bool) {
 	if !world.IsLoaded(target.X(), target.Y(), target.Z()) || !world.IsSolid(target.X(), target.Y(), target.Z()) {
-		return mineStep{}, false
+		return MineStep{}, false
 	}
 
 	for _, face := range mineFaces {
@@ -79,21 +82,21 @@ func planMineStep(world mineWorld, botPos mgl32.Vec3, target protocol.BlockPos) 
 		if !mineSightLineClear(world, botPos.Add(mgl32.Vec3{0, mineEyeHeight, 0}), aim, target) {
 			continue
 		}
-		return mineStep{
+		return MineStep{
 			Position:           target,
 			Face:               face.face,
 			Aim:                aim,
 			CountsTowardTarget: true,
 		}, true
 	}
-	return mineStep{}, false
+	return MineStep{}, false
 }
 
-func mineBlockClear(world mineWorld, pos protocol.BlockPos) bool {
+func mineBlockClear(world MineWorld, pos protocol.BlockPos) bool {
 	return world.IsLoaded(pos.X(), pos.Y(), pos.Z()) && !world.IsSolid(pos.X(), pos.Y(), pos.Z())
 }
 
-func mineSightLineClear(world mineWorld, eye, aim mgl32.Vec3, target protocol.BlockPos) bool {
+func mineSightLineClear(world MineWorld, eye, aim mgl32.Vec3, target protocol.BlockPos) bool {
 	delta := aim.Sub(eye)
 	distance := delta.Len()
 	if distance == 0 {

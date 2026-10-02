@@ -10,16 +10,16 @@ func Distance(a, b Node) float32 {
 	return float32(math.Sqrt(dx*dx + dy*dy + dz*dz))
 }
 
-// heuristic estimates the cost-to-go using octile distance, which is the
-// tightest admissible heuristic for grid-based movement with diagonal
+// Heuristic estimates the cost-to-go using octile distance, which is the
+// tightest admissible Heuristic for grid-based movement with diagonal
 // (cost 1.414) and cardinal (cost 1.0) steps. A weighted factor (1.4)
 // makes the search greedier — significantly faster while still producing
 // near-optimal paths. The weight is safe because any overestimate is
 // bounded by the weight factor, and the fallback path still works.
-func heuristic(a, b Node) float32 {
-	dx := abs32(a.X - b.X)
-	dy := abs32(a.Y - b.Y)
-	dz := abs32(a.Z - b.Z)
+func Heuristic(a, b Node) float32 {
+	dx := Abs32(a.X - b.X)
+	dy := Abs32(a.Y - b.Y)
+	dz := Abs32(a.Z - b.Z)
 	// Octile: D * (dx + dz + dy) + (D2 - 2*D) * min(dx, dz)
 	// where D=1.0 (cardinal cost), D2=1.414 (diagonal cost)
 	const D = float32(1.0)

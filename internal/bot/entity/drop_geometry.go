@@ -85,9 +85,9 @@ func dropHorizontalDistance(from, to [3]float32) float32 {
 	return float32(math.Sqrt(float64(dx*dx + dz*dz)))
 }
 
-// dropYaw returns the Bedrock body yaw (degrees, normalized to [0,360)) facing
+// DropYaw returns the Bedrock body yaw (degrees, normalized to [0,360)) facing
 // from the bot toward the target on the horizontal plane.
-func dropYaw(botPos, targetPos [3]float32) float32 {
+func DropYaw(botPos, targetPos [3]float32) float32 {
 	dx := targetPos[0] - botPos[0]
 	dz := targetPos[2] - botPos[2]
 	yaw := float32(math.Atan2(float64(dz), float64(dx))*(180.0/math.Pi)) - yawOffsetDegrees
@@ -100,9 +100,9 @@ func dropYaw(botPos, targetPos [3]float32) float32 {
 	return yaw
 }
 
-// dropPitchForDistance interpolates the upward toss pitch between the near and
+// DropPitchForDistance interpolates the upward toss pitch between the near and
 // far presets based on recipient distance, clamped to the aim range.
-func dropPitchForDistance(dist float32) float32 {
+func DropPitchForDistance(dist float32) float32 {
 	if dist <= 0 {
 		return DropPitchNear
 	}
@@ -154,7 +154,7 @@ func ComputeDropAim(world GroundReader, botPos, targetPos [3]float32) DropAim {
 // slightly DOWN (DropPitchClose) instead of arcing up, so the item drops right
 // at the recipient's feet rather than sailing past them.
 func ComputeDropAimWithJitter(world GroundReader, botPos, targetPos [3]float32, pitchRoll float32) DropAim {
-	yaw := dropYaw(botPos, targetPos)
+	yaw := DropYaw(botPos, targetPos)
 	dist := dropHorizontalDistance(botPos, targetPos)
 
 	var pitch float32
@@ -164,7 +164,7 @@ func ComputeDropAimWithJitter(world GroundReader, botPos, targetPos [3]float32, 
 	case dist <= DropCloseDistance:
 		pitch = DropPitchClose
 	default:
-		pitch = dropPitchForDistance(dist)
+		pitch = DropPitchForDistance(dist)
 	}
 
 	pitch += clampUnit(pitchRoll) * DropPitchJitterRange

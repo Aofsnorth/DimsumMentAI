@@ -66,7 +66,19 @@ func HandleIncomingChat(ctx context.Context, b *bot.Bot, evt event.ChatEvent) {
 		return
 	}
 
-	if strings.HasPrefix(strings.ToLower(msg), "!nofollow") {
+	// Opting out of following, in either the command form or the plain-language
+	// one a player actually types.
+	//
+	// The log caught this being ignored: the player typed "Berhenti ikutin aku"
+	// — stop following me — and the bot followed for the next four minutes. A
+	// follow the player cannot stop is not a follow, it is a leash, and the
+	// plain-language form is the one that will arrive; "!nofollow" is a command
+	// nobody would think to use unless they had read the source.
+	if isStopFollowingIntent(msg) {
+		b.Stop()
+		b.DisableImplicitFollow(evt.SourceName)
+		b.Logger.Info("chat: following stopped by request", slog.String("from", evt.SourceName))
+		b.SendSafeChat("Siap, aku berhenti ikutin.")
 		return
 	}
 
@@ -88,6 +100,47 @@ func HandleIncomingChat(ctx context.Context, b *bot.Bot, evt event.ChatEvent) {
 
 	b.Logger.Debug("Nvidia LLM raw response received", "raw", reply)
 	dispatchChatResponse(b, evt.SourceName, msg, systemPrompt, reply)
+
+	noteImplicitFollow(b, evt.SourceName)
+}
+
+// noteImplicitFollow drifts the bot toward whoever it was just talking to.
+//
+// "Come here" is the explicit version and it has always worked. The implicit
+// version is the same social reflex without the instruction: a player types to
+// the bot, the bot answers, and it is standing six blocks away doing nothing.
+// A player reading that concludes they have been ignored, and the natural next
+// message is the explicit one — which is the whole loop this closes.
+//
+// It is a follow and not a walk-to, so the bot keeps up if the player keeps
+// moving, and it is deliberately silent: a bot that announces "mengikuti kamu"
+// every time somebody says hello is worse than one that just walks over.
+//
+// Opt out with !nofollow, which the caller above honours before reaching here.
+func noteImplicitFollow(b *bot.Bot, who string) {
+	if who == "" || !isOperator(b, who) || !b.ImplicitFollowAllowed(who) {
+		// Only the player the bot answers to pulls it across the world. Any
+		// other player's message would otherwise drag the bot away mid-task.
+		return
+	}
+
+	// An explicit instruction already in force wins. If the player said "go
+	// mine some stone", a chat message arriving mid-task must not cancel it.
+	if b.IsBusy() {
+		return
+	}
+
+	_, pos, ok := b.FindPlayer(who)
+	if !ok {
+		return
+	}
+
+	// Standing on top of them is not company, it is collision.
+	if pos.Sub(b.GetCoords()).Len() < 2 {
+		return
+	}
+
+	b.FollowPlayer(who)
 }
 
 // shouldProcessChat applies filters for bot echoes, player whitelist, tagging,

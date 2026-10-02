@@ -68,7 +68,30 @@ type Snapshot struct {
 	VisibleSigns []string
 	Nearby       []Person
 	Busy         bool
-	Exploring    bool
+	// LedgeAhead is true when the ground under the bot's next step is a drop
+	// worth naming.
+	//
+	// It is part of the state rather than a reflex because it is not an
+	// emergency: the body already refuses to walk off a cliff on its own. What
+	// the model gets is the choice — a player leaping a five-block drop to reach
+	// the far side is doing something deliberate, and a bot that cannot tell the
+	// difference walks a staircase in both directions.
+	LedgeAhead bool
+	// LogsHeld is how many logs the bot is carrying. It is in the snapshot
+	// rather than in a package field because the activity menu has to be able
+	// to stop offering to gather: a bot holding thirty-odd logs that is offered
+	// "chop wood" every tick will pick it every tick, the gatherer will
+	// correctly decline, and the result is a tight loop that never moves the
+	// body. A live run recorded thirty-nine consecutive gathers, every one of
+	// them skipped, and the watchdog firing throughout.
+	LogsHeld  int
+	Exploring bool
+	// WantsToMove reports that the body has an outstanding reason to be in
+	// motion: it is travelling somewhere or has a path left to walk. The
+	// watchdog's stuck judgement is meaningless without it, because stillness
+	// is only a fault against an intent — a bot sent to rest, or standing still
+	// to break a block, is exactly as motionless as one wedged against terrain.
+	WantsToMove bool
 	// IsNight drives the day/night behaviour. A bot that wanders off at
 	// midnight and gets eaten is doing something no player would do, and the
 	// failure is invisible in a log — it just looks like bad luck.

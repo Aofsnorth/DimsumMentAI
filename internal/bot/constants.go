@@ -95,9 +95,9 @@ const (
 	CreatedOutputSlot = 50
 )
 
-// obstacleAim is the point the bot looks at while breaking an obstacle in its
+// ObstacleAim is the point the bot looks at while breaking an obstacle in its
 // way: the top face centre, which is what a wedged player is staring at.
-func obstacleAim(pos protocol.BlockPos) mgl32.Vec3 {
+func ObstacleAim(pos protocol.BlockPos) mgl32.Vec3 {
 	return mgl32.Vec3{float32(pos.X()) + 0.5, float32(pos.Y()) + 1, float32(pos.Z()) + 0.5}
 }
 

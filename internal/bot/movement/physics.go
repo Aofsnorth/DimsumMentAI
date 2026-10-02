@@ -12,12 +12,12 @@ func (tc *TickContext) runPhysicsAndCollisions() {
 	tc.updateLadderState()
 	tc.applyPositionCorrection()
 	tc.updateDescendingFlag()
-	tc.updateGroundedState()
-	tc.applyServerPositionAnchor()
-	tc.applyVerticalVelocity()
+	tc.UpdateGroundedState()
+	tc.ApplyServerPositionAnchor()
+	tc.ApplyVerticalVelocity()
 	tc.applyStepDownAssist(tc.FeetY)
 	tc.applyCeilingCollision()
-	tc.applyGroundLanding()
+	tc.ApplyGroundLanding()
 	tc.syncGrounded()
 }
 
@@ -27,11 +27,11 @@ func (tc *TickContext) runPhysicsAndCollisions() {
 // mid-air after a jump.
 const serverAnchorWindow = 400 * time.Millisecond
 
-// applyServerPositionAnchor holds a stationary bot at the last Y the server
+// ApplyServerPositionAnchor holds a stationary bot at the last Y the server
 // confirmed, instead of letting gravity pull it down when the local world model
 // has no floor decoded beneath it.
 //
-// The bug this fixes: `updateGroundedState` only reports grounded when the local
+// The bug this fixes: `UpdateGroundedState` only reports grounded when the local
 // world model says the block below is solid. On a freshly joined LAN world that
 // block is frequently not decoded yet, so IsGrounded stayed false, gravity
 // accumulated every tick, and the bot fell — then the server snapped it back on
@@ -41,7 +41,7 @@ const serverAnchorWindow = 400 * time.Millisecond
 //
 // The anchor deliberately does nothing while the bot is moving, jumping or on a
 // ladder: those states have their own vertical model and must not be pinned.
-func (tc *TickContext) applyServerPositionAnchor() {
+func (tc *TickContext) ApplyServerPositionAnchor() {
 	if tc.IsGrounded || tc.IsOnLadder || tc.ShouldJump || tc.IsParkourJump {
 		return
 	}
@@ -178,7 +178,7 @@ func (tc *TickContext) updateDescendingFlag() {
 	tc.B.Mu.Unlock()
 }
 
-func (tc *TickContext) updateGroundedState() {
+func (tc *TickContext) UpdateGroundedState() {
 	checkOffsets := groundCheckOffsets(tc.IsDescending, tc.IsParkourJump)
 
 	for _, dxOffset := range checkOffsets {
@@ -197,10 +197,15 @@ func (tc *TickContext) updateGroundedState() {
 	}
 }
 
-func (tc *TickContext) applyVerticalVelocity() {
+func (tc *TickContext) ApplyVerticalVelocity() {
 	if tc.IsOnLadder {
 		tc.applyLadderVerticalVelocity()
-	} else if tc.IsGrounded {
+		return
+	}
+	if tc.applySwimVerticalVelocity() {
+		return
+	}
+	if tc.IsGrounded {
 		tc.VelY = 0.0
 		if tc.ShouldJump {
 			tc.B.Logger.Debug("jump triggered", "reason", tc.JumpReason, "dist", tc.Dist, "pos", tc.CurrPos, "mState", tc.MState)
@@ -215,6 +220,30 @@ func (tc *TickContext) applyVerticalVelocity() {
 	}
 
 	tc.NextY = tc.CurrPos.Y() + tc.VelY
+}
+
+// applySwimVerticalVelocity replaces gravity with the swim drive while the body
+// is in water, and reports whether it did.
+//
+// The gravity branch above is unconditional: every ungrounded tick it subtracts
+// 0.08 and clamps at -3.92, which is right on land and actively wrong in a river.
+// A submerged body accumulated terminal-velocity downward every tick and fought
+// the swim flags the input packet was sending, so the bot sank while the server
+// was being told to rise.
+//
+// The drive is the plan's own Vertical axis rather than a second opinion about
+// where the body should go, so the packet and the physics cannot disagree. The
+// surface bias is not added here: PlanSwim already puts it in Vertical for a
+// floating body, and adding it twice would lift a body out of the water it is
+// supposed to be floating in.
+func (tc *TickContext) applySwimVerticalVelocity() bool {
+	if !tc.SwimPlanned || !tc.SwimIntent.InWater {
+		return false
+	}
+
+	tc.VelY = tc.SwimIntent.Vertical * swimVerticalDrive
+	tc.NextY = tc.CurrPos.Y() + tc.VelY
+	return true
 }
 
 func (tc *TickContext) applyLadderVerticalVelocity() {
@@ -267,7 +296,7 @@ func (tc *TickContext) applyCeilingCollision() {
 	}
 }
 
-func (tc *TickContext) applyGroundLanding() {
+func (tc *TickContext) ApplyGroundLanding() {
 	if tc.VelY > 0 || tc.IsOnLadder {
 		return
 	}

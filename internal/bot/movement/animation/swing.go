@@ -24,3 +24,15 @@ func InteractSwing(entityRuntimeID uint64) *packet.Animate {
 		SwingSource:     packet.AnimateSwingSourceInteract,
 	}
 }
+
+// PlaceSwing builds the one arm swing a real client sends when placing a
+// block — placing is a single right-click, not a mining loop, so exactly one
+// swing goes out. Callers must not pace it: a second swing within ~250ms
+// restarts the viewer's arm cycle mid-flight and reads as a twitch.
+func PlaceSwing(entityRuntimeID uint64) *packet.Animate {
+	return &packet.Animate{
+		ActionType:      packet.AnimateActionSwingArm,
+		EntityRuntimeID: entityRuntimeID,
+		SwingSource:     packet.AnimateSwingSourceBuild,
+	}
+}

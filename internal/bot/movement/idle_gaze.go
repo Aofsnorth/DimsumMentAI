@@ -29,7 +29,7 @@ import (
 
 const (
 	// fixMinSec/fixMaxSec bound a fixation. The distribution inside is skewed
-	// (see sampleFixation), so most fixations are short and a few are long —
+	// (see SampleFixation), so most fixations are short and a few are long —
 	// which is how a person actually looks at a scene.
 	fixMinSec = 0.35
 	fixMaxSec = 5.5
@@ -39,9 +39,9 @@ const (
 	// statue that stares and a person whose eyes are never perfectly still.
 	microProb = 0.045
 
-	// microMaxDeg is the size of a corrective micro-saccade. Small enough to
+	// MicroMaxDeg is the size of a corrective micro-saccade. Small enough to
 	// read as attention rather than as a turn.
-	microMaxDeg = 4.5
+	MicroMaxDeg = 4.5
 
 	// revisitChance is the probability that a new fixation lands close to the
 	// previous one rather than sweeping across the scene. People re-check the
@@ -54,7 +54,7 @@ const (
 
 	// scanRangeDeg is the scale of a deliberate scan to a new point of
 	// interest. It is the CAP, not the typical value — see
-	// sampleSaccadeAmplitude: the distribution is heavily skewed so a large
+	// SampleSaccadeAmplitude: the distribution is heavily skewed so a large
 	// re-orient is the exception, not the rule.
 	scanRangeDeg = 84.0
 
@@ -79,45 +79,45 @@ const (
 	groundPitchDeg = 32.0
 )
 
-// gazeSample is one planned head movement: where to aim and for how long.
-type gazeSample struct {
-	dYaw   float32
-	dPitch float32
-	sec    float32
+// GazeSample is one planned head movement: where to aim and for how long.
+type GazeSample struct {
+	DYaw   float32
+	DPitch float32
+	Sec    float32
 }
 
-// nextGazeSample draws the next fixation, relative to the current gaze.
+// NextGazeSample draws the next fixation, relative to the current gaze.
 //
 // The three branches mirror the three things a person's eyes do while idle:
 // glance down at the ground, re-check the thing they were just looking at, or
 // move attention somewhere genuinely new.
-func nextGazeSample(currentYaw, currentPitch float32) gazeSample {
+func NextGazeSample(currentYaw, currentPitch float32) GazeSample {
 	roll := rand.Float64()
 
 	switch {
 	case roll < groundGlanceChance:
 		// Down at the feet. A short, decisive look — which is what makes it
 		// read as a glance rather than as the head getting stuck.
-		return gazeSample{
-			dYaw:   float32(rand.Float64()*18 - 9),
-			dPitch: float32(-groundPitchDeg - rand.Float64()*12),
-			sec:    sampleFixation() * 0.6,
+		return GazeSample{
+			DYaw:   float32(rand.Float64()*18 - 9),
+			DPitch: float32(-groundPitchDeg - rand.Float64()*12),
+			Sec:    SampleFixation() * 0.6,
 		}
 
 	case roll < groundGlanceChance+revisitChance:
 		// Back to roughly where it was, with a small correction. This is the
 		// "I looked away and back" motion, and the small offset is what keeps
 		// it from being a mechanical return to an identical angle.
-		return gazeSample{
-			dYaw:   float32(rand.Float64()*2*returnRangeDeg - returnRangeDeg),
-			dPitch: float32(rand.Float64()*8 - 4),
-			sec:    sampleFixation(),
+		return GazeSample{
+			DYaw:   float32(rand.Float64()*2*returnRangeDeg - returnRangeDeg),
+			DPitch: float32(rand.Float64()*8 - 4),
+			Sec:    SampleFixation(),
 		}
 
 	default:
 		// A genuine scan. The amplitude is skewed so most scans are a modest
 		// turn and only some re-orient the whole head.
-		amp := sampleSaccadeAmplitude()
+		amp := SampleSaccadeAmplitude()
 		bias := float32(rand.Float64()) // sign
 		if bias < 0.5 {
 			amp = -amp
@@ -127,21 +127,21 @@ func nextGazeSample(currentYaw, currentPitch float32) gazeSample {
 		if pitch > 0 {
 			pitch = -pitch // Bedrock pitch is negative looking down
 		}
-		return gazeSample{
-			dYaw:   amp,
-			dPitch: pitch - currentPitch,
-			sec:    sampleFixation(),
+		return GazeSample{
+			DYaw:   amp,
+			DPitch: pitch - currentPitch,
+			Sec:    SampleFixation(),
 		}
 	}
 }
 
-// sampleFixation draws a hold duration.
+// SampleFixation draws a hold duration.
 //
 // The distribution is the point: two thirds of fixations are short (under a
 // second and a half, the restless scanning of someone with nothing to do) and
 // the rest are long. A uniform draw from a fixed range — what this did before —
 // produces an evenly spaced rhythm that reads as a loop.
-func sampleFixation() float32 {
+func SampleFixation() float32 {
 	// Two draws summed: the second is scaled down, so the result clusters near
 	// the low end with a long, sparse tail. That is the shape of real fixation
 	// durations, and it is what breaks the metronome.
@@ -153,30 +153,30 @@ func sampleFixation() float32 {
 	return float32(fixMinSec + (fixMaxSec-fixMinSec)*(0.28+0.72*(t-0.70)/0.30))
 }
 
-// sampleSaccadeAmplitude draws a scan size in degrees, skewed small.
+// SampleSaccadeAmplitude draws a scan size in degrees, skewed small.
 //
 // Most saccades are a few degrees; a large re-orient is the exception. Raising
 // a uniform draw to saccadeSkew concentrates the mass near zero while still
 // leaving a sparse tail, which is the shape real saccade amplitudes have — and
 // which is what the old uniform ±45° jump did not have.
-func sampleSaccadeAmplitude() float32 {
+func SampleSaccadeAmplitude() float32 {
 	t := rand.Float64()
 	return float32(scanRangeDeg * math.Pow(t, saccadeSkew))
 }
 
-// microSaccade returns a tiny corrective offset to apply inside a fixation.
+// MicroSaccade returns a tiny corrective offset to apply inside a fixation.
 // Returns zero most ticks, which is what makes the motion read as organic
 // rather than as jitter.
-func microSaccade() (dYaw, dPitch float32) {
+func MicroSaccade() (dYaw, dPitch float32) {
 	if rand.Float64() > microProb {
 		return 0, 0
 	}
-	return float32(rand.Float64()*2*microMaxDeg - microMaxDeg),
-		float32(rand.Float64()*2*microMaxDeg*0.6 - microMaxDeg*0.6)
+	return float32(rand.Float64()*2*MicroMaxDeg - MicroMaxDeg),
+		float32(rand.Float64()*2*MicroMaxDeg*0.6 - MicroMaxDeg*0.6)
 }
 
-// gazePitchFloor keeps an idle scan from tipping the head into the ground or
+// GazePitchFloor keeps an idle scan from tipping the head into the ground or
 // the sky, where the geometry would look broken rather than thoughtful.
-func gazePitchFloor(pitch float32) float32 {
+func GazePitchFloor(pitch float32) float32 {
 	return float32(math.Max(float64(pitch), -70))
 }

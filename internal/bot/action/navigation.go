@@ -111,14 +111,13 @@ func blockNameMatches(world, target string) bool {
 	return strings.HasSuffix(world, "_"+target)
 }
 
-// blockLookup resolves a world cell to a block name. Abstracted so the search
+// BlockLookup resolves a world cell to a block name. Abstracted so the search
 // can be exercised without a live world cache.
-type blockLookup func(x, y, z int32) (string, bool)
+type BlockLookup func(x, y, z int32) (string, bool)
 
-// findNearestBlock returns the cell closest to origin whose block name matches
-// want, searching outward in shells so the first match found is also the
-// nearest one.
-func findNearestBlock(origin mgl32.Vec3, radius int, lookup blockLookup, want func(string) bool) (protocol.BlockPos, bool) {
+// findNearestBlock returns the closest matching visible cell in one bounded
+// volume pass. Rewalking every cube interior for each shell costs O(radius^4).
+func findNearestBlock(origin mgl32.Vec3, radius int, lookup BlockLookup, want func(string) bool) (protocol.BlockPos, bool) {
 	ox := int32(math.Floor(float64(origin.X())))
 	oy := int32(math.Floor(float64(origin.Y())))
 	oz := int32(math.Floor(float64(origin.Z())))
@@ -127,28 +126,21 @@ func findNearestBlock(origin mgl32.Vec3, radius int, lookup blockLookup, want fu
 	bestDist := float64(radius*radius + 1)
 	found := false
 
-	for r := 0; r <= radius; r++ {
-		for dx := -r; dx <= r; dx++ {
-			for dy := -r; dy <= r; dy++ {
-				for dz := -r; dz <= r; dz++ {
-					// Only the shell boundary of radius r, so the first shell
-					// containing a match is the nearest one.
-					if abs32(dx) != int32(r) && abs32(dy) != int32(r) && abs32(dz) != int32(r) {
-						continue
-					}
-					distSq := float64(dx*dx + dy*dy + dz*dz)
-					if distSq > float64(radius*radius) {
-						continue
-					}
-					name, ok := lookup(ox+int32(dx), oy+int32(dy), oz+int32(dz))
-					if !ok || !want(name) {
-						continue
-					}
-					if distSq < bestDist {
-						bestDist = distSq
-						best = protocol.BlockPos{ox + int32(dx), oy + int32(dy), oz + int32(dz)}
-						found = true
-					}
+	for dx := -radius; dx <= radius; dx++ {
+		for dy := -radius; dy <= radius; dy++ {
+			for dz := -radius; dz <= radius; dz++ {
+				distSq := float64(dx*dx + dy*dy + dz*dz)
+				if distSq > float64(radius*radius) || distSq >= bestDist {
+					continue
+				}
+				name, ok := lookup(ox+int32(dx), oy+int32(dy), oz+int32(dz))
+				if !ok || !want(name) {
+					continue
+				}
+				if distSq < bestDist {
+					bestDist = distSq
+					best = protocol.BlockPos{ox + int32(dx), oy + int32(dy), oz + int32(dz)}
+					found = true
 				}
 			}
 		}
@@ -156,17 +148,17 @@ func findNearestBlock(origin mgl32.Vec3, radius int, lookup blockLookup, want fu
 	return best, found
 }
 
-// abs32 is abs for the int32 block coordinates the search works in.
-func abs32(v int) int32 {
+// Abs32 is abs for the int32 block coordinates the search works in.
+func Abs32(v int) int32 {
 	if v < 0 {
 		return -int32(v)
 	}
 	return int32(v)
 }
 
-// botBlockLookup resolves semantic targets only when currently visible.
+// BotBlockLookup resolves semantic targets only when currently visible.
 // Movement may still use received terrain for collision, not hidden resources.
-func botBlockLookup(b *bot.Bot) blockLookup {
+func BotBlockLookup(b *bot.Bot) BlockLookup {
 	return func(x, y, z int32) (string, bool) {
 		name, ok := b.GetBlockName(x, y, z)
 		if !ok || NormaliseBlockName(name) == "air" || !perception.SeesBlock(b, protocol.BlockPos{x, y, z}) {
@@ -187,7 +179,7 @@ func resolveNavTarget(b *bot.Bot, param string, radius int) (protocol.BlockPos, 
 	if pos, ok := ParseNavCoords(param); ok {
 		return pos, true, nil
 	}
-	pos, ok := findNearestBlock(b.GetCoords(), radius, botBlockLookup(b), func(name string) bool {
+	pos, ok := findNearestBlock(b.GetCoords(), radius, BotBlockLookup(b), func(name string) bool {
 		return blockNameMatches(name, param)
 	})
 	if !ok {
@@ -203,7 +195,7 @@ func navFailure(b *bot.Bot, user, actionName, param string, err error) {
 	if item == "" {
 		item = actionName
 	}
-	reportStatus(b, user, event.ActionStatus{
+	ReportStatus(b, user, event.ActionStatus{
 		Action:  actionName,
 		Item:    item,
 		Success: false,
@@ -221,12 +213,10 @@ func goToCoords(b *bot.Bot, param, user string) {
 	if !isCoords {
 		b.Logger.Info("goto resolved a block name", "target", param, "at", target)
 	}
-	b.WalkTo(mgl32.Vec3{
-		float32(target.X()) + 0.5,
-		float32(target.Y()),
-		float32(target.Z()) + 0.5,
-	})
-	reportStatus(b, user, event.ActionStatus{Action: "goto", Item: param, Success: true})
+	go func() {
+		arrived := b.NavigateToBlock(target.X(), target.Y(), target.Z(), 1.5)
+		ReportStatus(b, user, event.ActionStatus{Action: "goto", Item: param, Success: arrived, Error: navError(arrived, target)})
+	}()
 }
 
 // goToBlock walks up to a block and stops beside it. NavigateToBlock picks a
@@ -259,7 +249,7 @@ func runBlockNav(b *bot.Bot, actionName, param, user string, arrival func(protoc
 	cell := arrival(target)
 	go func() {
 		ok := b.NavigateToBlock(cell.X(), cell.Y(), cell.Z(), 1.5)
-		reportStatus(b, user, event.ActionStatus{
+		ReportStatus(b, user, event.ActionStatus{
 			Action:  actionName,
 			Item:    param,
 			Success: ok,
@@ -285,7 +275,7 @@ func enterPortal(b *bot.Bot, param, user string) {
 	}
 
 	radii := searchRadii(b)
-	pos, ok := findNearestBlock(b.GetCoords(), radii.Portal, botBlockLookup(b), func(name string) bool {
+	pos, ok := findNearestBlock(b.GetCoords(), radii.Portal, BotBlockLookup(b), func(name string) bool {
 		clean := NormaliseBlockName(name)
 		for _, want := range wanted {
 			if clean == want {
@@ -305,7 +295,7 @@ func enterPortal(b *bot.Bot, param, user string) {
 		// Aim one cell into the portal so the player actually crosses the
 		// threshold; stopping on the frame is not the same as going through.
 		entered := b.NavigateToBlock(pos.X(), pos.Y(), pos.Z(), 1.0)
-		reportStatus(b, user, event.ActionStatus{
+		ReportStatus(b, user, event.ActionStatus{
 			Action:  "enterportal",
 			Item:    fmt.Sprintf("%d,%d,%d", pos.X(), pos.Y(), pos.Z()),
 			Success: entered,

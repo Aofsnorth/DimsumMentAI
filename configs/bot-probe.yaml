@@ -1,0 +1,305 @@
+# ============================================
+#  Minecraft Bedrock AI Bot Configuration
+# ============================================
+
+# --- Server Settings ---
+server:
+  host: "192.168.1.18"
+  port: 7551
+  offline: true # true = no Xbox Live auth (local server)
+  lan_discovery: true # auto-discover the single-player world opened to LAN (direct RakNet to a client-hosted world is rejected with invalidSkin — the host requires the Nonce from its advertisement)
+  lan_world: "A" # optional: only join a world with this exact name
+  # How a server command is written on the wire. The protocol does not settle
+  # this and server software disagrees: Geyser strips a leading "/" (so "/register"
+  # arrives as an unknown command) while dragonfly requires it.
+  #   auto  (default) send "register" first, retry as "/register" if the server
+  #               answers nothing — the bot works out which it is talking to
+  #   slash          always send "/register"
+  #   none           always send "register"
+  # Pin it to slash/none once you know your server, to avoid a doubled command
+  # on a server that executes silently without replying.
+  command_prefix: "auto"
+  is_geyser_server: false
+  # How texture packs are handled.
+  #
+  # "skip" (default) refuses them. The bot is headless and never draws, so a
+  # pack is pure download cost — and refusing is what lets the ResourcePackStack
+  # check pass.
+  #
+  # "download" fetches and caches them. Be aware this FAILS on servers whose
+  # packs carry behaviour modules (Geyser servers usually do): gophertunnel's
+  # stack check hardcodes "this pack has no behaviours", so a pack that reports
+  # one is rejected as "not downloaded" no matter how completely it was
+  # fetched. The bot detects that and retries once without packs, so leaving
+  # this on is safe but costs one wasted connection per run.
+  resource_packs: "skip"
+  resource_pack_dir: "data/resourcepacks"
+
+# --- Bot Identity ---
+bot:
+  name: "LunaProbe" # In-game display name
+  language: "Indonesian" # AI reply language, e.g. "English", "Indonesian", "Japanese"
+  log_level: "debug" # debug, info, warn, or error (debug writes logs/debug-090ce4.log — flip it on when diagnosing)
+  memory_path: "data/bot_memory.json" # Curated long-term memories (facts + named places)
+  debug: false # Enable visualizer debug features (break, place, inventory buttons)
+  state_path: ".runtime-probe-state.json"
+
+  # --- Join Messages ---
+  # Sent once after every successful join, and again after a reconnect or a
+  # server switch (every session is fresh to the server). Useful for
+  # password-gated servers and lobby plugins, so the bot can get past a
+  # /register or /login prompt without you typing it by hand every time.
+  #
+  # A line starting with "/" is sent as a REAL server command. Anything else is
+  # sent as an ordinary chat message. That is the same rule a player follows:
+  # typing "/register pass pass" runs the command, it does not post the words.
+  #
+  #   join_messages:
+  #     - "/register pass1234 pass1234"   # server command (CommandRequest)
+  #     - "/login pass1234"              # server command
+  #     - "halo semua, aku Luna"         # plain chat message
+  #
+  # Do NOT put a password you would not type yourself in a world file you share.
+  # This server runs SimpleLogin: /register is a ONE-TIME setup (it answers
+  # "You are already registered" afterwards), and /login is what every later
+  # join needs — including automatic reconnects, which is why it belongs here
+  # rather than being typed once by hand.
+  join_messages:
+    - ""
+  join_message_delay_sec: 5 # wait after spawning before the first line (server may still be finishing the world transfer)
+  join_message_gap_sec: 1 # pause between lines, so a burst is not sent as one flood
+
+# --- AGI (autonomy) ---
+# Off by default. When enabled the bot stops waiting to be told what to do: it
+# reacts to danger and hunger on its own, looks up when a player walks into
+# view, wanders when idle, and can start a conversation nobody asked for.
+#
+# The loop is two layers. Reflexes (danger, hunger, someone approaching) are
+# local and instant — a bot that consults a model before eating is a bot that
+# starves. Decisions ("what do I want to do now?") ask the model, and are gated
+# by llm_chance and social_cooldown_sec.
+#
+# social_cooldown_sec is the number that matters most. Without it the bot
+# greets someone on every tick and reads as a spammer rather than a friend.
+#
+# --- mode: dua otak, satu bot ---
+# "default"  : refleks + tujuan pendek. Tiap tick bot tanya "sekarang apa?" dan
+#              dijawab dari keadaan seketika.
+# "planning" : ditambah rencana jangka panjang. Planner (LLM) menulis satu
+#              objective + langkah-langkah; otak menjalankan SATU langkah per
+#              tick dan melaporkannya balik. Perbedaannya bukan berapa lama bot
+#              bergerak, tapi apakah ia tahu apa yang sedang ia kerjakan.
+#
+# Yang bikin planning mode general (bukan "mode naga" atau "mode nether"):
+# objective dan langkah datang dari DATA, bukan dari kode. Kinds langkah
+# (gather/mine/go_to/craft/equip/combat/storage/shelter/rest/observe/enter/wait)
+# adalah satu-satunya kosakata bersama. Menambah kemampuan = menambah KIND,
+# bukan menambah mode.
+#
+# Catatan jujur soal batasnya:
+#   - Planner jalan ASYNC. Aksi tidak pernah menunggu planner; kalau planner
+#     lambat atau mati, bot tetap bergerak seperti mode default.
+#   - Langkah yang GAGAL tidak dilewati. Dia dikembalikan ke planner untuk
+#     direvisi. Bot yang melompati kegagalan lalu melapor "selesai" adalah bot
+#     yang berbohong tentang progresnya.
+#   - go_to ke KOORDINAT diverifikasi (jarak dicek setelah aksi selesai). go_to
+#     ke NAMA blok tidak bisa diverifikasi dari luar lapisan navigasi — itu
+#     batas yang diketahui, bukan hal yang disembunyikan.
+#   - Butuh AI provider aktif. Tanpa itu planning mode diam-diam jadi default.
+#     Cek baris "AGI loop started" di log untuk mode yang benar-benar jalan.
+agi:
+  enabled: true
+  # "default" | "planning" | "natural". Alias: plan, long_horizon, natural_mode,
+  # episode, record. Typo jatuh ke "default".
+  #
+  # "natural" = mode rekaman. Bot main sendiri tanpa perintah, dan kalau ada
+  # brief dia kerjakan sampai waktu habis. Dijelaskan panjang di bawah.
+  mode: "natural"
+  # Ballast rencana: berapa lama satu rencana boleh hidup sebelum dianggap basi,
+  # dan seberapa sering planner boleh menyela selama itu. Yang kedua inilah yang
+  # mencegah planner lambat membekukan otak — aksi tetap jalan terhadap rencana
+  # sekarang SELAMA planner berpikir.
+  plan_lifetime_min: 60
+  plan_replan_min: 10
+  # Batas panjang rencana. Rencana tanpa batas = wishlist, dan wishlist tidak
+  # bisa diselesaikan. Angka ini juga dikirim ke prompt planner, jadi prompt dan
+  # kode tidak bisa berbeda pendapat soal berapa panjang yang sah.
+  plan_max_steps: 12
+  # Seberapa sering otak bangun. Dua bentuk, keduanya sah:
+  #
+  #   tick_interval_sec: 30        # tepat setiap 30 detik
+  #   tick_interval_sec: 1-2s      # direntang [1s, 2s], diundi ulang tiap tick
+  #
+  # RENTANG ADA KARENA YANG TETAP TERLIHAT. Otak dengan jam yang pasti diam
+  # dalam lockstep yang kelihatan, dan justru DIAMNYA yang terbaca sebagai bot:
+  # penonton hafal periodenya dalam semenit lalu tinggal menunggu. Setiap jeda
+  # diundi ulang tiap tick, bukan sekali saat start, jadi rata-ratanya tidak
+  # bisa ditebak.
+  #
+  # Angka polos = DETIK. Jadi "1-2" berarti 1-2 detik, dan "1m-2m" berarti
+  # 1-2 menit. Tulis satuan di kedua sisi kalau ragu: "1-1m30s" dibaca sebagai
+  # 1 detik sampai 90 detik, bukan 1 menit sampai 90 detik.
+  #
+  # PENTING — INI juga tingkat request ke model. Tiap tick, Jev dipanggil
+  # sekali (baris "AGI: Jev System One active" di log sekarang ikut mencetak
+  # intervalnya). 1-2 detik berarti 30-60 request per menit ke endpoint Jev.
+  # Kalau Jev lambat, tick-nya tertahan menunggu — botnya tidak berpikir lebih
+  # cepat, hanya menunggu. Ada lantai 500ms supaya interval nol tidak berubah
+  # jadi busy loop.
+  tick_interval_sec: 1
+  llm_chance: 0.35
+  self_preservation: true
+  low_hp_threshold: 8
+  low_hunger_threshold: 6
+  # Breath reflex: berapa detik kepala boleh tenggelam sebelum bot berhenti
+  # melakukan apa pun dan naik ke permukaan.
+  #
+  # Kenapa pakai hitungan detik, bukan bar udara? Karena bot ini memang tidak
+  # punya bar udara untuk dibaca — paket air supply Bedrock tidak pernah terlihat
+  # sampai ke client ini. Jadi jujur saja: "am-I-sedang-tenggelam" dijawab dengan
+  # "berapa lama kepalaku di air". HP baru turun setelah udara hampir habis, jadi
+  # refleks yang berbasis HP selalu terlalu lambat.
+  #
+  # 10 detik cukup panjang buat bot menyeberangi terowongan BANJIR tanpa panik,
+  # dan cukup pendek buat dia sudah mulai naik sebelum damage mulai.
+  low_air_seconds: 10
+  # --- Natural mode (mode rekaman) ---
+  #
+  # Dipakai kalau mode: "natural". Botnya main sendiri, dan operator kasih
+  # brief lewat chat:
+  #     /episode 1 24m build a house
+  #     /episode 2 45m dig down and find copper
+  # Format: /episode <nomor> <durasi> <objective>. Durasi pakai notasi Go
+  # (24m, 90s, 1h30m), dan angka polos artinya menit.
+  #
+  # Deadline-nya KERAS. Bot tidak boleh menambah waktunya sendiri, dan sekali
+  # lewat dia berhenti — bukan lanjut ngerjain. Kalau Remaining() dihitung ulang
+  # dari config tiap tick, brief-nya bakal geser terus dan rekamannya nggak
+  # pernah selesai. Itu jebakan yang paling gampang masuk.
+  #
+  # Aturan yang bikin mode ini bisa dipandang bukan sekadar bot:
+  #   - Orang SELALU menang. Kalau ada yang ngomong, bot jawab, dan episode
+  #     nunggu. Clock-nya tetap jalan — rekaman tetep jalan — tapi kerjanya
+  #     berhenti. Bot yang ngabaikin orang di satu room karena ada jadwal itu
+  #     bukan companion.
+  #   - Boleh diem. idle_alive (gaze + gerak kecil) dan idle_still (diam
+  #     beneran) dua-duanya kepake. Bot yang nggak pernah diam kelihatan kayak
+  #     screensaver kalau ditonton tiga jam.
+  idle_still_bias: 0.35 # 0..1, share dari waktu idle yang benar-benar diam total
+                     # Default condong ke "hidup": bot yang geser & lihat
+                     # sekeliling While mikir kelihatan kayak orang.
+                     # Naikin kalau rekamanmu panjang dan penonton sudah
+                     # belajar bahwa nggak ada yang rusak.
+  wander: true
+  wander_duration_sec: 20
+  social: true
+  social_cooldown_sec: 120
+  vision: true
+  vision_radius: 10
+  vision_hold_sec: 5
+  vision_cooldown_sec: 15
+  # --- Jarak pandang & jam dunia ---
+  # Semua angka "taste" ada di sini, bukan di kode. Ubah tanpa rebuild.
+  perception:
+    mob_scan_distance: 32 # mobs sejauh ini masih ditulis ke prompt
+    block_scan_distance: 12 # blok sejauh ini masih ditulis
+    block_scan_limit: 4 # maksimal blok yang masuk prompt
+    mob_prompt_limit: 6 # maksimal mob yang masuk prompt
+    nearby_radius: 30 # siapa yang "dekat" kalau vision mati
+    bed_keywords: ["bed"] # cocoknya inventory item buat tidur (case/namespace diabaikan)
+  night_start_ticks: 12500 # Bedrock 0-24000; harus sama dengan survival manager
+  night_end_ticks: 23500
+  eye_height: 1.62 # tinggi mata di atas kaki; dipakai tiap ray line-of-sight
+  wander_radius: 12 # seberapa jauh satu langkah jalan-jalan boleh mendarat
+  # Idle nudge: langkah kecil-kecil saat diem. INI BUKAN KOSMETIK.
+  # Server punya AFK kicker yang memantau PERUBAHAN POSISI (bukan gerak kepala).
+  # Bot yang diem 100% akan di-kick walau kepalanya terus berputar — itulah
+  # penyebab bot keluar dari server Geyser setelah ~26 detik.
+  # Turunkan min_sec kalau server kick lebih cepat dari 14 detik.
+  idle_nudge_min_sec: 5
+  idle_nudge_max_sec: 9
+  idle_nudge_reach: 6 # maksimal jarak satu langkah (blok)
+  # --- Jev (TypeSafe AI System One) ---
+  # Jev bukan LLM: dia gak bisa nulis teks. Dia cuma jawab pertanyaan typed
+  # dengan probabilitas (noul = yes/no, choice = pilih satu, score = nilai).
+  #-ITu sebabnya dipisah dua: Jev yang PUTUSIN ("lari gak?", "momen ini
+  # layak ngomong?"), LLM yang NULIS ("bilang apa?").
+  #
+  # Jauh lebih cepat & murah dari LLM (70-500ms, $0.042/MTok input, output
+  # gratis), dan output-nya typed — 0% error parsing.
+  #
+  # Akses: console.typesafe.ai (early access bisa waitlist), atau lewat gateway:
+  #   Vercel AI Gateway → base_url: "https://ai-gateway.vercel.sh/v1"
+  #                      model: "typesafe-ai/jev"
+  #   OpenRouter        → base_url: "https://openrouter.ai/api/v1"
+  #                      model: "typesafe/jev-1.13"
+  # Kunci dibaca dari env TYPESAFE_API_KEY (lihat .env / .env.example).
+  # Tanpa kunci: bot tetap jalan pakai threshold biasa. Ini fitur tambahan,
+  # bukan syarat.
+  # Kunci API dibaca dari .env (TYPESAFE_API_KEY) — bukan dari YAML, supaya
+  # tidak ada yang bisa ke-commit. Config cuma pegang endpoint, nama model, dan
+  # tiga ambang probabilitas (kebijakan).
+  # Tanpa kunci: bot tetap jalan pakai threshold biasa. Fitur tambahan, bukan syarat.
+  jev:
+    enabled: true
+    # PENTING: tulis HOST SAJA, jangan tamper /v1.
+    #
+    # Client menambah path "/v1/systemone" sendiri (internal/jev/client.go:179),
+    # dan dia cuma melompat append kalau URL sudah BERAKHIRAN dengan
+    # "/v1/systemone" — dia tidak mendeteksi bahwa kamu sudah nulis "/v1".
+    # Jadi:
+    #   https://api.experientiallabs.ai            -> /v1/systemone           ✅
+    #   https://api.experientiallabs.ai/v1         -> /v1/v1/systemone        ❌ 404
+    #   https://api.experientiallabs.ai/v1/systemone -> tetap apa adanya      ✅
+    #
+    # Kalau ganti domain, pakai bentuk pertama. Bentuk "/v1" berakhir sebagai
+    # 404 tanpa sebab yang jelas, dan yang lebih buruk: consult() cuma log WARN
+    # lalu lanjut pakai threshold lokal, jadi Jev mati tanpa terasa.
+    base_url: "https://api.experientiallabs.ai"
+    # Nama model. INI BUKAN RAHASIA — cuma string publik, jadi dia tinggal di
+    # di sini. Yang rahasia cuma API key, itu tetap di .env.
+    # Dulu JEV_MODEL dibaca dari .env, alasan "berganti gateway = ganti nama
+    # model". Itu mencampur dua hal: key memang rahasia dan tidak boleh masuk
+    # file, tapi nama model justru persis hal yang harus ditulis di file
+    # config. Akibatnya ganti gateway tidak kelihatan di file yang menjelaskan
+    # si-bot.
+    # Bentuk per gateway: "typesafe-ai/jev" (Vercel), "typesafe/jev-1.13"
+    # (OpenRouter), atau "jev-latest" untuk API native.
+    # Kosongkan = jev-latest, jadi baris ini boleh dihapus tanpa merusak apa pun.
+    model: "jev-latest"
+    # Namanya masih TYPESAFE_API_KEY walau domainnya sudah diganti (client.go:65).
+    # Kalau provider punya key sendiri, taruh key itu di variable itu — jalan,
+    # tapi Variable-nya menyesatkan. Mengganti nama variable = perubahan kode.
+    danger_threshold: 0.6 # di atas ini = bahaya
+    speak_threshold: 0.75 # sengaja tinggi; bot yang terlalu gampang ngomong lebih buruk dari yang diam
+    engage_threshold: 0.4 # "harus sibuk?" di bawah ini bot boleh diem — diam terus juga kelihatan robot
+    timeout_sec: 5 # Jev jawab 70-500ms; timeout itu buat guard, bukan tuning kecepatan
+    prompts_file: "" # opsional: YAML untuk override wording pertanyaan (dikunci per nama pertanyaan)
+
+# --- Skin & Geometry ---
+skin:
+  image_path: "imports/skins/image/Anime-thing-on-planetminecraft-com.png"
+  arm_size: "slim" # "slim" (Alex) or "wide" (Steve)
+
+# --- AI & LLM Settings ---
+# Supported providers (all OpenAI-compatible chat-completion format):
+#   - nvidia              → uses https://integrate.api.nvidia.com (env: NVIDIA_API_KEY)
+#   - openai_compatible   → generic; requires base_url (env: OPENAI_API_KEY)
+#   - none                → disable AI
+ai:
+  provider: "openai_compatible"
+  model: "mysterious" # must match /v1/models exactly: "<provider>/<name>"
+  #kc/inclusionai/ling-3.0-flash:free
+  # API key is loaded from .env (NVIDIA_API_KEY). See .env.example.
+  base_url: "http://localhost:20128/v1" # leave empty to use provider default (nvidia). Required for openai_compatible/anthropic_compatible/google_compatible.
+  main_player: "Arthenyxx"
+  respond_only_to_linked_player: false
+  respond_only_when_tagged: false # true = only respond when tagged/named in chat (e.g. Luna or @Luna)
+  custom_personality: "" # Custom LLM personality prompt override (leave empty to use default)
+  context_window: 1000000 # Model context window in tokens; 0 = auto-detect. Bot uses 25% of this as its per-request budget and auto-compacts history beyond it.
+
+# --- Chat Throttle Settings ---
+chat:
+  duplicate_window_sec: 3 # Same player + same message within N seconds is dropped
+  rate_limit_window_sec: 100 # Window for global flood protection
+  max_messages_per_window: 1000 # Max messages handled across all players in rate window

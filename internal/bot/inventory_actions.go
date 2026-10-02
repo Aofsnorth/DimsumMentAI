@@ -8,18 +8,19 @@ import (
 	"time"
 
 	"bedrock-ai/internal/ai"
+	"bedrock-ai/internal/bot/inventory/station"
 	"bedrock-ai/internal/safecast"
 
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
 	"github.com/sandertv/gophertunnel/minecraft/protocol/packet"
 )
 
-// dropTargetSlotLocked picks which inventory slot to drop from for a request.
+// DropTargetSlotLocked picks which inventory slot to drop from for a request.
 // The held slot wins when it matches — dropping from a random matching stack
 // (map iteration order) leaves the held item rendered in the hand after the
 // drop, which viewers read as a ghost item — otherwise the lowest numbered
 // matching slot, so repeated drops are deterministic. Callers hold b.Mu.
-func (b *Bot) dropTargetSlotLocked(name string) (uint32, protocol.ItemStack, bool) {
+func (b *Bot) DropTargetSlotLocked(name string) (uint32, protocol.ItemStack, bool) {
 	if held, ok := b.InventoryMap[b.HeldSlot]; ok && held.Count > 0 {
 		if itemMatchesName(b.ItemNames[held.NetworkID], name) {
 			return b.HeldSlot, held, true
@@ -43,7 +44,7 @@ func itemMatchesName(itemName, want string) bool {
 
 func (b *Bot) DropItem(name string, count int) error {
 	b.Mu.Lock()
-	targetSlot, foundItem, found := b.dropTargetSlotLocked(name)
+	targetSlot, foundItem, found := b.DropTargetSlotLocked(name)
 	if !found {
 		b.Mu.Unlock()
 		return fmt.Errorf("item %q not found in inventory", name)
@@ -52,13 +53,13 @@ func (b *Bot) DropItem(name string, count int) error {
 	item := protocol.ItemInstance{StackNetworkID: b.StackNetworkIDs[targetSlot], Stack: foundItem}
 	b.Mu.Unlock()
 
-	action, dropped, err := buildDropStackAction(targetSlot, item, count)
+	action, dropped, err := BuildDropStackAction(targetSlot, item, count)
 	if err != nil {
 		return fmt.Errorf("drop %q from inventory slot %d: %w", name, targetSlot, err)
 	}
 
 	// Face-direction swing for viewers, then the authoritative drop request.
-	if err := b.Conn.WritePacket(buildDropSwing(b.Conn.GameData().EntityRuntimeID)); err != nil {
+	if err := b.Conn.WritePacket(BuildDropSwing(b.Conn.GameData().EntityRuntimeID)); err != nil {
 		return fmt.Errorf("drop %d %q: send drop swing: %w", dropped, name, err)
 	}
 
@@ -133,10 +134,13 @@ func (b *Bot) InjectAIEvent(msg string) {
 
 var errStackRequestRejected = errors.New("server rejected item stack request")
 
-type craftingGridInput struct {
-	slot           byte
-	count          int
-	stackNetworkID int32
+// CraftingGridInput is one ingredient already staged on the crafting grid: the
+// grid slot, how many items it holds, and the stack network ID the server gave
+// it, which every later consume and place action has to echo.
+type CraftingGridInput struct {
+	Slot           byte
+	Count          int
+	StackNetworkID int32
 }
 
 type stagedCraftIngredient struct {
@@ -165,16 +169,16 @@ func (b *Bot) CraftItem(recipeNetID uint32, count int) error {
 		b.Mu.Unlock()
 		return fmt.Errorf("recipe %d not in cache (waiting for CraftingData)", recipeNetID)
 	}
-	picks, err := planIngredientConsumption(b.InventoryMap, b.ItemNames, recipe.Ingredients, count)
+	picks, err := PlanIngredientConsumption(b.InventoryMap, b.ItemNames, recipe.Ingredients, count)
 	if err != nil {
 		b.Mu.Unlock()
 		return err
 	}
 	itemName := b.ItemNames[recipe.Output.NetworkID]
-	ingredientSources := snapshotIngredientSources(b.InventoryMap, picks)
+	ingredientSources := SnapshotIngredientSources(b.InventoryMap, picks)
 	itemNetworkIDs := make(map[uint32]int32, len(picks))
 	for _, pick := range picks {
-		itemNetworkIDs[pick.slot] = b.InventoryMap[pick.slot].NetworkID
+		itemNetworkIDs[pick.Slot] = b.InventoryMap[pick.Slot].NetworkID
 	}
 	b.Mu.Unlock()
 
@@ -202,7 +206,7 @@ func (b *Bot) CraftItem(recipeNetID uint32, count int) error {
 	time.Sleep(InventoryOpenDelay)
 
 	staging := &craftStaging{
-		gridInputs:         make([]craftingGridInput, 0, len(picks)),
+		gridInputs:         make([]CraftingGridInput, 0, len(picks)),
 		gridInputIndexes:   make(map[byte]int, len(picks)),
 		predictedSourceIDs: make(map[uint32]int32, len(picks)),
 		stagedIngredients:  make([]stagedCraftIngredient, 0, len(picks)),
@@ -210,7 +214,7 @@ func (b *Bot) CraftItem(recipeNetID uint32, count int) error {
 		itemName:           itemName,
 	}
 	for _, pick := range picks {
-		gridSlot, err := craftingGridSlot(recipe, pick.ingredientIndex)
+		gridSlot, err := CraftingGridSlot(recipe, pick.IngredientIndex)
 		if err != nil {
 			return err
 		}
@@ -234,7 +238,7 @@ func (b *Bot) CraftItem(recipeNetID uint32, count int) error {
 // craftStaging keeps the authoritative grid stack IDs for personal and table
 // crafting. A rejected transfer can return already-staged items to their source.
 type craftStaging struct {
-	gridInputs         []craftingGridInput
+	gridInputs         []CraftingGridInput
 	gridInputIndexes   map[byte]int
 	predictedSourceIDs map[uint32]int32
 	stagedIngredients  []stagedCraftIngredient
@@ -244,7 +248,7 @@ type craftStaging struct {
 
 // stageCraftIngredient stages one ingredient (inventory -> cursor -> crafting
 // input) at the slot chosen for the currently open crafting grid.
-func (b *Bot) stageCraftIngredient(pick ingredientPick, s *craftStaging, gridSlot byte) error {
+func (b *Bot) stageCraftIngredient(pick IngredientPick, s *craftStaging, gridSlot byte) error {
 	cursorStackID, err := b.takeIngredientToCursor(pick, s)
 	if err != nil {
 		return err
@@ -252,36 +256,36 @@ func (b *Bot) stageCraftIngredient(pick ingredientPick, s *craftStaging, gridSlo
 	return b.placeIngredientOnGrid(pick, s, gridSlot, cursorStackID)
 }
 
-// takeIngredientToCursor moves pick.count items from the ingredient's inventory
+// takeIngredientToCursor moves pick.Count items from the ingredient's inventory
 // slot onto the cursor and records the authoritative stack ID for later place
 // requests. Returns the cursor stack ID, falling back to the take request ID
 // when the server does not assign one.
-func (b *Bot) takeIngredientToCursor(pick ingredientPick, s *craftStaging) (int32, error) {
-	stackNetworkID := s.predictedSourceIDs[pick.slot]
+func (b *Bot) takeIngredientToCursor(pick IngredientPick, s *craftStaging) (int32, error) {
+	stackNetworkID := s.predictedSourceIDs[pick.Slot]
 	if stackNetworkID == 0 {
 		b.Mu.Lock()
-		stackNetworkID = b.StackNetworkIDs[pick.slot]
+		stackNetworkID = b.StackNetworkIDs[pick.Slot]
 		b.Mu.Unlock()
 	}
 	if stackNetworkID == 0 {
-		return 0, fmt.Errorf("cannot craft: slot %d has invalid StackNetworkID (0)", pick.slot)
+		return 0, fmt.Errorf("cannot craft: slot %d has invalid StackNetworkID (0)", pick.Slot)
 	}
 
-	source := playerStackRequestSlot(pick.slot, stackNetworkID)
-	take := buildTakeToCursorAction(source, pick.count)
+	source := PlayerStackRequestSlot(pick.Slot, stackNetworkID)
+	take := BuildTakeToCursorAction(source, pick.Count)
 	takeID, takeCh := b.beginStackRequest(0)
 	takeResult, err := b.sendStackRequest(takeID, takeCh, []protocol.StackRequestAction{take}, s.itemName)
 	if err != nil {
 		if errors.Is(err, errStackRequestRejected) && len(s.stagedIngredients) > 0 {
 			if restoreErr := b.restoreCraftingGrid(s.stagedIngredients, s.gridInputs, s.gridInputIndexes, s.itemName); restoreErr != nil {
-				return 0, fmt.Errorf("take ingredient from slot %d: %w; restore crafting grid: %v", pick.slot, err, restoreErr)
+				return 0, fmt.Errorf("take ingredient from slot %d: %w; restore crafting grid: %v", pick.Slot, err, restoreErr)
 			}
 		}
-		return 0, fmt.Errorf("take ingredient from slot %d: %w", pick.slot, err)
+		return 0, fmt.Errorf("take ingredient from slot %d: %w", pick.Slot, err)
 	}
-	s.predictedSourceIDs[pick.slot] = takeResult.stackNetworkID(source.Container.ContainerID, source.Slot)
-	if s.predictedSourceIDs[pick.slot] == 0 {
-		s.predictedSourceIDs[pick.slot] = takeID
+	s.predictedSourceIDs[pick.Slot] = takeResult.stackNetworkID(source.Container.ContainerID, source.Slot)
+	if s.predictedSourceIDs[pick.Slot] == 0 {
+		s.predictedSourceIDs[pick.Slot] = takeID
 	}
 
 	cursorStackID := takeResult.stackNetworkID(protocol.ContainerCursor, 0)
@@ -294,17 +298,17 @@ func (b *Bot) takeIngredientToCursor(pick ingredientPick, s *craftStaging) (int3
 // placeIngredientOnGrid moves the cursor stack into the crafting input slot,
 // merging with an existing grid stack when present, and records the staged
 // ingredient so a later rejection can roll it back.
-func (b *Bot) placeIngredientOnGrid(pick ingredientPick, s *craftStaging, gridSlot byte, cursorStackID int32) error {
+func (b *Bot) placeIngredientOnGrid(pick IngredientPick, s *craftStaging, gridSlot byte, cursorStackID int32) error {
 	destinationStackID := int32(0)
 	if index, exists := s.gridInputIndexes[gridSlot]; exists {
-		destinationStackID = s.gridInputs[index].stackNetworkID
+		destinationStackID = s.gridInputs[index].StackNetworkID
 	}
-	place := buildPlaceCursorToCraftingAction(cursorStackID, gridSlot, destinationStackID, pick.count)
+	place := BuildPlaceCursorToCraftingAction(cursorStackID, gridSlot, destinationStackID, pick.Count)
 	placeID, placeCh := b.beginStackRequest(0)
 	placeResult, err := b.sendStackRequest(placeID, placeCh, []protocol.StackRequestAction{place}, s.itemName)
 	if err != nil {
 		if errors.Is(err, errStackRequestRejected) {
-			if restoreErr := b.returnCursorToInventory(cursorStackID, pick.slot, pick.count, s.itemNetworkIDs[pick.slot], s.itemName); restoreErr != nil {
+			if restoreErr := b.returnCursorToInventory(cursorStackID, pick.Slot, pick.Count, s.itemNetworkIDs[pick.Slot], s.itemName); restoreErr != nil {
 				return fmt.Errorf("place ingredient in crafting slot %d: %w; restore cursor: %v", gridSlot, err, restoreErr)
 			}
 			if restoreErr := b.restoreCraftingGrid(s.stagedIngredients, s.gridInputs, s.gridInputIndexes, s.itemName); restoreErr != nil {
@@ -319,17 +323,17 @@ func (b *Bot) placeIngredientOnGrid(pick ingredientPick, s *craftStaging, gridSl
 		gridStackID = placeID
 	}
 	if index, exists := s.gridInputIndexes[gridSlot]; exists {
-		s.gridInputs[index].count += pick.count
-		s.gridInputs[index].stackNetworkID = gridStackID
+		s.gridInputs[index].Count += pick.Count
+		s.gridInputs[index].StackNetworkID = gridStackID
 	} else {
 		s.gridInputIndexes[gridSlot] = len(s.gridInputs)
-		s.gridInputs = append(s.gridInputs, craftingGridInput{slot: gridSlot, count: pick.count, stackNetworkID: gridStackID})
+		s.gridInputs = append(s.gridInputs, CraftingGridInput{Slot: gridSlot, Count: pick.Count, StackNetworkID: gridStackID})
 	}
 	s.stagedIngredients = append(s.stagedIngredients, stagedCraftIngredient{
-		sourceSlot:    pick.slot,
+		sourceSlot:    pick.Slot,
 		gridSlot:      gridSlot,
-		count:         pick.count,
-		itemNetworkID: s.itemNetworkIDs[pick.slot],
+		count:         pick.Count,
+		itemNetworkID: s.itemNetworkIDs[pick.Slot],
 	})
 	return nil
 }
@@ -338,9 +342,9 @@ func (b *Bot) placeIngredientOnGrid(pick ingredientPick, s *craftStaging, gridSl
 // inventory snapshot on success, and restores the partially-filled grid on
 // rejection. Extracted from CraftItem so the main function stays a thin
 // validate → stage → finalize orchestrator.
-func (b *Bot) finalizeCraft(recipe RecipeInfo, recipeNetID uint32, count int, outputSlot uint32, ingredientSources map[uint32]ingredientSourceSnapshot, s *craftStaging) error {
+func (b *Bot) finalizeCraft(recipe RecipeInfo, recipeNetID uint32, count int, outputSlot uint32, ingredientSources map[uint32]IngredientSourceSnapshot, s *craftStaging) error {
 	requestID, resultCh := b.beginStackRequest(recipe.Output.NetworkID)
-	actions, err := buildCraftActions(requestID, recipeNetID, recipe, count, s.gridInputs, outputSlot, b.ItemNames[recipe.Output.NetworkID])
+	actions, err := BuildCraftActions(requestID, recipeNetID, recipe, count, s.gridInputs, outputSlot, b.ItemNames[recipe.Output.NetworkID])
 	if err != nil {
 		// The grid is already staged, so release it before reporting the failure
 		// rather than leaving items stranded in the crafting input.
@@ -359,7 +363,7 @@ func (b *Bot) finalizeCraft(recipe RecipeInfo, recipeNetID uint32, count int, ou
 	}
 
 	b.Mu.Lock()
-	reconcileCraftIngredientCounts(b.InventoryMap, b.StackNetworkIDs, ingredientSources)
+	ReconcileCraftIngredientCounts(b.InventoryMap, b.StackNetworkIDs, ingredientSources)
 	b.Mu.Unlock()
 
 	b.Logger.Info("CraftItem accepted",
@@ -391,20 +395,20 @@ func (b *Bot) CraftItemOnTable(recipeNetID uint32, count int) error {
 		b.Mu.Unlock()
 		return fmt.Errorf("recipe %d not in cache (waiting for CraftingData)", recipeNetID)
 	}
-	if err := validateTableCraftRecipe(recipe); err != nil {
+	if err := ValidateTableCraftRecipe(recipe); err != nil {
 		b.Mu.Unlock()
 		return err
 	}
-	picks, err := planIngredientConsumption(b.InventoryMap, b.ItemNames, recipe.Ingredients, count)
+	picks, err := PlanIngredientConsumption(b.InventoryMap, b.ItemNames, recipe.Ingredients, count)
 	if err != nil {
 		b.Mu.Unlock()
 		return err
 	}
 	itemName := b.ItemNames[recipe.Output.NetworkID]
-	sources := snapshotIngredientSources(b.InventoryMap, picks)
+	sources := SnapshotIngredientSources(b.InventoryMap, picks)
 	itemNetworkIDs := make(map[uint32]int32, len(picks))
 	for _, pick := range picks {
-		itemNetworkIDs[pick.slot] = b.InventoryMap[pick.slot].NetworkID
+		itemNetworkIDs[pick.Slot] = b.InventoryMap[pick.Slot].NetworkID
 	}
 	outputSlot, hasOutputSlot := findFirstEmptyPlayerSlot(b.InventoryMap)
 	b.Mu.Unlock()
@@ -423,7 +427,7 @@ func (b *Bot) CraftItemOnTable(recipeNetID uint32, count int) error {
 	b.Logger.Info("CraftItemOnTable manual grid", "recipeNetID", recipeNetID,
 		"item", itemName, "count", count, "ingredientCount", len(picks))
 	staging := &craftStaging{
-		gridInputs:         make([]craftingGridInput, 0, len(picks)),
+		gridInputs:         make([]CraftingGridInput, 0, len(picks)),
 		gridInputIndexes:   make(map[byte]int, len(picks)),
 		predictedSourceIDs: make(map[uint32]int32, len(picks)),
 		stagedIngredients:  make([]stagedCraftIngredient, 0, len(picks)),
@@ -431,7 +435,7 @@ func (b *Bot) CraftItemOnTable(recipeNetID uint32, count int) error {
 		itemName:           itemName,
 	}
 	for _, pick := range picks {
-		gridSlot, err := craftingTableGridSlot(recipe, pick.ingredientIndex)
+		gridSlot, err := CraftingTableGridSlot(recipe, pick.IngredientIndex)
 		if err != nil {
 			return err
 		}
@@ -442,10 +446,10 @@ func (b *Bot) CraftItemOnTable(recipeNetID uint32, count int) error {
 	return b.finalizeCraft(recipe, recipeNetID, count, outputSlot, sources, staging)
 }
 
-// validateTableCraftRecipe rejects recipes the workbench grid cannot express.
+// ValidateTableCraftRecipe rejects recipes the workbench grid cannot express.
 // Non-crafting-table blocks keep their own UI, and anything larger than the
 // 3×3 grid has to be left to the server's recipe book.
-func validateTableCraftRecipe(recipe RecipeInfo) error {
+func ValidateTableCraftRecipe(recipe RecipeInfo) error {
 	if recipe.Block != "crafting_table" {
 		return fmt.Errorf("recipe %s requires its own interface, not a crafting table", recipe.Block)
 	}
@@ -461,11 +465,11 @@ func validateTableCraftRecipe(recipe RecipeInfo) error {
 	return nil
 }
 
-// craftingTableGridSlot maps a recipe ingredient to its slot in the open
+// CraftingTableGridSlot maps a recipe ingredient to its slot in the open
 // crafting table's 3×3 input, anchored at the top-left like a player does. A
 // shaped pattern may legally sit anywhere in the grid, so the top-left anchor
 // keeps one recipe mapping to one stable set of slots.
-func craftingTableGridSlot(recipe RecipeInfo, ingredientIndex int) (byte, error) {
+func CraftingTableGridSlot(recipe RecipeInfo, ingredientIndex int) (byte, error) {
 	if recipe.Shapeless {
 		if ingredientIndex < 0 || ingredientIndex >= 9 {
 			return 0, fmt.Errorf("ingredient %d does not fit the 3x3 crafting table grid", ingredientIndex)
@@ -491,7 +495,7 @@ func validatePersonalCraftRecipe(recipe RecipeInfo) error {
 	return nil
 }
 
-func craftingGridSlot(recipe RecipeInfo, ingredientIndex int) (byte, error) {
+func CraftingGridSlot(recipe RecipeInfo, ingredientIndex int) (byte, error) {
 	if recipe.Shapeless {
 		if ingredientIndex < 0 || ingredientIndex >= 4 {
 			return 0, fmt.Errorf("ingredient %d does not fit personal crafting grid", ingredientIndex)
@@ -515,7 +519,7 @@ func craftingGridSlot(recipe RecipeInfo, ingredientIndex int) (byte, error) {
 	return byte(CraftingGridBaseSlot + row*2 + column), nil
 }
 
-func playerStackRequestSlot(slot uint32, stackNetworkID int32) protocol.StackRequestSlotInfo {
+func PlayerStackRequestSlot(slot uint32, stackNetworkID int32) protocol.StackRequestSlotInfo {
 	containerID := byte(protocol.ContainerInventory)
 	if slot < 9 {
 		containerID = protocol.ContainerHotBar
@@ -527,7 +531,7 @@ func playerStackRequestSlot(slot uint32, stackNetworkID int32) protocol.StackReq
 	}
 }
 
-func buildTakeToCursorAction(source protocol.StackRequestSlotInfo, count int) *protocol.TakeStackRequestAction {
+func BuildTakeToCursorAction(source protocol.StackRequestSlotInfo, count int) *protocol.TakeStackRequestAction {
 	action := &protocol.TakeStackRequestAction{}
 	action.Count = byte(count)
 	action.Source = source
@@ -538,7 +542,7 @@ func buildTakeToCursorAction(source protocol.StackRequestSlotInfo, count int) *p
 	return action
 }
 
-func buildPlaceCursorToCraftingAction(cursorStackID int32, gridSlot byte, destinationStackID int32, count int) *protocol.PlaceStackRequestAction {
+func BuildPlaceCursorToCraftingAction(cursorStackID int32, gridSlot byte, destinationStackID int32, count int) *protocol.PlaceStackRequestAction {
 	return buildPlaceFromCursorAction(cursorStackID, protocol.StackRequestSlotInfo{
 		Container:      protocol.FullContainerName{ContainerID: protocol.ContainerCraftingInput},
 		Slot:           gridSlot,
@@ -562,28 +566,28 @@ func (b *Bot) returnCursorToInventory(cursorStackID int32, destinationSlot uint3
 	b.Mu.Lock()
 	destinationStackID := b.StackNetworkIDs[destinationSlot]
 	b.Mu.Unlock()
-	action := buildPlaceFromCursorAction(cursorStackID, playerStackRequestSlot(destinationSlot, destinationStackID), count)
+	action := buildPlaceFromCursorAction(cursorStackID, PlayerStackRequestSlot(destinationSlot, destinationStackID), count)
 	requestID, resultCh := b.beginStackRequest(itemNetworkID)
 	_, err := b.sendStackRequest(requestID, resultCh, []protocol.StackRequestAction{action}, itemName)
 	return err
 }
 
-func (b *Bot) restoreCraftingGrid(staged []stagedCraftIngredient, gridInputs []craftingGridInput, indexes map[byte]int, itemName string) error {
+func (b *Bot) restoreCraftingGrid(staged []stagedCraftIngredient, gridInputs []CraftingGridInput, indexes map[byte]int, itemName string) error {
 	for i := len(staged) - 1; i >= 0; i-- {
 		entry := staged[i]
 		gridInput := &gridInputs[indexes[entry.gridSlot]]
 		source := protocol.StackRequestSlotInfo{
 			Container:      protocol.FullContainerName{ContainerID: protocol.ContainerCraftingInput},
 			Slot:           entry.gridSlot,
-			StackNetworkID: gridInput.stackNetworkID,
+			StackNetworkID: gridInput.StackNetworkID,
 		}
 		takeID, takeCh := b.beginStackRequest(0)
-		takeResult, err := b.sendStackRequest(takeID, takeCh, []protocol.StackRequestAction{buildTakeToCursorAction(source, entry.count)}, itemName)
+		takeResult, err := b.sendStackRequest(takeID, takeCh, []protocol.StackRequestAction{BuildTakeToCursorAction(source, entry.count)}, itemName)
 		if err != nil {
 			return err
 		}
-		gridInput.count -= entry.count
-		gridInput.stackNetworkID = takeResult.stackNetworkID(protocol.ContainerCraftingInput, entry.gridSlot)
+		gridInput.Count -= entry.count
+		gridInput.StackNetworkID = takeResult.stackNetworkID(protocol.ContainerCraftingInput, entry.gridSlot)
 		cursorStackID := takeResult.stackNetworkID(protocol.ContainerCursor, 0)
 		if cursorStackID == 0 {
 			cursorStackID = takeID
@@ -645,15 +649,91 @@ func (b *Bot) sendStackRequest(requestID int32, resultCh chan craftResult, actio
 	}
 }
 
-// buildCraftActions assembles the stack request actions for one craft. Craft
+// PlaceLapisInEnchantingTable moves count lapis into the enchanting table's
+// material slot, which is what an option is charged against. The server refuses
+// an option outright when that slot is empty, so this runs before any option is
+// applied rather than as part of it.
+//
+// The transfer is the same server-authoritative PlaceIntoContainerSlotIn the
+// other station actions use, addressed by protocol container ID rather than by
+// windowID. windowID is accepted because station.Enchanter's shape includes it,
+// and is deliberately unused: the server resolves this slot against
+// protocol.ContainerEnchantingMaterial, and a container it does not recognise is
+// refused. The lapis, not the tool, is what goes in the material container.
+func (e EnchantTable) PlaceLapisInEnchantingTable(windowID byte, count int) error {
+	if e.B == nil {
+		return ErrNoBot
+	}
+	if count <= 0 {
+		return fmt.Errorf("bot: refusing to place %d lapis in an enchanting table", count)
+	}
+
+	slot, ok := e.B.FindItemSlotByName(LapisItemName)
+	if !ok {
+		return fmt.Errorf("bot: no %s in the inventory to enchant with", LapisItemName)
+	}
+
+	// destStackNetID 0 is the empty-slot convention the station manager already
+	// uses for the tool, and the material slot is empty on a table that has not
+	// been used this session.
+	if err := e.B.PlaceIntoContainerSlotIn(
+		station.EnchantMaterialContainerID, station.EnchantMaterialSlot, 0, slot, count,
+	); err != nil {
+		return fmt.Errorf("bot: place %s in the enchanting table: %w", LapisItemName, err)
+	}
+	return nil
+}
+
+// ApplyEnchant selects the option at index and spends it, blocking until the
+// server answers.
+//
+// What it returns means exactly this: the server received the option's recipe
+// network ID in a CraftRecipe action and accepted the resulting ItemStackRequest.
+// It is not "the request was sent", and it is not "the item is now enchanted".
+// The protocol puts those apart and this method can only reach the first one:
+//
+//   - The response's non-zero status is a rejection, and that is a real server
+//     signal, so a rejection is reported as an error rather than swallowed.
+//   - An accepted status proves the request was processed. The response's
+//     per-slot payload has no item identity and no enchantment list, so nothing
+//     in it can say what the item now is.
+//
+// Confirming the result is therefore the manager's job, and it does it by
+// re-reading the table's input slot after this returns. That check is weaker
+// than it looks — see EnchantItem — so this method's contract deliberately stops
+// short of claiming the enchant landed rather than borrowing a certainty it does
+// not have. A refusal here, though, is always a refusal: every early return
+// below is a case where no enchantment was bought.
+func (e EnchantTable) ApplyEnchant(windowID byte, optionIndex int) error {
+	if e.B == nil {
+		return ErrNoBot
+	}
+
+	option, err := EnchantOptionAt(ReadEnchantOptions(e.B), optionIndex)
+	if err != nil {
+		return err
+	}
+
+	// windowID is unused for the same reason it is unused in
+	// PlaceLapisInEnchantingTable: a CraftRecipe action carries no slot, so the
+	// request has nowhere to put a window ID even if the server wanted one.
+	actions := BuildApplyEnchantActions(option)
+	requestID, resultCh := e.B.beginStackRequest(0)
+	if _, err := e.B.sendStackRequest(requestID, resultCh, actions, "enchanting table"); err != nil {
+		return fmt.Errorf("bot: apply enchantment %q (recipe %d): %w", option.Name, option.RecipeNetworkID, err)
+	}
+	return nil
+}
+
+// BuildCraftActions assembles the stack request actions for one craft. Craft
 // results are addressed by namespaced item identifier rather than network ID, so
 // the output item must be resolvable to a name; otherwise the server would
 // receive an empty identifier and reject the request without a clear reason.
-func buildCraftActions(requestID int32, recipeNetID uint32, recipe RecipeInfo, count int, gridInputs []craftingGridInput, outputSlot uint32, outputName string) ([]protocol.StackRequestAction, error) {
+func BuildCraftActions(requestID int32, recipeNetID uint32, recipe RecipeInfo, count int, gridInputs []CraftingGridInput, outputSlot uint32, outputName string) ([]protocol.StackRequestAction, error) {
 	outputCount := int(recipe.Output.Count) * count
 	resultItem := recipe.Output
 	resultItem.Count = safecast.To[uint16](outputCount)
-	resultStackItem, ok := stackRequestItemFromStack(resultItem, outputName)
+	resultStackItem, ok := StackRequestItemFromStack(resultItem, outputName)
 	if !ok {
 		return nil, fmt.Errorf("cannot determine the item name of recipe output %+v", recipe.Output)
 	}
@@ -666,11 +746,11 @@ func buildCraftActions(requestID int32, recipeNetID uint32, recipe RecipeInfo, c
 	for _, input := range gridInputs {
 		actions = append(actions, &protocol.ConsumeStackRequestAction{
 			DestroyStackRequestAction: protocol.DestroyStackRequestAction{
-				Count: byte(input.count),
+				Count: byte(input.Count),
 				Source: protocol.StackRequestSlotInfo{
 					Container:      protocol.FullContainerName{ContainerID: protocol.ContainerCraftingInput},
-					Slot:           input.slot,
-					StackNetworkID: input.stackNetworkID,
+					Slot:           input.Slot,
+					StackNetworkID: input.StackNetworkID,
 				},
 			},
 		})

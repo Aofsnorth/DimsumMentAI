@@ -49,47 +49,47 @@ func init() {
 	// One behaviour, three names: the LLM plans in sentences ("light the
 	// portal", "ignite the nether portal") and each phrasing maps here.
 	lightPortal := func(b *bot.Bot, param, user string) { handleLightPortal(b, param, user) }
-	actionHandlers["lightportal"] = lightPortal
-	actionHandlers["light_portal"] = lightPortal
-	actionHandlers["igniteportal"] = lightPortal
+	ActionHandlers["lightportal"] = lightPortal
+	ActionHandlers["light_portal"] = lightPortal
+	ActionHandlers["igniteportal"] = lightPortal
 }
 
-// portalPlan is what the classification of a found frame means for this
+// PortalPlan is what the classification of a found frame means for this
 // action. Kept as a pure function so the routing is testable without a bot:
 // a lit frame must not trigger an ignite sequence (the flint click on an
 // already-lit portal is wasted at best, and reporting it as "lit" would make
 // the planner believe it performed the ignition).
-type portalPlan int
+type PortalPlan int
 
 const (
-	planEnterLit    portalPlan = iota // already lit: just walk in
-	planLight                         // unlit nether frame: equip flint and ignite
-	planEndPortal                     // end portal frames: cannot be lit at all
-	planNotPortal                     // no portal-shaped structure here
+	PlanEnterLit  PortalPlan = iota // already lit: just walk in
+	PlanLight                       // unlit nether frame: equip flint and ignite
+	PlanEndPortal                   // end portal frames: cannot be lit at all
+	PlanNotPortal                   // no portal-shaped structure here
 )
 
-// routePortalState maps a classification onto the plan.
-func routePortalState(state dimension.PortalState) portalPlan {
+// RoutePortalState maps a classification onto the plan.
+func RoutePortalState(state dimension.PortalState) PortalPlan {
 	switch state {
 	case dimension.Lit:
-		return planEnterLit
+		return PlanEnterLit
 	case dimension.NeedsLighting:
-		return planLight
+		return PlanLight
 	case dimension.EndPortalFrame, dimension.EndPortalOpen:
-		return planEndPortal
+		return PlanEndPortal
 	default:
-		return planNotPortal
+		return PlanNotPortal
 	}
 }
 
-// portalScan gathers what a region around an obsidian seed looks like: the
+// PortalScan gathers what a region around an obsidian seed looks like: the
 // block names dimension.Classify needs, the obsidian cells of the frame, and
 // the air cells inside it (candidates to ignite, and to walk into once lit).
 //
 // lookup resolves a cell to a block name; unloaded cells resolve to not-ok
 // and are skipped, which is what keeps a half-loaded frame from being
 // classified as if it were solid.
-func portalScan(lookup blockLookup, seed protocol.BlockPos, dyMin, dyMax int32) (names []string, obsidian, air []protocol.BlockPos) {
+func PortalScan(lookup BlockLookup, seed protocol.BlockPos, dyMin, dyMax int32) (names []string, obsidian, air []protocol.BlockPos) {
 	for dx := int32(-3); dx <= 3; dx++ {
 		for dy := dyMin; dy <= dyMax; dy++ {
 			for dz := int32(-3); dz <= 3; dz++ {
@@ -111,18 +111,18 @@ func portalScan(lookup blockLookup, seed protocol.BlockPos, dyMin, dyMax int32) 
 	return names, obsidian, air
 }
 
-// portalInteriorCell picks the cell to navigate to on a lit portal: an
+// PortalInteriorCell picks the cell to navigate to on a lit portal: an
 // interior air cell if the scan saw one, otherwise the seed block itself —
 // the server moves the player on contact, so arriving on the frame is the
 // fallback that still works when the interior is unloaded.
-func portalInteriorCell(air []protocol.BlockPos, seed protocol.BlockPos) protocol.BlockPos {
+func PortalInteriorCell(air []protocol.BlockPos, seed protocol.BlockPos) protocol.BlockPos {
 	if len(air) > 0 {
 		return air[0]
 	}
 	return seed
 }
 
-// selectIgnitionTarget picks the cell to apply flint and steel to.
+// SelectIgnitionTarget picks the cell to apply flint and steel to.
 //
 // The rule mirrors how a player lights a portal: the click lands on an
 // interior air block that touches the frame, and the bottom row is preferred
@@ -133,7 +133,7 @@ func portalInteriorCell(air []protocol.BlockPos, seed protocol.BlockPos) protoco
 // not loaded (or there is no air at all), the fallback is the frame's lowest
 // obsidian cell: UseItem on a frame block also ignites in vanilla, so it is
 // a real second path rather than a shrug.
-func selectIgnitionTarget(obsidian, air []protocol.BlockPos, lookup blockLookup, botPos mgl32.Vec3) (protocol.BlockPos, bool) {
+func SelectIgnitionTarget(obsidian, air []protocol.BlockPos, lookup BlockLookup, botPos mgl32.Vec3) (protocol.BlockPos, bool) {
 	if len(obsidian) == 0 {
 		return protocol.BlockPos{}, false
 	}
@@ -246,7 +246,7 @@ func blockDistanceTo(p protocol.BlockPos, from mgl32.Vec3) float32 {
 
 // portalFailure reports a lightportal attempt that could not complete.
 func portalFailure(b *bot.Bot, user string, err error) {
-	reportStatus(b, user, event.ActionStatus{
+	ReportStatus(b, user, event.ActionStatus{
 		Action:  "lightportal",
 		Item:    "portal",
 		Success: false,
@@ -260,7 +260,7 @@ func portalFailure(b *bot.Bot, user string, err error) {
 // ignition wait both block.
 func handleLightPortal(b *bot.Bot, param, user string) {
 	radii := searchRadii(b)
-	obsidianPos, foundObsidian := findNearestBlock(b.GetCoords(), radii.Portal, botBlockLookup(b), func(name string) bool {
+	obsidianPos, foundObsidian := findNearestBlock(b.GetCoords(), radii.Portal, BotBlockLookup(b), func(name string) bool {
 		return NormaliseBlockName(name) == "obsidian"
 	})
 
@@ -269,7 +269,7 @@ func handleLightPortal(b *bot.Bot, param, user string) {
 	// same lit-portal search enterPortal uses. This makes "light the portal"
 	// degrade gracefully into "walk into the lit one" instead of failing.
 	if !foundObsidian {
-		litPos, foundLit := findNearestBlock(b.GetCoords(), radii.Portal, botBlockLookup(b), func(name string) bool {
+		litPos, foundLit := findNearestBlock(b.GetCoords(), radii.Portal, BotBlockLookup(b), func(name string) bool {
 			return isLitPortalBlock(name)
 		})
 		if !foundLit {
@@ -278,7 +278,7 @@ func handleLightPortal(b *bot.Bot, param, user string) {
 		}
 		go func() {
 			entered := b.NavigateToBlock(litPos.X(), litPos.Y(), litPos.Z(), 1.0)
-			reportStatus(b, user, event.ActionStatus{
+			ReportStatus(b, user, event.ActionStatus{
 				Action:  "lightportal",
 				Item:    fmt.Sprintf("%d,%d,%d", litPos.X(), litPos.Y(), litPos.Z()),
 				Success: entered,
@@ -288,30 +288,30 @@ func handleLightPortal(b *bot.Bot, param, user string) {
 		return
 	}
 
-	names, obsidian, air := portalScan(botBlockLookup(b), obsidianPos, -2, 6)
-	plan := routePortalState(dimension.Classify(names))
+	names, obsidian, air := PortalScan(BotBlockLookup(b), obsidianPos, -2, 6)
+	plan := RoutePortalState(dimension.Classify(names))
 	b.Logger.Info("portal scan",
 		"seed", fmt.Sprintf("%d,%d,%d", obsidianPos.X(), obsidianPos.Y(), obsidianPos.Z()),
 		"state", dimension.Classify(names).String(),
 		"obsidian", len(obsidian), "air", len(air))
 
 	switch plan {
-	case planEnterLit:
-		cell := portalInteriorCell(air, obsidianPos)
+	case PlanEnterLit:
+		cell := PortalInteriorCell(air, obsidianPos)
 		go func() {
 			entered := b.NavigateToBlock(cell.X(), cell.Y(), cell.Z(), 1.0)
-			reportStatus(b, user, event.ActionStatus{
+			ReportStatus(b, user, event.ActionStatus{
 				Action:  "lightportal",
 				Item:    fmt.Sprintf("%d,%d,%d", cell.X(), cell.Y(), cell.Z()),
 				Success: entered,
 				Error:   navError(entered, cell),
 			})
 		}()
-	case planEndPortal:
+	case PlanEndPortal:
 		portalFailure(b, user, fmt.Errorf("ini end portal — frame-nya diisi eye of ender, bukan dinyalakan"))
-	case planNotPortal:
+	case PlanNotPortal:
 		portalFailure(b, user, fmt.Errorf("nemun obsidian di %d,%d,%d tapi bentuknya bukan frame portal", obsidianPos.X(), obsidianPos.Y(), obsidianPos.Z()))
-	case planLight:
+	case PlanLight:
 		go lightPortalFrame(b, user, obsidianPos, obsidian, air)
 	}
 }
@@ -330,7 +330,7 @@ func lightPortalFrame(b *bot.Bot, user string, seed protocol.BlockPos, obsidian,
 		return
 	}
 
-	target, ok := selectIgnitionTarget(obsidian, air, botBlockLookup(b), b.GetCoords())
+	target, ok := SelectIgnitionTarget(obsidian, air, BotBlockLookup(b), b.GetCoords())
 	if !ok {
 		portalFailure(b, user, fmt.Errorf("nggak nemu titik buat nyalain frame di %d,%d,%d", seed.X(), seed.Y(), seed.Z()))
 		return
@@ -355,7 +355,7 @@ func lightPortalFrame(b *bot.Bot, user string, seed protocol.BlockPos, obsidian,
 	}
 
 	if waitForPortalLit(b, seed) {
-		reportStatus(b, user, event.ActionStatus{
+		ReportStatus(b, user, event.ActionStatus{
 			Action:  "lightportal",
 			Item:    fmt.Sprintf("%d,%d,%d", target.X(), target.Y(), target.Z()),
 			Success: true,

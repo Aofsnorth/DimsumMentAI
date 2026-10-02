@@ -58,7 +58,7 @@ func (tl *TodoList) SetPlan(goal string, actions []string) {
 		tl.items[i] = TodoItem{
 			Index:  i,
 			Action: a,
-			Desc:   autoDesc(a),
+			Desc:   AutoDesc(a),
 			Status: StatusPending,
 		}
 	}
@@ -82,7 +82,7 @@ func (tl *TodoList) ReplaceRemaining(newActions []string) {
 		newItems = append(newItems, TodoItem{
 			Index:  len(kept) + i,
 			Action: a,
-			Desc:   autoDesc(a),
+			Desc:   AutoDesc(a),
 			Status: StatusPending,
 		})
 	}
@@ -279,8 +279,8 @@ var actionDescriptions = map[string]func(label, param string) string{
 	"explore":  func(_, param string) string { return "Explore for " + param + "s" },
 }
 
-// autoDesc generates a short human-readable description from an action string.
-func autoDesc(action string) string {
+// AutoDesc generates a short human-readable description from an action string.
+func AutoDesc(action string) string {
 	parts := strings.SplitN(action, ":", 2)
 	label := strings.ToLower(parts[0])
 	param := ""

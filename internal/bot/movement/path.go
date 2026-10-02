@@ -79,7 +79,17 @@ func RecalculatePath(b *bot.Bot) {
 	}
 	movementState := b.MovementState
 	lastTickPos := b.Pos
+	// One search per destination. A caller that asked for a route and the
+	// movement tick asking whether it has one were both starting a search for the
+	// same tree within tens of milliseconds of each other, and the world paid for
+	// two searches to get one route.
+	if !b.ClaimRepathLocked(b.TargetPos) {
+		b.Mu.Unlock()
+		b.Logger.Debug("A* skipped: a search for this destination is already running")
+		return
+	}
 	b.Mu.Unlock()
+	defer b.ReleaseRepath()
 
 	// No destination means no search. Every caller that means to go somewhere
 	// sets the state first, so this only ever fires for a re-plan nobody asked
@@ -163,10 +173,19 @@ func RecalculatePath(b *bot.Bot) {
 		path = pathfinder.FindPath(start, target, b.WorldModel, false)
 		b.WorldModel.AllowScaffold = false
 	}
+	partial := false
 	if len(path) == 0 {
-		// Pass 3: If both failed, retry with fallback enabled so the bot gets as close as possible
+		// Pass 3: If both failed, retry with fallback enabled so the bot gets as close as possible.
+		//
+		// This is a walk to the NEAREST point A* could reach, not a route to the
+		// destination, and it used to be published in exactly the same way as a
+		// real one — same CurrentPath, same "pathfinding completed" line. A caller
+		// reading the log had no way to tell a route from a surrender, and the bot
+		// walked ten blocks to somewhere five blocks short of a tree it could not
+		// reach, which is indistinguishable from a bot that has frozen.
 		b.Logger.Info("Pathfinding with scaffolding failed, retrying with fallback enabled...")
 		path = pathfinder.FindPath(start, target, b.WorldModel, true)
+		partial = len(path) > 0
 	}
 
 	b.Mu.Lock()
@@ -193,6 +212,17 @@ func RecalculatePath(b *bot.Bot) {
 			nodeCoords[i] = fmt.Sprintf("(%d,%d,%d,%s,%s)", n.X, n.Y, n.Z, n.LinkType, n.Action)
 		}
 		b.Logger.Info("A* pathfinding completed", "nodes", len(path), "path", strings.Join(nodeCoords, " -> "), "movement_state", movementState)
+		if partial && len(path) > 0 {
+			// The destination is not on this route. Say so loudly, with the gap,
+			// because "completed" above is otherwise read as "arrived".
+			last := path[len(path)-1]
+			shortBy := int32(math.Abs(float64(target.Y - last.Y)))
+			b.Logger.Warn("A* gave up short: this route does not reach the destination",
+				"destination", target,
+				"closest_reached", last,
+				"blocks_below_target", shortBy,
+				"movement_state", movementState)
+		}
 	} else {
 		// Reset PathIndex together path so readers in other goroutines
 		// (steering.go, follow.go) cannot dereference stale index into nil
@@ -313,11 +343,11 @@ func NavigateToBlock(b *bot.Bot, x, y, z int32, tolerance float32) bool {
 		dz := curPos.Z() - block.Z()
 		dist := float32(math.Sqrt(float64(dx*dx + dy*dy + dz*dz)))
 
-		decision := evaluateNavProgress(dist, lastDist, tolerance, stalledPolls, mState, hasPath)
-		stalledPolls = decision.stalledPolls
+		decision := EvaluateNavProgress(dist, lastDist, tolerance, stalledPolls, mState, hasPath)
+		stalledPolls = decision.StalledPolls
 		lastDist = dist
-		if decision.done {
-			return decision.reached
+		if decision.Done {
+			return decision.Reached
 		}
 	}
 	return false
@@ -326,29 +356,29 @@ func NavigateToBlock(b *bot.Bot, x, y, z int32, tolerance float32) bool {
 const (
 	navPollInterval    = 100 * time.Millisecond
 	navMaxPolls        = 200 // hard ceiling (~20s) so we never hang forever
-	navStallPollsLimit = 15  // ~1.5s with no measurable progress = stuck
+	NavStallPollsLimit = 15  // ~1.5s with no measurable progress = stuck
 	navProgressEpsilon = 0.05
 )
 
-// navProgressDecision is the outcome of a single navigation poll.
-type navProgressDecision struct {
-	done         bool
-	reached      bool
-	stalledPolls int
+// NavProgressDecision is the outcome of a single navigation poll.
+type NavProgressDecision struct {
+	Done         bool
+	Reached      bool
+	StalledPolls int
 }
 
-// evaluateNavProgress decides whether a navigation wait loop should stop, based
+// EvaluateNavProgress decides whether a navigation wait loop should stop, based
 // on the current distance to the target, the previous distance, the caller's
 // tolerance, the running stall counter, and the movement state. It is pure so
 // the progress/stall policy can be unit tested without a live bot.
 //
 //   - Reaches tolerance -> done, reached.
 //   - Path finished or bot idle while still outside tolerance -> done, not reached.
-//   - No measurable progress for navStallPollsLimit polls -> done, not reached.
+//   - No measurable progress for NavStallPollsLimit polls -> done, not reached.
 //   - Otherwise -> keep waiting, with an updated stall counter.
-func evaluateNavProgress(dist, lastDist, tolerance float32, stalledPolls int, mState string, hasPath bool) navProgressDecision {
+func EvaluateNavProgress(dist, lastDist, tolerance float32, stalledPolls int, mState string, hasPath bool) NavProgressDecision {
 	if dist <= tolerance {
-		return navProgressDecision{done: true, reached: true, stalledPolls: stalledPolls}
+		return NavProgressDecision{Done: true, Reached: true, StalledPolls: stalledPolls}
 	}
 
 	if lastDist-dist > navProgressEpsilon {
@@ -360,13 +390,13 @@ func evaluateNavProgress(dist, lastDist, tolerance float32, stalledPolls int, mS
 	// Path finished (arrived at path end) but we're still outside the caller's
 	// tolerance, or the bot went idle: nothing more to wait for.
 	if mState == "idle" || (mState == "walk_to" && !hasPath) {
-		return navProgressDecision{done: true, reached: false, stalledPolls: stalledPolls}
+		return NavProgressDecision{Done: true, Reached: false, StalledPolls: stalledPolls}
 	}
 	// Genuinely stuck: making no progress despite an active path.
-	if stalledPolls >= navStallPollsLimit {
-		return navProgressDecision{done: true, reached: false, stalledPolls: stalledPolls}
+	if stalledPolls >= NavStallPollsLimit {
+		return NavProgressDecision{Done: true, Reached: false, StalledPolls: stalledPolls}
 	}
-	return navProgressDecision{done: false, reached: false, stalledPolls: stalledPolls}
+	return NavProgressDecision{Done: false, Reached: false, StalledPolls: stalledPolls}
 }
 
 func nearestStandableNode(b *bot.Bot, start, target pathfinder.Node, radius int32) (pathfinder.Node, bool) {

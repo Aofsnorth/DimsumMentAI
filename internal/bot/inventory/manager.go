@@ -11,6 +11,7 @@ import (
 	"bedrock-ai/internal/bot/inventory/chest"
 	"bedrock-ai/internal/bot/inventory/crafting"
 	"bedrock-ai/internal/bot/inventory/furnace"
+	"bedrock-ai/internal/bot/inventory/station"
 	"bedrock-ai/internal/bot/placement"
 	"bedrock-ai/internal/event"
 	"bedrock-ai/internal/safecast"
@@ -58,6 +59,15 @@ type Bot interface {
 	CloseContainerWindow(windowID byte)
 	PlaceIntoContainerSlot(windowID byte, containerSlot uint32, destStackNetID int32, srcSlot uint32, count int) error
 	TakeFromContainerSlot(windowID byte, slot uint32, count int, stackNetID int32, itemName string) error
+
+	// The In variants address a container by its protocol container ID rather
+	// than by the window ID the server assigned. The window-ID forms are correct
+	// for a chest and for nothing else: a station's slots resolve against
+	// constants like protocol.ContainerAnvilInput and protocol.ContainerEnchantingInput,
+	// and a transfer the server cannot resolve is refused while reading locally
+	// as a clean success.
+	PlaceIntoContainerSlotIn(containerID byte, containerSlot uint32, destStackNetID int32, srcSlot uint32, count int) error
+	TakeFromContainerSlotIn(containerID byte, slot uint32, count int, stackNetID int32, itemName string) error
 }
 
 type InventoryManager struct {
@@ -66,6 +76,7 @@ type InventoryManager struct {
 	chest    *chest.Container
 	furnace  *furnace.Manager
 	crafting *crafting.Manager
+	station  *station.Manager
 }
 
 func NewInventoryManager(bot Bot, logger *slog.Logger) *InventoryManager {
@@ -76,6 +87,7 @@ func NewInventoryManager(bot Bot, logger *slog.Logger) *InventoryManager {
 	im.chest = chest.NewContainer(bot, logger)
 	im.furnace = furnace.NewManager(bot, logger)
 	im.crafting = crafting.NewManager(bot, logger)
+	im.station = station.NewManager(bot, logger)
 	return im
 }
 
@@ -89,6 +101,17 @@ func (im *InventoryManager) Furnace() *furnace.Manager {
 
 func (im *InventoryManager) Crafting() *crafting.Manager {
 	return im.crafting
+}
+
+// Station returns the manager for the block stations: the brewing stand, the
+// enchanting table, the anvil and the grindstone.
+//
+// The enchanting table's server-facing seam is still un-wired at this point. The
+// manager refuses to invent an enchantment until SetEnchanter is given something
+// that can read the server's PlayerEnchantOptions, which is deliberately loud
+// rather than a silent no-op.
+func (im *InventoryManager) Station() *station.Manager {
+	return im.station
 }
 
 func (im *InventoryManager) EquipItem(name string) error {

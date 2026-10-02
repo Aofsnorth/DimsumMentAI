@@ -2,11 +2,13 @@
 package husbandry
 
 import (
+	"context"
 	"math"
 	"strings"
 	"time"
 
 	"bedrock-ai/internal/bot/entity"
+	"bedrock-ai/internal/event"
 	"bedrock-ai/internal/safecast"
 
 	"github.com/go-gl/mathgl/mgl32"
@@ -16,17 +18,19 @@ import (
 
 // isEmptyBucket reports whether the lower-cased name is an empty bucket.
 func isEmptyBucket(name string) bool {
-	return strings.Contains(name, "bucket") &&
-		!strings.Contains(name, "lava") &&
-		!strings.Contains(name, "water") &&
-		!strings.Contains(name, "milk") &&
-		!strings.Contains(name, "fish") &&
-		!strings.Contains(name, "axolotl") &&
-		!strings.Contains(name, "tadpole") &&
-		!strings.Contains(name, "cod") &&
-		!strings.Contains(name, "salmon") &&
-		!strings.Contains(name, "tropical") &&
-		!strings.Contains(name, "pufferfish")
+	n := normalise(name)
+	if !strings.Contains(n, "bucket") {
+		return false
+	}
+	for _, filled := range []string{
+		"lava", "water", "milk", "fish", "axolotl", "tadpole",
+		"cod", "salmon", "tropical", "pufferfish", "powder_snow",
+	} {
+		if strings.Contains(n, filled) {
+			return false
+		}
+	}
+	return true
 }
 
 // findItemSlot finds the first inventory slot whose lower-cased item name
@@ -39,9 +43,7 @@ func (m *Manager) findItemSlot(predicate func(name string) bool) (uint32, protoc
 		if item.Count <= 0 {
 			continue
 		}
-		name := strings.ToLower(names[item.NetworkID])
-		name = strings.TrimPrefix(name, "minecraft:")
-		if predicate(name) {
+		if predicate(normalise(names[item.NetworkID])) {
 			return slot, item, true
 		}
 	}
@@ -52,15 +54,14 @@ func (m *Manager) findItemSlot(predicate func(name string) bool) (uint32, protoc
 // satisfies the supplied predicate.
 func (m *Manager) findNearestEntity(predicate func(entityType string) bool) (*entity.Info, bool) {
 	pos := m.bot.GetCoords()
-	entities := m.bot.GetEntities()
 
 	var closest *entity.Info
 	closestDist := float32(math.MaxFloat32)
-	for _, ent := range entities {
-		if ent.Health <= 0 {
+	for _, ent := range m.bot.GetEntities() {
+		if ent == nil || ent.Health <= 0 {
 			continue
 		}
-		if predicate(strings.ToLower(ent.Type)) {
+		if predicate(entity.NormalizeName(ent.Type)) {
 			dist := pos.Sub(ent.Position).Len()
 			if dist < closestDist {
 				closestDist = dist
@@ -75,16 +76,14 @@ func (m *Manager) findNearestEntity(predicate func(entityType string) bool) (*en
 // satisfies the predicate and are within radius of the bot.
 func (m *Manager) findEntitiesWithinRadius(predicate func(entityType string) bool, radius float32) []*entity.Info {
 	pos := m.bot.GetCoords()
-	entities := m.bot.GetEntities()
 
 	var matches []*entity.Info
-	for _, ent := range entities {
-		if ent.Health <= 0 {
+	for _, ent := range m.bot.GetEntities() {
+		if ent == nil || ent.Health <= 0 {
 			continue
 		}
-		if predicate(strings.ToLower(ent.Type)) {
-			dist := pos.Sub(ent.Position).Len()
-			if dist <= radius {
+		if predicate(entity.NormalizeName(ent.Type)) {
+			if pos.Sub(ent.Position).Len() <= radius {
 				matches = append(matches, ent)
 			}
 		}
@@ -92,15 +91,15 @@ func (m *Manager) findEntitiesWithinRadius(predicate func(entityType string) boo
 	return matches
 }
 
-// interactWithEntity navigates to the entity, looks at it, and sends an
-// interact transaction using the supplied slot and stack.
-func (m *Manager) interactWithEntity(target *entity.Info, slot uint32, stack protocol.ItemStack, lookYOffset float32) {
+// interactWithEntity navigates to the entity, looks at it, and sends the
+// interact transaction that carries the held item.
+func (m *Manager) interactWithEntity(target *entity.Info, slot uint32, stack protocol.ItemStack, lookYOffset float32, t Timings) {
 	m.bot.NavigateTo(target.Position)
-	time.Sleep(1 * time.Second)
+	sleepCtx(context.Background(), t.Approach)
 	m.bot.StopMovement()
 
 	m.bot.LookAt(target.Position.Add(mgl32.Vec3{0, lookYOffset, 0}))
-	time.Sleep(200 * time.Millisecond)
+	sleepCtx(context.Background(), t.Aim)
 
 	tx := &packet.InventoryTransaction{
 		TransactionData: &protocol.UseItemOnEntityTransactionData{
@@ -113,4 +112,46 @@ func (m *Manager) interactWithEntity(target *entity.Info, slot uint32, stack pro
 		},
 	}
 	_ = m.bot.WritePacket(tx)
+}
+
+// inventory takes a flattened reading of what the bot is carrying.
+func (m *Manager) inventory() Inventory {
+	return NewInventory(m.bot.GetInventorySlots(), m.bot.GetItemNames())
+}
+
+// report sends an action status, with a count that is always the number of
+// things actually observed.
+func (m *Manager) report(action, item string, success bool, reason string) {
+	status := event.ActionStatus{
+		Action:  action,
+		Item:    item,
+		Success: success,
+	}
+	if success {
+		status.Count = 1
+	} else {
+		status.Error = reason
+	}
+	m.bot.ReportActionStatus("", status)
+}
+
+// newCountStatus builds a success status carrying a real count, for the actions
+// that produce more than one thing.
+func newCountStatus(action, item string, count int) event.ActionStatus {
+	return event.ActionStatus{Action: action, Item: item, Count: count, Success: true}
+}
+
+// sleepCtx waits for d, returning false if the context ended first.
+func sleepCtx(ctx context.Context, d time.Duration) bool {
+	if d <= 0 {
+		return ctx.Err() == nil
+	}
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
+	}
 }

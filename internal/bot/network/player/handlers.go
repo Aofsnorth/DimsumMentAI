@@ -7,6 +7,7 @@ import (
 
 	"bedrock-ai/internal/bot"
 	"bedrock-ai/internal/bot/entity"
+	"bedrock-ai/internal/bot/inventory/trading"
 	"bedrock-ai/internal/safecast"
 
 	"github.com/go-gl/mathgl/mgl32"
@@ -119,7 +120,87 @@ func handleAddActor(b *bot.Bot, pk packet.Packet) bool {
 	}
 	b.UniqueIDToRuntimeID[p.EntityUniqueID] = p.EntityRuntimeID
 	b.Mu.Unlock()
+	// The metadata arrives with the spawn and is the only place a wolf's collar
+	// or a crop-relevant flag is ever stated. Discarding it is why taming could
+	// not be confirmed: the flag was in the packet and on the floor.
+	b.RecordEntityMeta(p.EntityRuntimeID, p.EntityMetadata)
 	b.Logger.Debug("tracked actor spawned", slog.String("type", p.EntityType), slog.Uint64("runtime_id", p.EntityRuntimeID))
+	return true
+}
+
+// handleUpdateTrade records a villager's trade offers.
+//
+// The offers are a serialised NBT compound the server sends, and nothing else
+// carries them. Without this handler the trading manager had no source for the
+// price list, the XP cost or the required level, and refused every trade as
+// having no offers observed.
+func handleUpdateTrade(b *bot.Bot, pk packet.Packet) bool {
+	p, ok := pk.(*packet.UpdateTrade)
+	if !ok {
+		return false
+	}
+
+	// The packet names the villager by its unique ID; the bot tracks entities by
+	// runtime ID. The offers can arrive before the spawn does, so an unresolved
+	// mapping is a real case — drop it rather than file it against the wrong mob.
+	b.Mu.Lock()
+	runtimeID, known := b.UniqueIDToRuntimeID[p.VillagerUniqueID]
+	b.Mu.Unlock()
+	if !known {
+		b.Logger.Debug("trade offers for an untracked villager",
+			slog.Int64("villager_unique_id", p.VillagerUniqueID))
+		return true
+	}
+
+	window, err := trading.TradeWindowFromPacket(p)
+	if err != nil {
+		b.Logger.Warn("could not read trade offers", slog.String("error", err.Error()))
+		return true
+	}
+	b.RecordTradeWindow(runtimeID, window)
+	b.Logger.Debug("recorded trade offers",
+		slog.Uint64("villager", runtimeID),
+		slog.Int("offers", int(window.OfferCount)),
+		slog.Int("tier", int(window.TradeTier)))
+	return true
+}
+
+// handlePlayerEnchantOptions records what an enchanting table is offering.
+//
+// Nothing else on the wire carries this. The table does not advertise its options
+// in a container window, a recipe packet, or a transaction: this packet is the
+// only place the server's three enchantment buttons exist as data. Without a
+// handler for it the bot had no way to learn that a table had anything to sell,
+// which is why the station manager's chooseOption could only ever time out.
+//
+// The empty case is the common one and is recorded rather than skipped. The
+// vanilla server sends an empty packet the moment the table opens, with air in
+// the input slot, and only a real list once an enchantable item is in. Recording
+// it clears whatever the previous table offered, so a bot cannot select from a
+// stale list after walking to a different table.
+func handlePlayerEnchantOptions(b *bot.Bot, pk packet.Packet) bool {
+	p, ok := pk.(*packet.PlayerEnchantOptions)
+	if !ok {
+		return false
+	}
+
+	bot.RecordEnchantOptions(b, p.Options)
+	b.Logger.Debug("recorded enchantment options",
+		slog.Int("options", len(p.Options)))
+	return true
+}
+
+// handleSetActorData refreshes an entity's metadata after it changes.
+//
+// A wolf that is collared long after it spawned — the whole point of taming —
+// never respawns, so reading the metadata only on AddActor would miss the one
+// moment that matters.
+func handleSetActorData(b *bot.Bot, pk packet.Packet) bool {
+	p, ok := pk.(*packet.SetActorData)
+	if !ok {
+		return false
+	}
+	b.RecordEntityMeta(p.EntityRuntimeID, p.EntityMetadata)
 	return true
 }
 
@@ -147,18 +228,18 @@ func handleMoveActorDelta(b *bot.Bot, pk packet.Packet) bool {
 	p := pk.(*packet.MoveActorDelta)
 	b.Mu.Lock()
 	if act, ok := b.Actors[p.EntityRuntimeID]; ok {
-		act.Position = mergeMoveActorDeltaPosition(act.Position, p)
+		act.Position = MergeMoveActorDeltaPosition(act.Position, p)
 	}
 	b.Mu.Unlock()
 	return true
 }
 
-// mergeMoveActorDeltaPosition applies only the axes carried by a MoveActorDelta
+// MergeMoveActorDeltaPosition applies only the axes carried by a MoveActorDelta
 // packet. Each axis is a separate optional value, so an axis the server omits
 // must keep its previous value rather than resetting to zero. Blindly
 // assigning the whole vector would teleport entities to the origin and break
 // position-dependent logic such as combat target selection.
-func mergeMoveActorDeltaPosition(current mgl32.Vec3, p *packet.MoveActorDelta) mgl32.Vec3 {
+func MergeMoveActorDeltaPosition(current mgl32.Vec3, p *packet.MoveActorDelta) mgl32.Vec3 {
 	merged := current
 	if x, ok := p.PositionX.Value(); ok {
 		merged[0] = x
@@ -217,6 +298,10 @@ func handleRemoveActor(b *bot.Bot, pk packet.Packet) bool {
 	if runtimeID, ok := b.UniqueIDToRuntimeID[p.EntityUniqueID]; ok {
 		delete(b.Actors, runtimeID)
 		delete(b.UniqueIDToRuntimeID, p.EntityUniqueID)
+		// A runtime ID can be reused by a later spawn, so the collar has to go
+		// with the wolf. Leaving it would let the next occupant of the ID
+		// inherit the previous one's metadata.
+		defer b.ForgetEntityMeta(runtimeID)
 	}
 	id := safecast.To[uint64](p.EntityUniqueID)
 	if username, ok := b.PlayerUsernames[id]; ok {
@@ -242,7 +327,7 @@ func handleInventoryContent(b *bot.Bot, pk packet.Packet) bool {
 		slog.Int("items_count", len(p.Content)),
 	)
 	if isPlayerInv {
-		syncHeldEquipmentIfUpdated(b, applyInventoryContent(b, p))
+		syncHeldEquipmentIfUpdated(b, ApplyInventoryContent(b, p))
 		return true
 	}
 	// A container the bot opened: feed the chest session so the action layer
@@ -268,7 +353,7 @@ func handleInventorySlot(b *bot.Bot, pk packet.Packet) bool {
 		slog.Int("count", int(p.NewItem.Stack.Count)),
 	)
 	if isPlayerInv {
-		syncHeldEquipmentIfUpdated(b, applyInventorySlot(b, p))
+		syncHeldEquipmentIfUpdated(b, ApplyInventorySlot(b, p))
 		return true
 	}
 	if b.ContainerMatchesWindow(p.WindowID) {
@@ -299,12 +384,12 @@ func handleContainerClose(b *bot.Bot, pk packet.Packet) bool {
 }
 
 func handleItemStackResponse(b *bot.Bot, pk packet.Packet) bool {
-	syncHeldEquipmentIfUpdated(b, applyItemStackResponse(b, pk.(*packet.ItemStackResponse)))
+	syncHeldEquipmentIfUpdated(b, ApplyItemStackResponse(b, pk.(*packet.ItemStackResponse)))
 	return true
 }
 
 func handleInventoryTransaction(b *bot.Bot, pk packet.Packet) bool {
-	syncHeldEquipmentIfUpdated(b, applyInventoryTransaction(b, pk.(*packet.InventoryTransaction)))
+	syncHeldEquipmentIfUpdated(b, ApplyInventoryTransaction(b, pk.(*packet.InventoryTransaction)))
 	return true
 }
 

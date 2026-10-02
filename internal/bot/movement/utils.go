@@ -9,7 +9,7 @@ import (
 	"github.com/go-gl/mathgl/mgl32"
 )
 
-// organicLookDrift produces a smooth, non-repeating micro-drift for head yaw
+// OrganicLookDrift produces a smooth, non-repeating micro-drift for head yaw
 // and pitch using a sum of incommensurate sine frequencies. This mimics the
 // subtle, continuous motion of a human head that is never perfectly still —
 // breathing, micro-saccades, and postural sway — without the mechanical
@@ -21,7 +21,7 @@ import (
 // at 0.061 and 0.079 rad/tick; at 20 ticks per second those are roughly
 // 1.2-1.6 Hz, which is squarely in the range the eye reads as a vibration
 // rather than a drift, and the head visibly trembled while the bot stood still.
-func organicLookDrift(tick uint64, ampYaw, ampPitch float32) (float32, float32) {
+func OrganicLookDrift(tick uint64, ampYaw, ampPitch float32) (float32, float32) {
 	t := float64(tick)
 	yawDrift := ampYaw * float32(
 		math.Sin(t*0.0091)+
@@ -34,7 +34,7 @@ func organicLookDrift(tick uint64, ampYaw, ampPitch float32) (float32, float32) 
 	return yawDrift, pitchDrift
 }
 
-// smoothSpeedMultiplier returns a value that oscillates smoothly around 1.0
+// SmoothSpeedMultiplier returns a value that oscillates smoothly around 1.0
 // in the range [1.0-amp, 1.0+amp], using low-frequency incommensurate sines.
 // Unlike per-tick random jitter (which produces high-frequency vibration at
 // 20Hz), this varies over periods of 3–8 seconds — matching how a human
@@ -43,7 +43,7 @@ func organicLookDrift(tick uint64, ampYaw, ampPitch float32) (float32, float32) 
 //
 // Each channel (yaw/pitch/body) uses a different phase offset so they don't
 // move in lockstep.
-func smoothSpeedMultiplier(tick uint64, amp float32, phase float64) float32 {
+func SmoothSpeedMultiplier(tick uint64, amp float32, phase float64) float32 {
 	t := float64(tick)
 	return 1.0 + amp*float32(
 		math.Sin(t*0.0083+phase)+

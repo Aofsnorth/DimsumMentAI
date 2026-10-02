@@ -46,7 +46,7 @@ const EscalateInstructions = "Is this a moment where the bot needs to think some
 	"just idling or walking, and if the only reason to answer would be that it " +
 	"has answered before. Repeating yourself is not a reason to think harder."
 
-// escalateThreshold is where the probability is read as "call the big model".
+// EscalateThreshold is where the probability is read as "call the big model".
 //
 // It sits high on purpose. The big model is the expensive tier and it is not
 // needed to decide between wandering and looking at a tree; it is needed when
@@ -54,15 +54,15 @@ const EscalateInstructions = "Is this a moment where the bot needs to think some
 // recording into several hundred model calls, which is both slow and, on a
 // long stream, audibly different — a bot that pauses to think every few seconds
 // does not read as thoughtful, it reads as laggy.
-const escalateThreshold = 0.75
+const EscalateThreshold = 0.75
 
 // WantsBigBrain reports whether the judgement says to call the slow model.
 func WantsBigBrain(j Judgement, threshold float64) bool {
 	return j.Known && j.Escalate >= threshold
 }
 
-// escalationContext is everything the big model is told, rendered for a prompt.
-type escalationContext struct {
+// EscalationContext is everything the big model is told, rendered for a prompt.
+type EscalationContext struct {
 	Episode string
 	Goal    string
 	Plan    string
@@ -78,9 +78,9 @@ type escalationContext struct {
 // longer prompt is a few hundred tokens, which the budget absorbs many times
 // over, and the cost of omitting the plan is a bot that contradicts itself on
 // camera.
-func buildEscalationContext(snap Snapshot, plan Plan) escalationContext {
-	ctx := escalationContext{
-		State:  describeState(snap),
+func BuildEscalationContext(snap Snapshot, plan Plan) EscalationContext {
+	ctx := EscalationContext{
+		State:  DescribeState(snap),
 		Goal:   snap.GoalSummary,
 		Urgent: snap.HP > 0 && snap.Hunger > 0,
 	}
@@ -88,7 +88,7 @@ func buildEscalationContext(snap Snapshot, plan Plan) escalationContext {
 		ctx.Vocab = snap.Vocabulary.Describe()
 	}
 	if plan.Objective != "" {
-		ctx.Plan = renderPlan(plan)
+		ctx.Plan = RenderPlan(plan)
 	}
 	if ep := snap.EpisodeText; ep != "" {
 		ctx.Episode = ep
@@ -102,7 +102,7 @@ func buildEscalationContext(snap Snapshot, plan Plan) escalationContext {
 // something needs thinking about, and handing it a menu of things to do is how
 // you get a menu back instead of a thought. What it gets is a situation and a
 // question.
-func (c escalationContext) Prompt() string {
+func (c EscalationContext) Prompt() string {
 	var sb strings.Builder
 
 	sb.WriteString("The fast model decided this is a moment to actually think.\n\n")

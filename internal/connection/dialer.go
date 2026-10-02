@@ -26,9 +26,9 @@ import (
 	"golang.org/x/oauth2"
 )
 
-// lanConnectionType is the ConnectionType a host advertises for a LAN world
+// LanConnectionType is the ConnectionType a host advertises for a LAN world
 // signalled over NetherNet.
-const lanConnectionType = 4
+const LanConnectionType = 4
 
 type Dialer struct {
 	mu           sync.RWMutex
@@ -239,7 +239,7 @@ func (d *Dialer) dialLAN(cfg config.ServerConfig, dialer minecraft.Dialer) (*min
 			}
 
 			address := strconv.FormatUint(networkID, 10)
-			loginAddress := net.JoinHostPort(serverAddressHost(cfg.Host, listenAddress), strconv.Itoa(cfg.Port))
+			loginAddress := net.JoinHostPort(ServerAddressHost(cfg.Host, listenAddress), strconv.Itoa(cfg.Port))
 			slog.Debug("dialing discovered LAN world",
 				slog.String("level", server.LevelName),
 				slog.String("host", server.ServerName),
@@ -260,7 +260,7 @@ func (d *Dialer) dialLAN(cfg config.ServerConfig, dialer minecraft.Dialer) (*min
 			// cancelled as soon as the scan window ends, which would abort a
 			// negotiation that is still legitimately in progress.
 			dialCtx, dialCancel := context.WithTimeout(context.Background(), lanDialTimeout)
-			conn, err := lanDialer.DialContextNetwork(dialCtx, lanNetwork{
+			conn, err := lanDialer.DialContextNetwork(dialCtx, LanNetwork{
 				Network:   network,
 				NetworkID: address,
 			}, loginAddress)
@@ -293,20 +293,24 @@ func (d *Dialer) dialLAN(cfg config.ServerConfig, dialer minecraft.Dialer) (*min
 	}
 }
 
-type lanNetwork struct {
+// LanNetwork redirects a dial to a discovered NetherNet network ID rather than
+// to the address the caller was handed.
+type LanNetwork struct {
 	minecraft.Network
 	NetworkID string
 }
 
-func (n lanNetwork) DialContext(ctx context.Context, _ string) (net.Conn, error) {
+func (n LanNetwork) DialContext(ctx context.Context, _ string) (net.Conn, error) {
 	return n.Network.DialContext(ctx, n.NetworkID)
 }
 
-func (n lanNetwork) PingContext(context.Context, string) ([]byte, error) {
+func (n LanNetwork) PingContext(context.Context, string) ([]byte, error) {
 	return nil, errors.New("LAN NetherNet does not support ping")
 }
 
-func serverAddressHost(configuredHost, listenAddress string) string {
+// ServerAddressHost resolves the host to put in the login address: the
+// configured host, or the LAN listen address when the config asked for LAN.
+func ServerAddressHost(configuredHost, listenAddress string) string {
 	configuredHost = strings.TrimSpace(configuredHost)
 	if configuredHost != "" && !strings.EqualFold(configuredHost, "lan") {
 		return configuredHost
@@ -317,9 +321,9 @@ func serverAddressHost(configuredHost, listenAddress string) string {
 	return "127.0.0.1"
 }
 
-// decodeLANServer decodes the world advertisement and filters it down to worlds
+// DecodeLANServer decodes the world advertisement and filters it down to worlds
 // this bot can actually join over NetherNet.
-func decodeLANServer(raw []byte, worldName string) (discovery.ServerData, bool) {
+func DecodeLANServer(raw []byte, worldName string) (discovery.ServerData, bool) {
 	server, skipReason := classifyLANServer(raw, worldName)
 	return server, skipReason == ""
 }
@@ -334,7 +338,7 @@ func classifyLANServer(raw []byte, worldName string) (discovery.ServerData, stri
 	}
 	// ConnectionType 4 marks a LAN world signalled over NetherNet. Editor-mode
 	// projects are only visible to clients in Editor Mode.
-	if server.ConnectionType != lanConnectionType {
+	if server.ConnectionType != LanConnectionType {
 		return server, fmt.Sprintf("connection type %d is not a NetherNet LAN world", server.ConnectionType)
 	}
 	if server.EditorWorld {

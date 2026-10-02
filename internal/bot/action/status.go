@@ -5,7 +5,7 @@
 // Bot.ReportActionStatus, but that call only produces a chat message: it is
 // fire-and-forget, and the caller learns nothing. Bot lives in the parent
 // package, so this seam cannot be bolted onto it from here — instead handlers
-// in this package report through reportStatus, which does both jobs: it hands
+// in this package report through ReportStatus, which does both jobs: it hands
 // the status to the bot exactly as before, and publishes it to whoever is
 // waiting on this bot.
 //
@@ -38,11 +38,11 @@ var statusSubscribers = struct {
 	m  map[*bot.Bot]map[chan event.ActionStatus]struct{}
 }{m: make(map[*bot.Bot]map[chan event.ActionStatus]struct{})}
 
-// subscribeStatus registers a channel to receive this bot's action results and
+// SubscribeStatus registers a channel to receive this bot's action results and
 // returns it. The channel is buffered so a handler reporting on its own
 // goroutine never blocks on a slow reader; one report is all a step needs, so a
 // full buffer simply drops the surplus.
-func subscribeStatus(b *bot.Bot) chan event.ActionStatus {
+func SubscribeStatus(b *bot.Bot) chan event.ActionStatus {
 	ch := make(chan event.ActionStatus, 1)
 	statusSubscribers.mu.Lock()
 	defer statusSubscribers.mu.Unlock()
@@ -55,9 +55,9 @@ func subscribeStatus(b *bot.Bot) chan event.ActionStatus {
 	return ch
 }
 
-// unsubscribeStatus detaches a channel. Steps must unsubscribe when they finish
+// UnsubscribeStatus detaches a channel. Steps must unsubscribe when they finish
 // so a status produced later cannot be mistaken for the next step's outcome.
-func unsubscribeStatus(b *bot.Bot, ch chan event.ActionStatus) {
+func UnsubscribeStatus(b *bot.Bot, ch chan event.ActionStatus) {
 	statusSubscribers.mu.Lock()
 	defer statusSubscribers.mu.Unlock()
 	subs, ok := statusSubscribers.m[b]
@@ -70,7 +70,7 @@ func unsubscribeStatus(b *bot.Bot, ch chan event.ActionStatus) {
 	}
 }
 
-// reportInventoryDelta reports the outcome of a long-running handler that ends
+// ReportInventoryDelta reports the outcome of a long-running handler that ends
 // by picking items up — mining, looting, harvesting, fishing — by comparing
 // what the bot held before and after.
 //
@@ -81,40 +81,86 @@ func unsubscribeStatus(b *bot.Bot, ch chan event.ActionStatus) {
 // was accepted. Collecting nothing is a failure: the bot finished the motion
 // and the world did not change, and saying otherwise is the exact optimistic
 // result this reporting path exists to prevent.
-func reportInventoryDelta(b *bot.Bot, user, label, item string, before, count int) {
-	gained := countInventoryItems(b.GetInventorySlots(), b.GetItemNames(), item) - before
+//
+// But it is measured against the goal that was asked for, not against whether
+// anything was gained, and those are not the same thing. A gather for 10 oak
+// logs on a bot holding 39 gains nothing, because it correctly skipped the
+// work — and reporting that as "tidak dapat oak_log" is the failure the log
+// kept showing: the gatherer correctly skipping a satisfied goal while the
+// chat layer told the player it had failed.
+//
+// So the measure is the goal. Enough in the inventory now is success, whatever
+// route got there. A delta is still worth reporting when there was one, because
+// "you now have 49" is more useful to a player than "you have enough".
+func ReportInventoryDelta(b *bot.Bot, user, label, item string, before, wanted int) {
+	after := CountInventoryItems(b.GetInventorySlots(), b.GetItemNames(), item)
+	gained := after - before
 	if gained < 0 {
 		// Items can legitimately be consumed mid-run (dropping junk to make
 		// room, for example). A negative delta is not negative progress.
 		gained = 0
 	}
-	name := normalizeItemName(item)
-	if gained == 0 {
-		reportStatus(b, user, event.ActionStatus{
+
+	name := NormalizeItemName(item)
+	// No stated goal means there is nothing to be short of, so a real gain is
+	// the success condition. Inventing a default target here would report a
+	// failure for a handler that never claimed to reach one.
+	if wanted <= 0 {
+		if gained == 0 {
+			ReportStatus(b, user, event.ActionStatus{
+				Action:  label,
+				Item:    name,
+				Success: false,
+				Error:   fmt.Sprintf("tidak dapat %s", name),
+			})
+			return
+		}
+		ReportStatus(b, user, event.ActionStatus{
+			Action:  label,
+			Item:    name,
+			Count:   gained,
+			Success: true,
+		})
+		return
+	}
+
+	switch {
+	case after >= wanted:
+		ReportStatus(b, user, event.ActionStatus{
+			Action:  label,
+			Item:    name,
+			Count:   gained,
+			Success: true,
+		})
+	case gained > 0:
+		// Real progress, short of the goal. Still a failure to the plan, but a
+		// partial one, and the count says what was actually achieved.
+		ReportStatus(b, user, event.ActionStatus{
+			Action:  label,
+			Item:    name,
+			Count:   gained,
+			Success: false,
+			Error:   fmt.Sprintf("hanya dapat %d dari %d %s", gained, wanted, name),
+		})
+	default:
+		ReportStatus(b, user, event.ActionStatus{
 			Action:  label,
 			Item:    name,
 			Success: false,
 			Error:   fmt.Sprintf("tidak dapat %s", name),
 		})
-		return
 	}
-	reportStatus(b, user, event.ActionStatus{
-		Action:  label,
-		Item:    name,
-		Count:   gained,
-		Success: true,
-	})
 }
 
-// countInventoryItems totals the stacks in slots whose name matches want.
+// CountInventoryItems totals the stacks in slots whose name matches want.
 // Names are normalised first so a caller can ask for "oak_log" and still match
 // the "minecraft:oak_log" the server sends.
-func countInventoryItems(slots map[uint32]protocol.ItemStack, names map[int32]string, want string) int {
-	wanted := normalizeItemName(want)
+func CountInventoryItems(slots map[uint32]protocol.ItemStack, names map[int32]string, want string) int {
+	wanted := NormalizeItemName(want)
 	total := 0
 	for _, stack := range slots {
 		name, ok := names[stack.NetworkID]
-		if !ok || normalizeItemName(name) != wanted {
+		if !ok || NormalizeItemName(name) != wanted {
 			continue
 		}
 		total += safecast.To[int](stack.Count)
@@ -122,16 +168,31 @@ func countInventoryItems(slots map[uint32]protocol.ItemStack, names map[int32]st
 	return total
 }
 
-// reportStatus is how a handler in this package reports what happened.
+// ReportStatus is how a handler in this package reports what happened.
 //
 // It always forwards to the bot so the player still hears the result, and it
 // publishes to any subscriber — which is the plan executor waiting on this
 // step. Handlers must route their statuses through here rather than calling
 // b.ReportActionStatus directly, otherwise the step that requested the action
 // never learns how it went.
-func reportStatus(b *bot.Bot, user string, status event.ActionStatus) {
+func ReportStatus(b *bot.Bot, user string, status event.ActionStatus) {
 	publishStatus(b, status)
+	// The chat path publishes again through the hook installed below. That is
+	// harmless — the send is non-blocking and a subscriber that already resolved
+	// drops it — and it is what makes a report that arrives by either route reach
+	// the planner. Duplicating one cheap non-blocking send beats a verdict that
+	// silently goes to only one of two places.
 	b.ReportActionStatus(user, status)
+}
+
+// installPublishHook wires the bot's chat-report path back to the plan
+// executor's subscriber list.
+//
+// It has to be a hook because the action package imports the bot package, so the
+// bot cannot call publishStatus directly. Every other cross-package seam in the
+// bot uses this same arrangement.
+func init() {
+	bot.PublishActionStatusFunc = publishStatus
 }
 
 // publishStatus fans a status out to this bot's subscribers. Delivery is

@@ -33,11 +33,47 @@ const (
 // the survival loop (which must not start sleeping or building while busy) need
 // the same answer, and two copies of it is how one of them ends up disagreeing
 // with the other.
+//
+// "Busy" means the body is spoken for, not that the body is currently
+// translating. Those are very different questions, and the second one is the
+// wrong one: chopping a tree spends almost all of its time perfectly still,
+// standing in front of the trunk with an axe swinging, and MovementState says
+// "idle" for the whole of it. A definition that only counted motion reported a
+// free body mid-swing, and the natural loop — which correctly refuses to start
+// anything when the body is committed — started an exploration and walked the
+// bot out from under its own swing. Gathering is therefore a commitment in its
+// own right, and the gatherer has been tracking it all along.
 func (b *Bot) IsBusy() bool {
 	b.Mu.Lock()
 	moving := b.MovementState != "idle"
 	b.Mu.Unlock()
+
+	// The gatherer guards its own flag with a separate lock, so it is read after
+	// b.Mu is released rather than inside the critical section. sync.Mutex is not
+	// reentrant and the two are not ordered; holding one across the other is the
+	// deadlock that wedged this loop before.
+	if b.Gatherer != nil && b.Gatherer.IsGathering() {
+		return true
+	}
 	return moving || (b.Planner != nil && b.Planner.IsRunning())
+}
+
+// taskCommitted reports whether the body is inside a task that has already
+// claimed its eyes — a gathering plan or a build plan.
+//
+// It deliberately omits plain motion, which is where it narrows IsBusy. A bot
+// walking while someone talks to it still turns its head toward them; that is
+// ordinary, and the AGI layer decides whether even that is wanted. What it must
+// never do is tear its gaze off a block it is in the middle of breaking — and
+// breaking happens while standing still, so "is it moving" is not the question.
+//
+// As in IsBusy, the gatherer's flag is read outside b.Mu: its lock and this one
+// are not ordered and sync.Mutex is not reentrant.
+func (b *Bot) taskCommitted() bool {
+	if b.Gatherer != nil && b.Gatherer.IsGathering() {
+		return true
+	}
+	return b.Planner != nil && b.Planner.IsRunning()
 }
 
 // InFieldOfView reports whether a world point is inside the bot's vision cone.

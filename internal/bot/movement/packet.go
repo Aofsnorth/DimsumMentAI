@@ -17,13 +17,13 @@ func (tc *TickContext) writePlayerAuthInputPacket() bool {
 	tc.prepareMoveVector()
 	emoteJump, emoteSneak := tc.applyEmote()
 	inputData := tc.buildInputData(emoteJump, emoteSneak)
-	itemInteractionData := tc.takeItemInteractionData(&inputData)
-	itemStackRequest := tc.takeItemStackRequest(&inputData)
-	blockActions := tc.takeBlockActions(&inputData)
+	itemInteractionData := tc.TakeItemInteractionData(&inputData)
+	itemStackRequest := tc.TakeItemStackRequest(&inputData)
+	blockActions := tc.TakeBlockActions(&inputData)
 	return tc.sendPlayerAuthInput(inputData, itemInteractionData, itemStackRequest, blockActions)
 }
 
-func (tc *TickContext) takeItemInteractionData(inputData *protocol.InputFlags) *protocol.UseItemTransactionData {
+func (tc *TickContext) TakeItemInteractionData(inputData *protocol.InputFlags) *protocol.UseItemTransactionData {
 	data, ok := tc.B.TakeItemInteractionData()
 	if !ok {
 		return nil
@@ -32,7 +32,7 @@ func (tc *TickContext) takeItemInteractionData(inputData *protocol.InputFlags) *
 	return &data
 }
 
-func (tc *TickContext) takeItemStackRequest(inputData *protocol.InputFlags) *protocol.ItemStackRequest {
+func (tc *TickContext) TakeItemStackRequest(inputData *protocol.InputFlags) *protocol.ItemStackRequest {
 	request, ok := tc.B.TakeItemStackRequest()
 	if !ok {
 		return nil
@@ -41,11 +41,11 @@ func (tc *TickContext) takeItemStackRequest(inputData *protocol.InputFlags) *pro
 	return &request
 }
 
-// takeBlockActions drains the block actions queued for this tick — break
+// TakeBlockActions drains the block actions queued for this tick — break
 // routing (see internal/bot/breaking.go) plus the per-tick ContinueDestroy —
 // and flags the PlayerAuthInput as carrying them, the way a stock client sends
 // block breaking on servers that negotiated server-authoritative breaking.
-func (tc *TickContext) takeBlockActions(inputData *protocol.InputFlags) []protocol.PlayerBlockAction {
+func (tc *TickContext) TakeBlockActions(inputData *protocol.InputFlags) []protocol.PlayerBlockAction {
 	actions := tc.B.TakeBlockTickActions()
 	if len(actions) > 0 {
 		inputData.Set(packet.InputFlagPerformBlockActions)
@@ -66,7 +66,7 @@ func (tc *TickContext) prepareMoveVector() {
 	forwardX := float32(math.Cos(yawWorldRad))
 	forwardZ := float32(math.Sin(yawWorldRad))
 
-	yawDiff := angleDifference(tc.TargetYaw, tc.Yaw)
+	yawDiff := AngleDifference(tc.TargetYaw, tc.Yaw)
 	absYawDiff := math.Abs(float64(yawDiff))
 
 	if tc.HasHorizontalMove && tc.Dist > 0.01 {
@@ -209,10 +209,130 @@ func (tc *TickContext) buildInputData(emoteJump, emoteSneak bool) protocol.Input
 		inputData.Set(packet.InputFlagSneaking)
 	}
 	tc.applyMovementInputFlags(inputData)
-	if tc.MoveVec.Y() > 0.5 && !tc.IsOnLadder {
-		inputData.Set(packet.InputFlagSprinting)
-	}
+	tc.applySwimInputFlags(&inputData)
+	tc.applySprintFlag(&inputData)
 	return inputData
+}
+
+// applySprintFlag decides whether this tick runs.
+//
+// A latched Jev hint wins while it is set: run means the flag goes out
+// whenever the body is moving forward, walk means it stays off even on a long
+// straight stretch. With no hint the old rule stands — sprint on a committed
+// forward stride, off the ladder — so every tick that never heard of Jev
+// behaves exactly as before.
+func (tc *TickContext) applySprintFlag(inputData *protocol.InputFlags) {
+	if tc.IsOnLadder || tc.MoveVec.Y() <= 0.5 {
+		return
+	}
+	if sprint, _, latched := tc.B.SprintHint(); latched {
+		if sprint {
+			inputData.Set(packet.InputFlagSprinting)
+		}
+		return
+	}
+	inputData.Set(packet.InputFlagSprinting)
+}
+
+// applySprintHop turns a latched sprint-jump into this tick's jump, alongside
+// the steering solution's own ShouldJump. It runs in the same place as the
+// requested-jump latch and under the same contract: only off the ground's
+// truth from the previous tick's physics, never mid-air, so one latch is one
+// hop and never a fly.
+func (tc *TickContext) applySprintHop() {
+	if tc.ShouldJump || tc.IsOnLadder || tc.SwimPlanned {
+		return
+	}
+	_, hop, latched := tc.B.SprintHint()
+	if !latched || !hop {
+		return
+	}
+	if tc.MoveVec.Y() <= 0.5 {
+		return
+	}
+	tc.B.Mu.Lock()
+	grounded := tc.B.IsGrounded
+	tc.B.Mu.Unlock()
+	if !grounded {
+		return
+	}
+	tc.ShouldJump = true
+	tc.JumpReason = "sprint_hop"
+}
+
+// planSwim samples the water and stores this tick's plan on the context.
+//
+// It runs before steering and physics, not inside buildInputData, for two
+// reasons. The vertical physics needs the swim drive to replace gravity, and
+// that happens earlier in the tick than the input packet is built; and a plan
+// taken at packet time would read the world a second time per tick and could
+// disagree with the physics that already moved the body.
+//
+// A world that cannot answer leaves SwimPlanned false, and every consumer
+// treats that as "no water opinion" rather than "dry".
+func (tc *TickContext) planSwim() {
+	if tc.Swim == nil {
+		return
+	}
+	intent, ok := tc.Swim.Plan()
+	if !ok {
+		return
+	}
+	tc.SwimIntent = intent
+	tc.SwimPlanned = true
+}
+
+// takeRequestedJump turns a latched jump request into this tick's jump.
+//
+// This is the only place a jump can be produced. The steering solution owns
+// ShouldJump, and it is recomputed from scratch every tick, so anything that set
+// the flag from outside would be overwritten before the packet went out — which
+// is why the scaffolder's "jump" used to be the emote and the body stayed on the
+// floor.
+//
+// The request is consumed whether or not it produces a jump. A body already in
+// the air cannot jump again, and re-arming the latch for the next grounded tick
+// would turn one request into a hop the bot never asked for.
+func (tc *TickContext) takeRequestedJump() {
+	if tc.B == nil || !tc.B.JumpRequested() {
+		return
+	}
+	// tc.IsGrounded is unusable here: TickContext is rebuilt every tick and the
+	// grounded flag is only filled in by UpdateGroundedState, which runs in the
+	// physics phase AFTER this. Reading it here always saw false, so every
+	// scaffold jump request was consumed and silently dropped — the body never
+	// left the ground and the block was never placed. b.IsGrounded is the flag
+	// the previous tick's physics synced, which is the freshest truth available
+	// at this point in the tick.
+	tc.B.Mu.Lock()
+	grounded := tc.B.IsGrounded
+	tc.B.Mu.Unlock()
+	if !grounded {
+		// Leave the request latched so a one-tick grounding gap does not eat it;
+		// it expires by TTL if nobody can honour it.
+		return
+	}
+	tc.B.ConsumeJumpRequest()
+	tc.ShouldJump = true
+	tc.JumpReason = "requested"
+}
+
+// applySwimInputFlags merges the already-planned swim intent into the tick's
+// flag set.
+//
+// It is the step that makes the water code live rather than unit-tested. The
+// controller samples the world, advances the breath clock, and decides whether
+// the body should be rising, sinking or crossing; without this the swim, dive
+// and surface flags were computed and then dropped on the floor, because
+// buildInputData is the only thing that reaches the server.
+func (tc *TickContext) applySwimInputFlags(flags *protocol.InputFlags) {
+	if !tc.SwimPlanned {
+		return
+	}
+	// ApplyInput records the swimming state for the next tick, so the
+	// StartSwimming edge is sent once on the way in and StopSwimming once on the
+	// way out.
+	tc.Swim.ApplyInput(flags, tc.SwimIntent)
 }
 
 func (tc *TickContext) shouldSetHorizontalCollision() bool {
@@ -247,7 +367,7 @@ func (tc *TickContext) applyMovementInputFlags(inputData protocol.InputFlags) {
 }
 
 func (tc *TickContext) sendPlayerAuthInput(inputData protocol.InputFlags, itemInteractionData *protocol.UseItemTransactionData, itemStackRequest *protocol.ItemStackRequest, blockActions []protocol.PlayerBlockAction) bool {
-	pk := tc.buildPlayerAuthInputPacket(inputData, itemInteractionData, itemStackRequest, blockActions)
+	pk := tc.BuildPlayerAuthInputPacket(inputData, itemInteractionData, itemStackRequest, blockActions)
 	tc.logPlayerAuthInputCond()
 	if err := tc.B.Conn.WritePacket(pk); err != nil {
 		tc.B.Logger.Warn("SendInputLoop: connection closed or write failed", "error", err.Error())
@@ -266,7 +386,7 @@ func (tc *TickContext) sendPlayerAuthInput(inputData protocol.InputFlags, itemIn
 	return true
 }
 
-func (tc *TickContext) buildPlayerAuthInputPacket(inputData protocol.InputFlags, itemInteractionData *protocol.UseItemTransactionData, itemStackRequest *protocol.ItemStackRequest, blockActions []protocol.PlayerBlockAction) *packet.PlayerAuthInput {
+func (tc *TickContext) BuildPlayerAuthInputPacket(inputData protocol.InputFlags, itemInteractionData *protocol.UseItemTransactionData, itemStackRequest *protocol.ItemStackRequest, blockActions []protocol.PlayerBlockAction) *packet.PlayerAuthInput {
 	pk := &packet.PlayerAuthInput{
 		Position: tc.CurrPos.Add(mgl32.Vec3{0, 1.62, 0}),
 		Pitch:    tc.Pitch,

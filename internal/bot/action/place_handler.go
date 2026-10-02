@@ -24,7 +24,7 @@ func handlePlace(b *bot.Bot, param, user string) {
 	go func() {
 		itemName, distance, ok := parsePlaceParams(param)
 		if !ok {
-			reportStatus(b, user, event.ActionStatus{
+			ReportStatus(b, user, event.ActionStatus{
 				Action:  "place",
 				Success: false,
 				Error:   "butuh nama blok, contoh: place:cobblestone",
@@ -34,7 +34,7 @@ func handlePlace(b *bot.Bot, param, user string) {
 		targetSlot, found := b.FindItemSlotByName(itemName)
 		if !found {
 			b.Logger.Warn("handlePlace: item not found", "item", itemName)
-			reportStatus(b, user, event.ActionStatus{
+			ReportStatus(b, user, event.ActionStatus{
 				Action:  "place",
 				Item:    itemName,
 				Success: false,
@@ -46,7 +46,7 @@ func handlePlace(b *bot.Bot, param, user string) {
 		placePos, supportPos, found := findPlacementTarget(b, user, distance)
 		if !found {
 			b.Logger.Warn("handlePlace: no valid adjacent solid support spot found", "item", itemName)
-			reportStatus(b, user, event.ActionStatus{
+			ReportStatus(b, user, event.ActionStatus{
 				Action:  "place",
 				Item:    itemName,
 				Success: false,
@@ -63,7 +63,7 @@ func handlePlace(b *bot.Bot, param, user string) {
 		}
 		if err := b.PlaceBlock(context.Background(), request); err != nil {
 			b.Logger.Warn("handlePlace: placement failed", "item", itemName, "pos", placePos, "error", err)
-			reportStatus(b, user, event.ActionStatus{
+			ReportStatus(b, user, event.ActionStatus{
 				Action:  "place",
 				Item:    itemName,
 				Success: false,
@@ -72,13 +72,13 @@ func handlePlace(b *bot.Bot, param, user string) {
 			return
 		}
 		b.Logger.Info("handlePlace: placed block", "item", itemName, "pos", placePos)
-		reportStatus(b, user, event.ActionStatus{Action: "place", Item: itemName, Success: true})
+		ReportStatus(b, user, event.ActionStatus{Action: "place", Item: itemName, Success: true})
 	}()
 }
 
 func parsePlaceParams(param string) (string, int, bool) {
 	parts := strings.Split(param, ",")
-	itemName := normalizeItemName(parts[0])
+	itemName := NormalizeItemName(parts[0])
 	if itemName == "" {
 		return "", 0, false
 	}

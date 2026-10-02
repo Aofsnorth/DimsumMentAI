@@ -411,9 +411,14 @@ func (s *Server) handleDebugInventory(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The snapshot accessors, not the fields. These were aliases to the live
+	// maps, so the range below walked them with no lock at all — and this
+	// handler runs on a net/http goroutine, which means a debug page open in a
+	// browser while an inventory packet arrives was enough to raise
+	// "concurrent map iteration and map write" and kill the whole bot.
+	inv := s.b.GetInventorySlots()
+	names := s.b.GetItemNames()
 	s.b.Mu.Lock()
-	inv := s.b.InventoryMap
-	names := s.b.ItemNames
 	heldSlot := s.b.HeldSlot
 	s.b.Mu.Unlock()
 

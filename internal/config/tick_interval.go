@@ -43,13 +43,13 @@ type TickInterval struct {
 // own triggers that do not need the brain at all.
 const DefaultTickInterval = 30 * time.Second
 
-// tickIntervalFloor is the shortest gap the brain will ever run at.
+// TickIntervalFloor is the shortest gap the brain will ever run at.
 //
 // A zero or negative interval is not a fast brain, it is a busy loop: the loop
 // would re-ask the model as fast as the network answers and produce no visible
 // behaviour at all. Clamping is the only safe reading of a config typo, because
 // the alternative is a bot that appears to hang.
-const tickIntervalFloor = 500 * time.Millisecond
+const TickIntervalFloor = 500 * time.Millisecond
 
 // NewTickInterval builds a fixed interval, floored.
 func NewTickInterval(d time.Duration) TickInterval {
@@ -65,11 +65,11 @@ func TickIntervalRange(minD, maxD time.Duration) TickInterval {
 }
 
 func normaliseTickInterval(i TickInterval) TickInterval {
-	if i.Min < tickIntervalFloor {
-		i.Min = tickIntervalFloor
+	if i.Min < TickIntervalFloor {
+		i.Min = TickIntervalFloor
 	}
-	if i.Max < tickIntervalFloor {
-		i.Max = tickIntervalFloor
+	if i.Max < TickIntervalFloor {
+		i.Max = TickIntervalFloor
 	}
 	if i.Max < i.Min {
 		i.Max = i.Min

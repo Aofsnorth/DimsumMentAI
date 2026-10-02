@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"bedrock-ai/internal/ai"
+	"bedrock-ai/internal/bot/affordance"
 	"bedrock-ai/internal/bot/building/coordinator"
 	"bedrock-ai/internal/bot/combat"
 	"bedrock-ai/internal/bot/dimension"
@@ -20,7 +21,9 @@ import (
 	"bedrock-ai/internal/bot/husbandry"
 	"bedrock-ai/internal/bot/interact"
 	"bedrock-ai/internal/bot/inventory"
+	"bedrock-ai/internal/bot/inventory/trading"
 	"bedrock-ai/internal/bot/pathfinder"
+	"bedrock-ai/internal/bot/protect"
 	"bedrock-ai/internal/bot/storage"
 	"bedrock-ai/internal/bot/survival"
 	"bedrock-ai/internal/bot/world"
@@ -51,6 +54,18 @@ type RecipeInfo struct {
 
 // Function pointers for dependency injection (resolving circular dependencies)
 var (
+	// PublishActionStatusFunc hands a verdict to whoever is waiting on this
+	// action — the plan executor's step, most often.
+	//
+	// It exists because ReportActionStatus is the chat path and the chat path
+	// alone. Anything that reported only through it left the planner waiting for
+	// a verdict that had already been decided, so the step sat out its full
+	// ninety-second timeout and failed on work that had worked. The eight-label
+	// interact family reported this way and every one of its steps timed out.
+	//
+	// The indirection is the same one every other hook here uses: the action
+	// package imports this one, so it cannot be called directly.
+	PublishActionStatusFunc   func(b *Bot, status event.ActionStatus)
 	SendInputLoopFunc         func(ctx context.Context, b *Bot, gd minecraft.GameData)
 	PacketLoopFunc            func(ctx context.Context, b *Bot) error
 	ChunkRequesterLoopFunc    func(ctx context.Context, b *Bot)
@@ -224,6 +239,27 @@ type Bot struct {
 	Actors              map[uint64]*entity.Info
 	UniqueIDToRuntimeID map[int64]uint64
 
+	// Server observation. Both are written by the network goroutine and read by
+	// the action goroutines, so every access goes through Mu.
+	//
+	// ActorEvents is a bounded ring of the server's own verdicts — a bite, a
+	// tame, a rejection. EntityMetas caches the metadata that says whether a mob
+	// is actually collared. Neither could be answered before: the survival
+	// actions reported from what they had attempted, which is how a cast that
+	// never got a bite came to read as a catch.
+	ActorEvents []ActorEvent
+	EntityMetas map[uint64]EntityMetaState
+	// TradeWindows is the server's own offer list per villager, and xpLevel is
+	// the level that pays for the ones that cost XP. Neither is derivable from
+	// anything else the bot knows, so both are recorded rather than assumed.
+	// See trade_state.go.
+	TradeWindows map[uint64]trading.TradeWindow
+	xpLevel      int32
+	// xpLevelSeen distinguishes "level zero" from "no level ever observed". An
+	// XP-costing trade must be refused in the second case rather than attempted
+	// as if it were free.
+	xpLevelSeen bool
+
 	// Subsystems
 	CombatMgr    *combat.CombatManager
 	ThreatDet    *combat.ThreatDetector
@@ -235,7 +271,17 @@ type Bot struct {
 	Farmer       *farming.Farmer
 	Fisher       *fishing.Fisher
 	HusbandryMgr *husbandry.Manager
-	Explorer     *exploration.Explorer
+	// Trading holds the villager trade manager. It is the one subsystem that
+	// cannot act at all without the server first sending a price list, so it is
+	// built here alongside the others and reports "no offers observed" until
+	// the UpdateTrade handler has run at least once.
+	Trading *trading.Manager
+	// Protection decides which blocks the bot may break or place. It is nil
+	// until configured, and a nil policy permits everything — see
+	// protect.New's documented default. A protected block is refused, not
+	// silently skipped, so the caller can tell a refusal from a failure.
+	Protection *protect.Policy
+	Explorer   *exploration.Explorer
 
 	// Movement & Steering
 	MovementState    string // "idle", "walk_to", "follow"
@@ -245,16 +291,53 @@ type Bot struct {
 	// FollowMoving is the hysteresis-latched walk/stop state for follow mode.
 	// A single distance threshold made the state flap at the boundary.
 	FollowMoving bool
+	// sprintHint is Jev's travel style for the current trip, set by the AGI
+	// layer and read by the movement tick. Nil means no opinion: the movement
+	// rules sprint on their own. Non-nil latches walk-off (false) or run
+	// (true) until the trip ends or the layer clears it. A pointer, so "run
+	// this trip" and "no opinion" are different states and a stale sprint
+	// can never leak into a walk the model chose.
+	sprintHint *bool
+	// sprintHop latches with sprintHint and adds a jump to the run — the
+	// bunny-hop. Stored beside the hint rather than inside it so clearing one
+	// clears both and they can never disagree.
+	sprintHop bool
 
 	// LastChatPartner is the most recent player the bot had a conversation
 	// with. Used by action status reports to know whom to address when the
 	// action handler doesn't have a specific user.
 	LastChatPartner string
-	LookTargetName  string
-	LookTargetUntil time.Time
-	IsOnLadder      bool // shared ladder state between movement and network systems
-	IsGrounded      bool
-	ParkourUntil    time.Time
+	// ImplicitFollowOff is the set of players who have told the bot to stop
+	// drifting toward them. It is a set rather than a flag because the opt-out
+	// is per player: one person saying "berhenti ikutin aku" says nothing about
+	// whether the bot should still come when somebody else says hello.
+	//
+	// It only gates the unprompted behaviour. An explicit "come here" still
+	// works, because being told to do something and quietly doing it is not the
+	// same as being followed around.
+	ImplicitFollowOff map[string]bool
+	LookTargetName    string
+	LookTargetUntil   time.Time
+	IsOnLadder        bool // shared ladder state between movement and network systems
+	IsGrounded        bool
+	// jumpRequestedAt latches a request to leave the ground, for the movement
+	// loop to collect. See jump.go — the jump emote is not a jump, and the
+	// scaffolder cannot make one without the loop's help.
+	jumpRequestedAt time.Time
+	// dropOK is one spent permission to leave a ledge on purpose. See
+	// RequestDrop in query.go; it is spent on the first movement tick that uses
+	// it, because an unspent authority is a permanent one.
+	dropOK bool
+	// appetite is how much risk the bot takes on purpose, and appetiteSet
+	// separates "careful because it was decided" from "careful because nothing
+	// has written the field yet". See SetAppetite in query.go.
+	//
+	// It lives here rather than in the combat manager because the disposition is
+	// not a combat setting: it decides whether the bot walks a cliff or jumps
+	// it, and the movement layer has to be able to read it too.
+	appetite     affordance.Appetite
+	appetiteSet  bool
+	ParkourUntil time.Time
 
 	// ServerGroundY is the last vertical position the server confirmed for the
 	// bot, together with when it was confirmed. The server is authoritative for
@@ -409,6 +492,10 @@ type Bot struct {
 
 	// Internal bot messages tracked to prevent loops
 	RecentBotMessages map[string]time.Time
+	// RecentStatusReports maps a status-report signature to when it was last
+	// spoken, so a retry loop does not repeat itself to the player. See
+	// status_reporter.go.
+	RecentStatusReports map[string]time.Time
 
 	Mu                  sync.Mutex
 	Pos                 mgl32.Vec3
@@ -419,6 +506,23 @@ type Bot struct {
 	LastSentInputPitch  float32
 	MovementSyncPending bool // send ClientMovementPredictionSync after next correction
 	ScaffoldingActive   bool
+	// ScaffoldStep* and ScaffoldAttempts count how many times the path node at
+	// this position has tried to build its block. See scaffold_progress.go.
+	ScaffoldStepX, ScaffoldStepY, ScaffoldStepZ int32
+	ScaffoldAttempts                            int
+	// HeadroomNode* and HeadroomDetours count how many times a node has sent the
+	// planner looking for a way around a block above it. See
+	// scaffold_progress.go.
+	HeadroomNodeX, HeadroomNodeY, HeadroomNodeZ int32
+	HeadroomDetours                             int
+	// RepathInFlight and RepathTarget gate re-planning so a destination is not
+	// searched for twice at once. See repath.go.
+	RepathInFlight bool
+	RepathTarget   mgl32.Vec3
+	// GazeHint and GazeUntil are Jev's latched attention: what the head should
+	// settle on while the bot is standing still. See query.go.
+	GazeHint  string
+	GazeUntil time.Time
 }
 
 // PlayerTracker holds the player position, orientation, name, and UUID maps
@@ -569,6 +673,7 @@ func newBot(opts ...Option) (*Bot, error) {
 	b := &Bot{
 		PlayerTracker:       NewPlayerTracker(),
 		RecentBotMessages:   make(map[string]time.Time),
+		RecentStatusReports: make(map[string]time.Time),
 		MovementState:       "idle",
 		TargetTolerance:     2.0,
 		Language:            "Indonesian",

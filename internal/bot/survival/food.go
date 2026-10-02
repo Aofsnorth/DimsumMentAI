@@ -31,10 +31,10 @@ var foodPriority = []string{
 // start a second meal before finishing the first.
 const eatCooldown = 3 * time.Second
 
-// shouldAutoEat is the decision half of auto-eat: is the bot hungry enough, and
+// ShouldAutoEat is the decision half of auto-eat: is the bot hungry enough, and
 // has enough time passed since the last meal? Kept separate from the action so
 // the judgement can be tested without the 1.6-second eating animation.
-func (m *Manager) shouldAutoEat() bool {
+func (m *Manager) ShouldAutoEat() bool {
 	if !m.autoEatOn {
 		return false
 	}
@@ -51,7 +51,7 @@ func (m *Manager) shouldAutoEat() bool {
 }
 
 func (m *Manager) tickAutoEat() {
-	if !m.shouldAutoEat() {
+	if !m.ShouldAutoEat() {
 		return
 	}
 

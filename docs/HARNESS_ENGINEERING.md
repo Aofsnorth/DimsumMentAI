@@ -262,26 +262,36 @@ result, _ := runner.Run()
 
 ## Test Coverage Map
 
+Tests are black-box (`package X_test`) and live under `tests/`, mirroring the
+`internal/` path — e.g. `internal/config/tick_interval.go` is tested by
+`tests/config/tick_interval_test.go`. The **Package** column names the code
+under test; the **Test File** column gives the file that exercises it.
+
+Because the test binary no longer sits beside the code, the `cover`,
+`cover-check` and `cover-html` targets pass `-coverpkg=./internal/...` so
+coverage is still attributed to the real code.
+
 | Package | Test File | What's Covered |
 |---------|-----------|----------------|
-| `internal/ai` | `parser_test.go` | Action tag extraction, think-block stripping, whitespace collapse |
-| `internal/ai` | `throttler_test.go` | Duplicate detection, rate limiting, rollback, case-insensitivity |
-| `internal/ai` | `history_test.go` | Message storage, capping, copy semantics, FixMessages sanitization |
-| `internal/bot/action` | `labels_test.go` | Supported action labels, aliases, completeness |
-| `internal/bot/action` | `memory_labels_test.go` | MinePal-parity labels (remember/recall/forget/sethome/home/analyze/move/look) |
-| `internal/bot/action` | `helpers_test.go` | normalizeItemName, isWoodLike, normalizeCropType, parseCount, durationTicks |
-| `internal/bot/pathfinder` | `heuristic_test.go` | Euclidean distance, symmetry, negative coords |
-| `internal/bot/pathfinder` | `node_test.go` | Node equality, link type constants |
-| `internal/bot/pathfinder` | `astar_test.go` | A* pathfinding, fallback, reconstructPath, target reachability |
-| `internal/config` | `loader_test.go` | YAML loading, defaults, validation, error cases |
-| `internal/memory` | `memory_test.go` | Fact add/search/forget, places, JSON persistence, prompt render, concurrency |
-| `internal/event` | `bus_test.go` | Pub/sub, multiple subscribers, event type isolation, concurrency |
-| `internal/harness` | `harness_test.go` | Runner orchestration, finding aggregation, ConsoleReporter, JSONReporter, NullReporter |
-| `internal/harness/architecture` | `architecture_test.go` | Dependency rule enforcement, file filtering, custom rules, all layer rules, memory leaf rules |
-| `internal/harness/filesize` | `filesize_test.go` | Line/byte thresholds, test file leniency, non-Go filtering, empty dir |
-| `internal/harness/tododebt` | `tododebt_test.go` | TODO/FIXME/HACK detection, non-comment filtering, max findings limit |
-| `internal/harness/complexity` | `complexity_test.go` | Cyclomatic complexity detection, binary ops, test file ignoring |
-| `internal/harness/license` | `license_test.go` | Missing header detection, required keywords, test file skipping |
+| `internal/ai` | `tests/ai/parser_test.go` | Action tag extraction, think-block stripping, whitespace collapse |
+| `internal/ai` | `tests/ai/throttler_test.go` | Duplicate detection, rate limiting, rollback, case-insensitivity |
+| `internal/ai` | `tests/ai/history_test.go` | Message storage, capping, copy semantics, FixMessages sanitization |
+| `internal/bot/action` | `internal/bot/action/*_test.go` | Labels, aliases, memory labels, helper normalizers — **not yet migrated** |
+| `internal/bot/pathfinder` | `tests/bot/pathfinder/heuristic_test.go` | Euclidean distance, symmetry, negative coords |
+| `internal/bot/pathfinder` | `tests/bot/pathfinder/node_test.go` | Node equality, link type constants |
+| `internal/bot/pathfinder` | `tests/bot/pathfinder/astar_test.go` | A* pathfinding, fallback, reconstructPath, target reachability |
+| `internal/config` | `tests/config/loader_test.go` | YAML loading, defaults, validation, error cases |
+| `internal/config` | `tests/config/tick_interval_test.go` | Tick interval: number/range forms, duration notation, floor clamping, reversed bounds, String form |
+| `internal/connection` | `tests/connection/dialer_test.go` | LAN discovery: `DecodeLANServer` (accept/reject/editor/filter), `ServerAddressHost`, `LanNetwork` dialling by network ID |
+| `internal/evidence` | `tests/evidence/evidence_test.go` | JSONL format, sequence ordering, non-blocking Record, drop counting, Close flush, nil logger, concurrent line integrity, append-on-reopen |
+| `internal/memory` | `tests/memory/memory_test.go` | Fact add/search/forget, places, JSON persistence, prompt render, concurrency |
+| `internal/event` | `tests/event/bus_test.go` | Pub/sub, multiple subscribers, event type isolation, concurrency |
+| `internal/harness` | `tests/harness/harness_test.go` | Runner orchestration, finding aggregation, ConsoleReporter, JSONReporter, NullReporter |
+| `internal/harness/architecture` | `tests/harness/architecture/architecture_test.go` | Dependency rule enforcement, file filtering, custom rules, all layer rules, memory leaf rules |
+| `internal/harness/filesize` | `tests/harness/filesize/filesize_test.go` | Line/byte thresholds, test file leniency, non-Go filtering, empty dir |
+| `internal/harness/tododebt` | `tests/harness/tododebt/tododebt_test.go` | TODO/FIXME/HACK detection, non-comment filtering, max findings limit |
+| `internal/harness/complexity` | `tests/harness/complexity/complexity_test.go` | Cyclomatic complexity detection, binary ops, test file ignoring |
+| `internal/harness/license` | `tests/harness/license/license_test.go` | Missing header detection, required keywords, test file skipping |
 
 ---
 

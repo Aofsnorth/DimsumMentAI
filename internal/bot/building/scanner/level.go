@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"bedrock-ai/internal/bot/building/schematic"
+	"bedrock-ai/internal/bot/gathering"
 	"bedrock-ai/internal/bot/movement/animation"
 	"bedrock-ai/internal/event"
 	"bedrock-ai/internal/safecast"
@@ -86,14 +87,26 @@ func (s *AreaScanner) clearBlocksLoop(ctx context.Context, blocksToClear []proto
 		s.bot.LookAt(targetCenter)
 		time.Sleep(100 * time.Millisecond)
 
-		_ = s.bot.WritePacket(animation.MineSwing(s.bot.GetEntityRuntimeID()))
+		// The shared swing rhythm, for the block's real break time. A single
+		// swing and a fixed 500ms was the least human break in the bot, and the
+		// sleep was wrong for every block that is not roughly that hard.
+		runtimeID := s.bot.GetEntityRuntimeID()
+		blockName, _ := s.bot.GetBlockName(b.X(), b.Y(), b.Z())
 		_ = s.bot.WritePacket(&packet.PlayerAction{
-			EntityRuntimeID: s.bot.GetEntityRuntimeID(),
+			EntityRuntimeID: runtimeID,
 			ActionType:      protocol.PlayerActionStartBreak,
 			BlockPosition:   b,
 			BlockFace:       1,
 		})
-		time.Sleep(500 * time.Millisecond)
+		for i, beat := range animation.Beats(gathering.BreakDuration(s.bot, blockName), targetCenter) {
+			time.Sleep(beat.Wait)
+			if i == 0 {
+				// The first beat is the wind-up; the arm is still being raised.
+				continue
+			}
+			_ = s.bot.WritePacket(animation.MineSwing(runtimeID))
+			s.bot.LookAt(beat.Aim)
+		}
 		_ = s.bot.WritePacket(&packet.PlayerAction{
 			EntityRuntimeID: s.bot.GetEntityRuntimeID(),
 			ActionType:      protocol.PlayerActionCrackBreak,

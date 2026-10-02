@@ -64,7 +64,7 @@ const (
 	// viewer more to watch and less to look at, so the bot may sit still for
 	// longer than it may fidget.
 	minStillIdleSec = 10
-	maxStillIdleSec = 55
+	MaxStillIdleSec = 55
 )
 
 // ChooseIdle decides what kind of nothing to do, for a given seed.
@@ -91,23 +91,23 @@ func ChooseIdle(seed int, stillBias float64) IdleMode {
 	return IdleAlive
 }
 
-// idlePick is the decision and how long it lasts, kept together so the caller
+// IdlePick is the decision and how long it lasts, kept together so the caller
 // cannot apply a duration from one decision to a mode from another.
-type idlePick struct {
+type IdlePick struct {
 	Mode     IdleMode
 	Duration time.Duration
 }
 
-// idlePickFor turns a seed and a mode into a concrete rest period.
+// IdlePickFor turns a seed and a mode into a concrete rest period.
 //
 // It is pure so the whole policy is testable without a clock and without a
 // runner. The runner wrapper exists only to supply the seed and the config.
-func idlePickFor(seed int, mode IdleMode) idlePick {
+func IdlePickFor(seed int, mode IdleMode) IdlePick {
 	// A motionless idle is allowed to run a little longer than a live one,
 	// because it costs the viewer more to watch and less to look at.
 	lo, hi := minIdleSec, maxIdleSec
 	if mode == IdleStill {
-		lo, hi = minStillIdleSec, maxStillIdleSec
+		lo, hi = minStillIdleSec, MaxStillIdleSec
 	}
 	span := hi - lo
 	if span < 1 {
@@ -116,26 +116,63 @@ func idlePickFor(seed int, mode IdleMode) idlePick {
 	// A second, differently-mixed hash so a run of identical seeds does not
 	// produce a run of identical durations.
 	seconds := lo + (seed*2654435761)%span
-	return idlePick{Mode: mode, Duration: time.Duration(seconds) * time.Second}
+	return IdlePick{Mode: mode, Duration: time.Duration(seconds) * time.Second}
 }
 
 // planIdle decides a rest period from the clock and the runner's config.
-func (r *Runner) planIdle(now time.Time) idlePick {
+func (r *Runner) planIdle(now time.Time) IdlePick {
 	r.mu.Lock()
 	seed := r.seed
 	r.seed++
 	r.mu.Unlock()
 
-	return idlePickFor(seed, ChooseIdle(seed, r.cfg.IdleStillBias))
+	return IdlePickFor(seed, ChooseIdle(seed, r.cfg.IdleStillBias))
 }
 
-// shouldIdle reports whether a rest period opened earlier is still running.
+// DriftAfterStill is how long the bot stays put before a drift reads as a
+// person getting up rather than as a freeze.
+//
+// It is comfortably longer than the longest rest window, so an ordinary rest
+// period ends on its own before the loop goes looking for a reason to leave.
+// The gap between the two numbers is the room a person has to decide what to do
+// next, and it is why the bot does not snap upright the instant a rest ends.
+const DriftAfterStill = 90 * time.Second
+
+// ShouldDrift reports whether the bot has been still long enough that walking
+// somewhere is the honest next move.
+//
+// The polarity is the whole point. Resting is the default and drifting is the
+// exception, so the question is never "may I rest" but "have I been still too
+// long". Asking the other question is a gate that nothing can pass: it is only
+// ever true once a rest period has already been opened, and free play is the
+// only thing that opens one — so the first rest could never be reached, and a
+// bot that never rests is a bot that is never anything but busy.
+func (r *Runner) ShouldDrift(snap Snapshot) bool {
+	// Already off exploring: that is a commitment of its own, and rest must not
+	// be laid on top of it.
+	if r.b != nil && r.b.Explorer != nil && r.b.Explorer.IsExploring() {
+		return false
+	}
+
+	now := nowish(snap)
+	r.mu.Lock()
+	lastMoved := r.lastMoved
+	r.mu.Unlock()
+	if lastMoved.IsZero() {
+		// A bot that has never recorded a position is not still — it has simply
+		// not started. Moving is the honest first move.
+		return true
+	}
+	return now.Sub(lastMoved) >= DriftAfterStill
+}
+
+// ShouldIdle reports whether a rest period opened earlier is still running.
 //
 // The window is kept on the runner rather than recomputed each tick, because a
 // duration that is re-derived from the clock every tick is a duration that can
 // never end: the clock has moved, so "started + 30s" is always 30s away, and
 // the bot idles forever.
-func (r *Runner) shouldIdle(snap Snapshot) bool {
+func (r *Runner) ShouldIdle(snap Snapshot) bool {
 	now := nowish(snap)
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -149,19 +186,21 @@ func (r *Runner) shouldIdle(snap Snapshot) bool {
 	return false
 }
 
-// idle opens or continues a rest period.
+// Idle opens or continues a rest period.
 //
 // An idle already in progress is simply carried, not restarted. Restarting it
 // every tick would stretch a rest period by thirty seconds each time, which
 // means it never ends — the same trap as a deadline read fresh from config.
-func (r *Runner) idle(snap Snapshot) {
+func (r *Runner) Idle(snap Snapshot) {
 	now := nowish(snap)
 
-	// Read the existing window under the lock, then release it. planIdle takes
-	// the lock itself, and sync.Mutex is not reentrant — holding it across that
-	// call is a self-deadlock, which is the same trap that wedged Observe.
+	// shouldIdle is the one definition of "a rest period is running", and it
+	// clears an expired window as a side effect so the rest can be reopened.
+	// The mode is read separately, and under a separate lock: planIdle takes the
+	// lock itself, and sync.Mutex is not reentrant — holding it across that call
+	// is a self-deadlock, which is the same trap that wedged Observe.
+	active := r.ShouldIdle(snap)
 	r.mu.Lock()
-	active := !r.idleUntil.IsZero() && now.Before(r.idleUntil)
 	mode := r.idleMode
 	r.mu.Unlock()
 

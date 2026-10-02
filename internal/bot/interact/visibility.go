@@ -163,7 +163,7 @@ func isOccluder(b Bot, x, y, z int32) bool {
 	if !loaded {
 		return false
 	}
-	return !seeThroughBlocks[normalise(name)]
+	return !seeThroughBlocks[Normalise(name)]
 }
 
 // lineOfSightToBlock walks from the bot's eyes to the centre of a block.
@@ -172,7 +172,7 @@ func isOccluder(b Bot, x, y, z int32) bool {
 // is by definition the thing at the end of the ray and testing it as its own
 // occluder would make every target fail.
 func lineOfSightToBlock(b Bot, from mgl32.Vec3, target protocol.BlockPos) bool {
-	eye := from.Add(mgl32.Vec3{0, eyeHeight, 0})
+	eye := from.Add(mgl32.Vec3{0, EyeHeight, 0})
 	aim := blockAim(Target{Block: target})
 	delta := aim.Sub(eye)
 	length := delta.Len()
@@ -197,13 +197,13 @@ func lineOfSightToBlock(b Bot, from mgl32.Vec3, target protocol.BlockPos) bool {
 	return true
 }
 
-// onlyVisible keeps the block targets the bot could actually point at.
+// OnlyVisible keeps the block targets the bot could actually point at.
 //
 // It runs once over the scanned candidates rather than inside the per-path
 // filters, so the named path and the "whatever is in front" path cannot drift
 // apart. Two targeting paths that disagree about what is visible is how a bot
 // ends up refusing the button it was looking at while clicking one behind it.
-func onlyVisible(b Bot, from mgl32.Vec3, targets []Target) []Target {
+func OnlyVisible(b Bot, from mgl32.Vec3, targets []Target) []Target {
 	out := make([]Target, 0, len(targets))
 	for _, t := range targets {
 		if lineOfSightToBlock(b, from, t.Block) {

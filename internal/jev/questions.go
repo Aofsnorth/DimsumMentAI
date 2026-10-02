@@ -39,6 +39,48 @@ const (
 	// goal outlives the tick that chose it, and answering it is what gives the
 	// bot continuity rather than a fresh coin flip every thirty seconds.
 	QGoal = "goal"
+	// QLocomotion asks how the body should travel while it does this tick's
+	// activity: walk, run, or run-and-hop. A travel style, not a destination —
+	// the path stays exactly where it is, only the gait changes. Asked as a
+	// choice so a model that never heard of it simply does not answer, and
+	// the movement rules carry on as before.
+	QLocomotion = "locomotion"
+	// QGaze asks what the bot should attend to when it is standing still. It is
+	// the one question that hands the model a say over perception, and it is
+	// scoped as narrowly as it can be: the answer chooses WHAT KIND of thing the
+	// head settles on next, never where the body goes and never whether the scan
+	// happens at all.
+	//
+	// The gap this closes is not that the bot could not look — it looks at
+	// players, creatures and blocks already — but that the choice was a dice roll
+	// with no say from the model. A bot that is curious about the player who just
+	// walked past and a bot that is staring at a tree are the same bot as far as
+	// the model is concerned, and it had no vocabulary to say otherwise.
+	QGaze = "gaze"
+	// QDrop asks whether to leap the drop in front of the bot or stop at the
+	// edge. It is the narrowest question in the set and the most consequential:
+	// the body already refuses cliffs on its own, so answering "no" costs
+	// nothing and answering "yes" is the only way a player-like descent ever
+	// happens. A model that never heard of it does not answer, and not
+	// answering is "stop".
+	QDrop = "drop"
+)
+
+const (
+	RiskCareful  = "careful"
+	RiskBold     = "bold"
+	RiskReckless = "reckless"
+
+	// QRisk asks how much risk the bot should take on purpose.
+	//
+	// It is the personality dial, and it exists because a bot whose every
+	// decision is a lookup table is not being careful — it is being a machine. A
+	// player backs off a creeper one way and jokes with another, and both are
+	// the same person.
+	QRisk = "risk"
+
+	// QAffordance asks what to do, from a set derived from the world.
+	QAffordance = "affordance"
 )
 
 // Activity options offered to the model. Kept short on purpose: Jev is a
@@ -84,6 +126,23 @@ const (
 	// Offered only when it genuinely can, so the bot does not repeatedly choose
 	// a recipe it has no materials for.
 	ActivityCraft = "craft"
+)
+
+// Locomotion options. Kept to three on purpose: a classifier given "jog" versus
+// "run" versus "sprint" produces mush, while walk / sprint / sprint-jump are
+// three things a viewer can actually tell apart.
+const (
+	LocomotionWalk       = "walk"
+	LocomotionSprint     = "sprint"
+	LocomotionSprintJump = "sprint_jump"
+)
+
+// Drop options. Two, and the default is the cautious one: a model that does not
+// answer this question must leave the bot standing at the edge, because the
+// whole point of asking is that the bot already stops there by itself.
+const (
+	DropLeap = "leap"
+	DropStop = "stop"
 )
 
 // MustNoul builds a noul question as its raw JSON, for a caller assembling a
@@ -189,6 +248,76 @@ func BuildGoalQuestion(goals []string, descriptions map[string]string, current s
 // carrying one, spends a decision on something that cannot succeed. What reaches
 // the model is what is plausible right now, and "rest" is always offered so
 // silence stays available even when the world looks busy.
+
+// Gaze options. These name what the head settles on, not where it points, and
+// the movement layer turns each into the same thing it would have done on its
+// own — including the natural rhythm, the hold durations and the micro-saccades.
+const (
+	// GazePerson settles on a nearby player.
+	GazePerson = "person"
+	// GazeMob settles on a nearby creature.
+	GazeMob = "mob"
+	// GazeBlock settles on a nearby block.
+	GazeBlock = "block"
+	// GazeAround looks at nothing in particular, which is what a person does when
+	// the surroundings are uninteresting.
+	GazeAround = "around"
+)
+
+// BuildGazeQuestion asks what the bot should look at while it is standing still.
+func BuildGazeQuestion() map[string]json.RawMessage {
+	return map[string]json.RawMessage{
+		QGaze: mustMarshal(ChoiceQuestion{
+			Type:         TypeChoice,
+			Instructions: "The bot is standing still for a moment. What should its attention settle on? Only choose a player if someone is actually nearby to look at, and only choose a creature if one is nearby. Choose \"around\" if nothing in view is worth watching. This changes only where it looks — never where it goes.",
+			Criteria: map[string]string{
+				GazePerson: "watch a nearby player",
+				GazeMob:    "watch a nearby animal or creature",
+				GazeBlock:  "look at a nearby block or feature of the ground",
+				GazeAround: "just look around at nothing in particular",
+			},
+		}),
+	}
+}
+
+// BuildLocomotionQuestion asks how the body should travel. It rides along in
+// the same parallel batch as everything else, so it costs no extra round trip.
+//
+// Only asked when the bot is about to cover ground: a travel style with
+// nowhere to go is a wasted decision that can only ever answer noise. The
+// caller decides that from the snapshot; this just builds the question.
+func BuildLocomotionQuestion() map[string]json.RawMessage {
+	return map[string]json.RawMessage{
+		QLocomotion: mustMarshal(ChoiceQuestion{
+			Type:         TypeChoice,
+			Instructions: "The bot is about to travel somewhere. How should it move? Walk near other players, on ledges, or anywhere running would look wrong. Sprint across open ground when there is somewhere to be. Sprint-jump only on flat open ground it can already see — never near a drop.",
+			Criteria: map[string]string{
+				LocomotionWalk:       "walk there at a normal pace",
+				LocomotionSprint:     "run there",
+				LocomotionSprintJump: "run there, jumping as it goes",
+			},
+		}),
+	}
+}
+
+// BuildDropQuestion asks whether to leap the drop in front of the bot.
+//
+// Two options, not a dial. A cliff is binary in practice — a player either goes
+// over it or does not — and a three-way "how far" would give a model vocabulary
+// for a decision the body cannot execute anyway.
+func BuildDropQuestion() map[string]json.RawMessage {
+	return map[string]json.RawMessage{
+		QDrop: mustMarshal(ChoiceQuestion{
+			Type:         TypeChoice,
+			Instructions: "There is a drop directly ahead of the bot. Leap off it, or stop at the edge?",
+			Criteria: map[string]string{
+				DropLeap: "jump off and take the drop — only when the far side is worth reaching and the landing is survivable",
+				DropStop: "stop at the edge and go a different way",
+			},
+		}),
+	}
+}
+
 func BuildActivityQuestion(curriculum []string) map[string]json.RawMessage {
 	if len(curriculum) == 0 {
 		curriculum = []string{ActivityRest, ActivityWander}
@@ -245,4 +374,50 @@ func mustMarshal(v any) json.RawMessage {
 		panic("jev: question definition is not serializable: " + err.Error())
 	}
 	return b
+}
+
+// BuildRiskQuestion asks how much risk the bot should take on purpose.
+//
+// Asked on every tick, like the other state questions: it costs no extra round
+// trip, and a disposition that only gets asked when something scary is on screen
+// is a disposition that never changes.
+func BuildRiskQuestion() map[string]json.RawMessage {
+	return map[string]json.RawMessage{
+		QRisk: mustMarshal(ChoiceQuestion{
+			Type:         TypeChoice,
+			Instructions: "How should the bot behave right now? Careful avoids anything that might hurt it. Bold takes the obvious line when the alternative is worse. Reckless does something risky on purpose because it would be interesting.",
+			Criteria: map[string]string{
+				RiskCareful:  "play it safe: walk around trouble, back off early, try nothing unfamiliar",
+				RiskBold:     "take the direct route, fight what is in the way, accept a small risk for a real gain",
+				RiskReckless: "do the risky thing on purpose — it is more fun that way, even if it might hurt",
+			},
+		}),
+	}
+}
+
+// BuildAffordanceQuestion asks what to do, from a set derived from the world
+// rather than from a fixed menu.
+//
+// This is the question the whole affordance layer exists to improve. A menu is
+// a list the programmer wrote; an affordance set is a list of what the bot can
+// actually do from where it is standing, holding what it is holding. The model
+// reads the difference immediately: it stops choosing tasks that cannot work,
+// and it starts composing — "gather, but put a block up first" only has a home
+// once the verbs are visible separately from the activities.
+//
+// The map is the question's criteria, so the set travels with the question
+// rather than needing a second rendering step that could disagree with it.
+func BuildAffordanceQuestion(available map[string]string) map[string]json.RawMessage {
+	if len(available) == 0 {
+		// An empty choice is a question no model can answer, and an unanswerable
+		// question reads as a bug rather than as "there was nothing to do".
+		return nil
+	}
+	return map[string]json.RawMessage{
+		QAffordance: mustMarshal(ChoiceQuestion{
+			Type:         TypeChoice,
+			Instructions: "What should the bot do right now? Only these are possible here — anything else cannot work from where it is standing.",
+			Criteria:     available,
+		}),
+	}
 }

@@ -46,7 +46,7 @@ func (wc *WorldCache) HandleLevelChunk(pk *packet.LevelChunk) {
 		}
 		return
 	}
-	wc.scanSignBlockEntities(buf.Bytes())
+	wc.ScanSignBlockEntities(buf.Bytes())
 
 	wc.mu.Lock()
 	wc.chunks[pos] = c
@@ -93,7 +93,7 @@ func (wc *WorldCache) applySubChunkEntry(entry protocol.SubChunkEntry, pos proto
 	}
 	applyStorageToChunk(c, wc.airRID, wc.r, subY, storages)
 	// Block entities for this section ride along after the storage data.
-	wc.scanSignBlockEntities(leftover)
+	wc.ScanSignBlockEntities(leftover)
 
 	wc.mu.Lock()
 	wc.subChunksApplied++

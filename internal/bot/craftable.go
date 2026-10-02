@@ -20,10 +20,28 @@ type CraftableItem struct {
 
 // ListCraftableItems returns all recipes the bot can craft with current inventory + crafting table status.
 func (b *Bot) ListCraftableItems(hasCraftingTable bool) []CraftableItem {
+	// Snapshot, do not alias.
+	//
+	// These were assigned rather than copied, so the unlock on the next line
+	// released the lock while the iteration below was still walking live maps.
+	// The packet read loop writes InventoryMap on every inventory transaction,
+	// and the runtime's map-corruption detector does not care that the writer
+	// holds the right lock — it only sees two goroutines on one map, and it
+	// kills the process. That is unrecoverable: no recover() catches it, and the
+	// session dies mid-world with the goroutine dump as the only explanation.
 	b.Mu.Lock()
-	inv := b.InventoryMap
-	names := b.ItemNames
-	recipes := b.RecipesByNetID
+	inv := make(map[uint32]protocol.ItemStack, len(b.InventoryMap))
+	for slot, stack := range b.InventoryMap {
+		inv[slot] = stack
+	}
+	names := make(map[int32]string, len(b.ItemNames))
+	for id, name := range b.ItemNames {
+		names[id] = name
+	}
+	recipes := make(map[uint32]RecipeInfo, len(b.RecipesByNetID))
+	for netID, recipe := range b.RecipesByNetID {
+		recipes[netID] = recipe
+	}
 	b.Mu.Unlock()
 
 	result := make([]CraftableItem, 0, InitialCraftableCapacity)
@@ -49,7 +67,7 @@ func (b *Bot) ListCraftableItems(hasCraftingTable bool) []CraftableItem {
 		}
 
 		// Check if bot has ingredients
-		canCraft, missing := b.canCraftRecipe(recipe, inv, names)
+		canCraft, missing := b.CanCraftRecipe(recipe, inv, names)
 
 		result = append(result, CraftableItem{
 			Name:        outputName,
@@ -72,12 +90,12 @@ func (b *Bot) ListCraftableItems(hasCraftingTable bool) []CraftableItem {
 	return result
 }
 
-// canCraftRecipe reports whether the bot's inventory satisfies every ingredient
+// CanCraftRecipe reports whether the bot's inventory satisfies every ingredient
 // of recipe. It reuses the same identity resolution and name matching as the
-// authoritative crafting path (resolveIngredientIdentity + itemNameMatches, as
-// used by planIngredientConsumption) so the "craftable" list stays consistent
+// authoritative crafting path (ResolveIngredientIdentity + ItemNameMatches, as
+// used by PlanIngredientConsumption) so the "craftable" list stays consistent
 // with what CraftItem will actually consume.
-func (b *Bot) canCraftRecipe(recipe RecipeInfo, inv map[uint32]protocol.ItemStack, names map[int32]string) (bool, string) {
+func (b *Bot) CanCraftRecipe(recipe RecipeInfo, inv map[uint32]protocol.ItemStack, names map[int32]string) (bool, string) {
 	needed := make(map[string]int)
 
 	for _, ing := range recipe.Ingredients {
@@ -86,7 +104,7 @@ func (b *Bot) canCraftRecipe(recipe RecipeInfo, inv map[uint32]protocol.ItemStac
 			count = 1
 		}
 
-		targetName, networkID := resolveIngredientIdentity(ing.Descriptor, names)
+		targetName, networkID := ResolveIngredientIdentity(ing.Descriptor, names)
 		// Descriptors the bot cannot resolve (MoLang, complex alias) are left
 		// for the server to validate; treat them as satisfied here.
 		if targetName == "" && networkID == 0 {
@@ -98,7 +116,7 @@ func (b *Bot) canCraftRecipe(recipe RecipeInfo, inv map[uint32]protocol.ItemStac
 			itemName := names[stack.NetworkID]
 			var ok bool
 			if targetName != "" {
-				ok = itemName != "" && itemNameMatches(itemName, targetName)
+				ok = itemName != "" && ItemNameMatches(itemName, targetName)
 			} else {
 				ok = stack.NetworkID == networkID
 			}
@@ -128,7 +146,7 @@ func (b *Bot) canCraftRecipe(recipe RecipeInfo, inv map[uint32]protocol.ItemStac
 }
 
 // missingIngredientName renders a human-readable name for an unmet ingredient
-// from the identity resolved by resolveIngredientIdentity.
+// from the identity resolved by ResolveIngredientIdentity.
 func missingIngredientName(targetName string, networkID int32, names map[int32]string) string {
 	if targetName != "" {
 		return FormatItemName(targetName)

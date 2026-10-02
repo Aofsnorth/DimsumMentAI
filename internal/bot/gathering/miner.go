@@ -120,7 +120,7 @@ func (bm *BlockMiner) gatherBlocks(ctx context.Context, blockName string, target
 	return collected
 }
 
-func (bm *BlockMiner) findBestMineStep(resolvedName string, dugPositions map[string]bool) (mineStep, string, bool) {
+func (bm *BlockMiner) findBestMineStep(resolvedName string, dugPositions map[string]bool) (MineStep, string, bool) {
 	bot := bm.rg.bot
 	botPos := bot.GetCoords()
 	world := bot.GetLocalWorldModel()
@@ -128,7 +128,7 @@ func (bm *BlockMiner) findBestMineStep(resolvedName string, dugPositions map[str
 	by := int32(math.Floor(float64(botPos.Y())))
 	bz := int32(math.Floor(float64(botPos.Z())))
 
-	var bestStep mineStep
+	var bestStep MineStep
 	bestBlockName := ""
 	bestScore := float32(math.MaxFloat32)
 	foundCandidate := false
@@ -161,25 +161,25 @@ func (bm *BlockMiner) findBestMineStep(resolvedName string, dugPositions map[str
 	return bestStep, bestBlockName, foundCandidate
 }
 
-func (bm *BlockMiner) evaluateMineCandidate(target protocol.BlockPos, botPos mgl32.Vec3, bx, by, bz int32, resolvedName string, dugPositions map[string]bool, world entity.WorldModel) (mineStep, string, bool) {
+func (bm *BlockMiner) evaluateMineCandidate(target protocol.BlockPos, botPos mgl32.Vec3, bx, by, bz int32, resolvedName string, dugPositions map[string]bool, world entity.WorldModel) (MineStep, string, bool) {
 	if dugPositions[mineKey(target)] {
-		return mineStep{}, "", false
+		return MineStep{}, "", false
 	}
 	if target.X() == bx && target.Z() == bz && (target.Y() == by || target.Y() == by-1) {
-		return mineStep{}, "", false
+		return MineStep{}, "", false
 	}
 	if !world.IsSolid(target.X(), target.Y(), target.Z()) {
-		return mineStep{}, "", false
+		return MineStep{}, "", false
 	}
 
 	name, ok := bm.rg.bot.GetBlockName(target.X(), target.Y(), target.Z())
 	if !ok || !blockNameMatches(name, resolvedName) {
-		return mineStep{}, "", false
+		return MineStep{}, "", false
 	}
 
-	step, ok := planMineStep(botMineWorld{bot: bm.rg.bot, model: world}, botPos, target)
+	step, ok := PlanMineStep(botMineWorld{bot: bm.rg.bot, model: world}, botPos, target)
 	if !ok || dugPositions[mineKey(step.Position)] {
-		return mineStep{}, "", false
+		return MineStep{}, "", false
 	}
 
 	stepName := name
@@ -187,16 +187,16 @@ func (bm *BlockMiner) evaluateMineCandidate(target protocol.BlockPos, botPos mgl
 		var stepNameOK bool
 		stepName, stepNameOK = bm.rg.bot.GetBlockName(step.Position.X(), step.Position.Y(), step.Position.Z())
 		if !stepNameOK || strings.EqualFold(stepName, "minecraft:bedrock") {
-			return mineStep{}, "", false
+			return MineStep{}, "", false
 		}
 	}
 
 	return step, stepName, true
 }
 
-func (bm *BlockMiner) breakBlock(ctx context.Context, step mineStep, blockName string) bool {
+func (bm *BlockMiner) breakBlock(ctx context.Context, step MineStep, blockName string) bool {
 	bot := bm.rg.bot
-	visibleStep, visible := planMineStep(
+	visibleStep, visible := PlanMineStep(
 		botMineWorld{bot: bot, model: bot.GetLocalWorldModel()},
 		bot.GetCoords(),
 		step.Position,
@@ -209,7 +209,7 @@ func (bm *BlockMiner) breakBlock(ctx context.Context, step mineStep, blockName s
 
 // mineSingle performs one break (no recursion, no obstruction check). Used
 // internally by breakBlock and by the obstruction-clearing loop.
-func (bm *BlockMiner) mineSingle(ctx context.Context, step mineStep, blockName string) bool {
+func (bm *BlockMiner) mineSingle(ctx context.Context, step MineStep, blockName string) bool {
 	bot := bm.rg.bot
 	bm.equipBestTool(blockName)
 

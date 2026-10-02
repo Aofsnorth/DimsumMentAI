@@ -36,7 +36,7 @@ type TickContext struct {
 	SmoothedLookYaw   float32
 	SmoothedLookPitch float32
 	// FollowWalking is the follow walk/stop latch for this tick, computed in
-	// updateShouldMoveState before steering and look run.
+	// UpdateShouldMoveState before steering and look run.
 	FollowWalking       bool
 	VelY                float32
 	FeetX, FeetY, FeetZ int32
@@ -48,6 +48,18 @@ type TickContext struct {
 	Dx, Dz, Dist        float32
 	ShouldJump          bool
 	JumpReason          string
+	// DropOK is Jev's authority for one deliberate drop: set when the model
+	// asks to leap a ledge, consumed by the first tick that uses it. It is a
+	// latch on the tick rather than on the bot so it cannot outlive the decision
+	// that granted it.
+	DropOK bool
+	// dropTaken keeps the spent authority from being re-read from the bot
+	// mid-tick, so one decision produces exactly one leap.
+	dropTaken bool
+	// LedgeAheadOfBody is what the ground under the next step looks like. It is
+	// read once per tick and handed to the prompt layer, so the model reasons
+	// about the same measurement the body acts on rather than a second opinion.
+	LedgeAheadOfBody    LedgeAhead
 	PrevPos             mgl32.Vec3
 	MoveVec             mgl32.Vec2
 	MoveDelta           mgl32.Vec3
@@ -65,6 +77,70 @@ type TickContext struct {
 	LastPredictedY      float32
 	IsParkourJump       bool
 	TargetTolerance     float32 // arrival tolerance for walk_to (copied from bot)
+
+	// Swim is the water controller for this tick, and SwimIntent is the plan it
+	// produced. Both are nil when no controller was installed or the world
+	// cannot answer, which is the ordinary case on dry land and must leave the
+	// input flags exactly as they were before water movement existed.
+	Swim        *SwimController
+	SwimIntent  SwimIntent
+	SwimPlanned bool
+}
+
+// notMovingReportInterval is how long the bot may want to move without moving
+// before it says so. Three seconds is long enough that a bot pausing to clear a
+// cell, break a block or finish a placement does not trip it.
+const notMovingReportInterval = 3 * time.Second
+
+// reportIfNotMoving logs when the bot has a reason to be walking and is not.
+//
+// Without this, a bot that stops moving produces no log line at all: steering
+// runs every tick and has nothing to say when it is refusing to move, and the
+// stuck counter logs at Debug. A session where the bot quietly stops halfway is
+// then indistinguishable from one where it is busy thinking, because the only
+// visible lines are the decision layer's — which keeps ticking, cheerful, while
+// the body does nothing.
+func reportIfNotMoving(b *bot.Bot, tc *TickContext, lastAt *time.Time, lastPos *mgl32.Vec3) {
+	if tc.MState != "walk_to" {
+		// Not trying to move: reset, so the next trip starts from a clean slate.
+		*lastAt = time.Time{}
+		return
+	}
+
+	now := time.Now()
+	moved := math.Abs(float64(tc.CurrPos.X()-lastPos.X())) > 0.05 ||
+		math.Abs(float64(tc.CurrPos.Z()-lastPos.Z())) > 0.05 ||
+		math.Abs(float64(tc.CurrPos.Y()-lastPos.Y())) > 0.05
+	if moved || lastAt.IsZero() {
+		*lastAt = now
+		*lastPos = tc.CurrPos
+		return
+	}
+	if now.Sub(*lastAt) < notMovingReportInterval {
+		return
+	}
+	*lastAt = now
+
+	b.Mu.Lock()
+	hasPath := len(b.CurrentPath) > 0
+	pathIndex := b.PathIndex
+	pathLen := len(b.CurrentPath)
+	destination := b.TargetPos
+	ticksStuck := b.TicksStuck
+	consecutive := b.ConsecutiveStuckCount
+	b.Mu.Unlock()
+
+	b.Logger.Warn("bot wants to move and is not",
+		"pos", tc.CurrPos,
+		"destination", destination,
+		"has_path", hasPath,
+		"path_index", pathIndex,
+		"path_len", pathLen,
+		"distance", tc.Dist,
+		"ticks_stuck", ticksStuck,
+		"consecutive_stuck", consecutive,
+		"grounded", tc.IsGrounded,
+	)
 }
 
 // SendInputLoop handles the physical updates and steering of the bot
@@ -77,8 +153,18 @@ func SendInputLoop(ctx context.Context, b *bot.Bot, gd minecraft.GameData) {
 	initPitch := b.Pitch
 	b.Mu.Unlock()
 
+	// One controller for the life of the connection, not one per tick: it owns
+	// the submersion clock and the swimming edge state, and a fresh controller
+	// every tick would read as a body that left the water and came back 20
+	// times a second, re-sending StartSwimming forever and never letting the
+	// breath clock run down.
+	swim := NewSwimController(b, b.Logger)
+	startStallWatchdog(b, ctx)
+
 	var lastPredictedY float32 = initPos.Y()
 	prevPos := initPos
+	var lastProgressAt time.Time
+	var lastProgressPos mgl32.Vec3
 	smoothLookYaw, smoothLookPitch := initYaw, initPitch
 	var connErr bool
 
@@ -87,6 +173,9 @@ func SendInputLoop(ctx context.Context, b *bot.Bot, gd minecraft.GameData) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+			// Stamped before the tick takes a single lock, so a tick parked
+			// waiting for one still counts as alive until it gets past this.
+			lastTickAt.Store(time.Now().UnixMilli())
 			b.Mu.Lock()
 			tick := b.ServerTick
 			b.ServerTick++
@@ -97,6 +186,7 @@ func SendInputLoop(ctx context.Context, b *bot.Bot, gd minecraft.GameData) {
 				Tick:           tick,
 				LastPredictedY: lastPredictedY,
 				PrevPos:        prevPos,
+				Swim:           swim,
 			}
 
 			b.Mu.Lock()
@@ -136,14 +226,19 @@ func SendInputLoop(ctx context.Context, b *bot.Bot, gd minecraft.GameData) {
 				}
 			}
 
+			tc.planSwim()
+			tc.takeRequestedJump()
+			tc.applySprintHop()
 			tc.detectLadder()
-			tc.updateDistanceToPlayer()
+			tc.takeRequestedJump()
+			tc.takeRequestedDrop()
 			tc.updateTargetPositionIfFollowing()
 			tc.resolveNextTarget()
 			// A walk_to that lost its route has to re-plan here: the host clears
 			// CurrentPath on a large position correction, and nothing else would
 			// ever put one back.
-			tc.ensureWalkToHasPath()
+			tc.EnsureWalkToHasPath()
+			reportIfNotMoving(b, tc, &lastProgressAt, &lastProgressPos)
 			venityIdle := tc.B.VenityCompat && tc.MState == "idle"
 			if !venityIdle {
 				tc.performActiveSteering()

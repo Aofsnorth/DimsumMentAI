@@ -4,7 +4,7 @@
 
 # --- Server Settings ---
 server:
-  host: "192.168.1.18"
+  host: "192.168.1.125"
   port: 7551
   offline: true # true = no Xbox Live auth (local server)
   lan_discovery: true # auto-discover the single-player world opened to LAN (direct RakNet to a client-hosted world is rejected with invalidSkin — the host requires the Nonce from its advertisement)

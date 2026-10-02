@@ -211,7 +211,7 @@ func (m *Manager) holdsTorch() bool {
 // equipped armour on its own.
 func (m *Manager) Tick() {
 	m.tickAutoEat()
-	m.tickAutoArmor()
+	m.TickAutoArmor()
 	m.tickDeathRecovery()
 	m.tickNightRoutine()
 	m.tickTorch()

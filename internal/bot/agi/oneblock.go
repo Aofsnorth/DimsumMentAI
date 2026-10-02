@@ -60,7 +60,7 @@ const oneBlockThreshold = 2
 // fresh scan, because the scan has already happened this tick and doing it twice
 // to answer a yes/no question is a cost the bot pays on every decision.
 func DetectOneBlock(nearBlocks string) OneBlockConfidence {
-	distinct, readable := readableBlockNames(nearBlocks)
+	distinct, readable := ReadableBlockNames(nearBlocks)
 	if !readable {
 		// The summary was not a list of block names, so there is no evidence at
 		// all. "I do not know" must not be recorded as "there is nothing here":

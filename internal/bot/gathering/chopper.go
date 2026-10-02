@@ -34,29 +34,49 @@ type treeCandidate struct {
 	matched bool // true when block name matches the preferred wood type
 }
 
-// maxGatherAttempts caps how many trunks one gather request may work on. It
+// MaxGatherAttempts caps how many trunks one gather request may work on. It
 // bounds the work per request: a request for a large pile walks a few trees and
 // then reports what it actually has, instead of touring the entire forest in a
 // single command.
-const maxGatherAttempts = 12
+const MaxGatherAttempts = 12
 
 func (tc *TreeChopper) GatherWood(ctx context.Context, targetCount int, preferred string) {
 	if targetCount <= 0 {
 		targetCount = 1
 	}
 
-	tc.logger.Debug("Starting wood gathering", "target", targetCount)
+	// What the bot already carries counts toward the target.
+	//
+	// The target is a number the player asked for, not a number to chop from
+	// zero, and the log showed the difference plainly: the bot was holding 39
+	// oak logs, was asked for 10, went out and tried to fell a tree, broke it,
+	// failed to sweep the drop, and then reported "tidak ada pohon yang bisa
+	// ditebang" — a failure message about a tree shortage for a request the bot
+	// could have answered from its own inventory without leaving the spot.
+	//
+	// It is counted before anything is chopped, so the tally that decides
+	// success is the same number the player is asking about.
+	already := tc.rg.looter.currentItemCount("log")
+	if already >= targetCount {
+		tc.logger.Info("Wood gathering skipped, already have enough",
+			"have", already, "target", targetCount)
+		tc.reportGatherResult(targetCount, targetCount, 0)
+		return
+	}
+	targetCount -= already
+
+	tc.logger.Debug("Starting wood gathering", "target", targetCount, "already_have", already)
 	// No early ReportActionStatus here — the final tally at the end of
 	// fellTreesUntilTarget is the single source of truth. Reporting Success: true
 	// up front made the LLM announce "dapet oak log" before the bot had even
 	// finished chopping.
 
 	collected, felled := tc.fellTreesUntilTarget(ctx, targetCount, preferred)
-	tc.reportGatherResult(collected, targetCount, felled)
+	tc.reportGatherResult(collected+already, targetCount+already, felled)
 }
 
 // fellTreesUntilTarget keeps felling trunks until it has the requested number
-// of logs, runs out of reachable trees, or hits maxGatherAttempts.
+// of logs, runs out of reachable trees, or hits MaxGatherAttempts.
 //
 // A single trunk only holds a handful of logs, so one chop can never satisfy a
 // request like "take 200 logs". The old code chopped one tree, reported whatever
@@ -68,7 +88,7 @@ func (tc *TreeChopper) fellTreesUntilTarget(ctx context.Context, targetCount int
 	felledBases := make(map[protocol.BlockPos]bool)
 	var pending []treeCandidate
 
-	for attempt := 0; attempt < maxGatherAttempts && collected < targetCount; attempt++ {
+	for attempt := 0; attempt < MaxGatherAttempts && collected < targetCount; attempt++ {
 		select {
 		case <-ctx.Done():
 			return collected, felled
@@ -111,13 +131,13 @@ func (tc *TreeChopper) fellTreesUntilTarget(ctx context.Context, targetCount int
 	return collected, felled
 }
 
-// gatherOutcome decides what the bot tells the LLM about a finished gather.
+// GatherOutcome decides what the bot tells the LLM about a finished gather.
 //
 // It is pure so the policy can be tested without a live bot. The rule that
 // matters: a partial haul is a failure. Announcing success with a short count
 // let the model treat "12 of 200 logs" as the finished order, and the player
 // never learned the bot had run out of trees.
-func gatherOutcome(collected, target, felled int) (success bool, errMsg string) {
+func GatherOutcome(collected, target, felled int) (success bool, errMsg string) {
 	switch {
 	case collected >= target:
 		return true, ""
@@ -129,7 +149,7 @@ func gatherOutcome(collected, target, felled int) (success bool, errMsg string) 
 }
 
 func (tc *TreeChopper) reportGatherResult(collected, target, felled int) {
-	success, errMsg := gatherOutcome(collected, target, felled)
+	success, errMsg := GatherOutcome(collected, target, felled)
 	if success {
 		tc.logger.Info("Wood gathering finished", "collected", collected, "target", target, "trees", felled)
 	} else {

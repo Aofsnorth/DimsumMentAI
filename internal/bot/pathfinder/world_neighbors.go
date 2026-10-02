@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"strings"
 
+	"bedrock-ai/internal/debuglog"
+
 	"github.com/df-mc/dragonfly/server/world/chunk"
 )
 
@@ -27,6 +29,15 @@ var (
 )
 
 // GetNeighbors returns all valid neighbor nodes for the given node.
+//
+// Water is one of the rules folded in here rather than a decorator a caller has
+// to remember to wrap the model in. The wrap was the only way to add a rule
+// before this call existed, and it never happened in production: the bot holds
+// a *LocalWorldModel directly, so the swim, dive and surface links were written,
+// tested against WaterNeighbors, and then unreachable — a path across a river
+// stopped at the bank. The water rules are additive and read the same model the
+// ground rules read, so merging them here costs a dry world nothing and gives a
+// wet one a route.
 func (w *LocalWorldModel) GetNeighbors(node Node) []Node {
 	neighbors := make([]Node, 0, 16)
 	before := len(neighbors)
@@ -41,9 +52,18 @@ func (w *LocalWorldModel) GetNeighbors(node Node) []Node {
 	before = len(neighbors)
 	neighbors = w.appendScaffoldNeighbors(neighbors, node)
 	scaffoldN := len(neighbors) - before
+	before = len(neighbors)
+	neighbors = w.AppendWaterNeighbors(neighbors, node)
+	waterN := len(neighbors) - before
 	if len(neighbors) == 0 {
-		fmt.Printf("[GetNeighbors empty] node=(%d,%d,%d) ladder=%d cardinal=%d diag=%d scaffold=%d\n",
-			node.X, node.Y, node.Z, ladderN, cardinalN, diagN, scaffoldN)
+		// Sampled: an empty set is the common case inside a failed search, so
+		// printing it unconditionally produced dozens of lines per repath and
+		// buried the signal. debuglog keeps ~1 line per 250ms and stays silent
+		// unless debug session logging is enabled.
+		debuglog.Log("P", "pathfinder/world_neighbors.go:GetNeighbors", "empty neighbor set", map[string]any{
+			"x": node.X, "y": node.Y, "z": node.Z,
+			"ladder": ladderN, "cardinal": cardinalN, "diag": diagN, "scaffold": scaffoldN, "water": waterN,
+		})
 	}
 	return neighbors
 }
@@ -245,12 +265,57 @@ func (w *LocalWorldModel) appendScaffoldNeighbors(neighbors []Node, node Node) [
 	return neighbors
 }
 
+// appendScaffoldTower offers a step straight up, which is the only way a bot
+// gains height. The node it returns is the position the bot ends up STANDING at,
+// one above the node it is standing on now, so the support the step needs is the
+// cell the bot's legs are currently in.
+//
+// The old version checked one thing: that the cell two above was empty. That is
+// not enough to place anything. A placement is a click on the top face of the
+// block below, so that block has to exist, and the cell being filled has to be
+// free — or breakable. Offering a tower that cannot be built wastes the step,
+// burns the retry budget and drops the path, which is how a climb turned into a
+// replan loop that never climbed.
+//
+// Nothing here breaks anything. Whether an obstruction is worth breaking is a
+// judgement the executor makes with the block in front of it, where the name is
+// known for certain rather than inferred from a solidity flag.
 func (w *LocalWorldModel) appendScaffoldTower(neighbors []Node, node Node) []Node {
 	cx, cy, cz := node.X, node.Y, node.Z
-	if !w.IsSolid(cx, cy+2, cz) && !w.IsHazard(cx, cy+2, cz) {
-		return append(neighbors, Node{X: cx, Y: cy + 1, Z: cz, G: node.G + 12.0, Action: "place", LinkType: LinkWalk})
+
+	// The cell the new block goes into is the one the body is in, and the face it
+	// is placed against is the block the body is standing on.
+	supportY, clickY := cy, cy-1
+	if w.IsHazard(cx, supportY, cz) || w.IsHazard(cx, supportY+1, cz) || w.IsHazard(cx, clickY, cz) {
+		return neighbors
 	}
-	return neighbors
+
+	// The face to click. Without it the block would float and the server would
+	// refuse the placement.
+	//
+	// The one exception is the block this node's own action is about to place. A
+	// "place" step fills exactly the cell below the node it stands on, so the next
+	// tower step clicks that cell — and the planner is looking at a world where
+	// it is still air, because nothing has been placed yet. Requiring it to be
+	// solid already is what capped every climb at a single block: the first tower
+	// step was planned, and the second could not be, so a five-block ascent came
+	// back as a one-block path and then nothing at all.
+	if !w.IsSolid(cx, clickY, cz) && node.Action != "place" {
+		return neighbors
+	}
+
+	// A column closed by something not worth breaking gets no neighbour at all,
+	// so the route goes around instead of being planned through and abandoned
+	// three attempts later.
+	if w.IsSolid(cx, supportY, cz) && !w.IsBreakable(cx, supportY, cz) {
+		return neighbors
+	}
+	// Headroom for the body once it is standing up there.
+	if w.IsSolid(cx, supportY+1, cz) && !w.IsBreakable(cx, supportY+1, cz) {
+		return neighbors
+	}
+
+	return append(neighbors, Node{X: cx, Y: cy + 1, Z: cz, G: node.G + 12.0, Action: "place", LinkType: LinkWalk})
 }
 
 func (w *LocalWorldModel) appendScaffoldCardinal(neighbors []Node, node Node, dx, dz int32) []Node {
@@ -462,7 +527,7 @@ func (w *LocalWorldModel) appendCornerParkourIfPossible(neighbors []Node, dx, dz
 			// A corner jump threads a one-block-wide body between the corner and
 			// whatever is beside it, and checking a single midpoint let a
 			// two-block lateral swing pass straight through a wall on its way.
-			if w.cornerArcClear(cx, cy, cz, lx, lz) {
+			if w.CornerArcClear(cx, cy, cz, lx, lz) {
 				neighbors = append(neighbors, Node{
 					X:        lx,
 					Y:        cy,
@@ -476,7 +541,7 @@ func (w *LocalWorldModel) appendCornerParkourIfPossible(neighbors []Node, dx, dz
 	return neighbors
 }
 
-// cornerArcClear walks the cells the bot's body sweeps through while rounding
+// CornerArcClear walks the cells the bot's body sweeps through while rounding
 // a corner and requires every one of them to be open.
 //
 // Clearance is checked on both sides of the move, which is what makes this a
@@ -486,7 +551,7 @@ func (w *LocalWorldModel) appendCornerParkourIfPossible(neighbors []Node, dx, dz
 // block offset clear a one block gap and a wall at the same time, because
 // neither the near side nor the far side of the corner was ever checked for the
 // whole way through.
-func (w *LocalWorldModel) cornerArcClear(cx, cy, cz, lx, lz int32) bool {
+func (w *LocalWorldModel) CornerArcClear(cx, cy, cz, lx, lz int32) bool {
 	dx := int64(lx - cx)
 	dz := int64(lz - cz)
 
@@ -565,12 +630,34 @@ func (w *LocalWorldModel) stepDownJumpGapClear(cx, cy, cz, dx, dz, distance int3
 	return true
 }
 
+// runtimeIDToStateAvailable reports whether dragonfly's runtime-ID converter is
+// linked into this binary.
+//
+// chunk.RuntimeIDToState is a package-level func var that dragonfly's world
+// package fills in at init. A binary that never links it — this package's own
+// consumers, a tool, a test — leaves it nil, and calling it takes the process
+// down from inside the search. blockNameFor in world.go already guards its own
+// call; isHalfBlock and isClimbableSurface reach the same var directly and
+// have to ask the same question, or a bot whose movement package does not
+// import the whole block palette dies on the first neighbour it expands.
+//
+// The answer it produces is "unknown", which is the safe direction: an unnamed
+// block is not assumed to be a slab, and is not assumed to be a ladder. canStandAt
+// treats both answers as "a full block", so the search still crosses a floor it
+// cannot name.
+func runtimeIDToStateAvailable() bool {
+	return chunk.RuntimeIDToState != nil
+}
+
 func (w *LocalWorldModel) isHalfBlock(x, y, z int32) bool {
 	if w.chunkQuerier == nil {
 		return false
 	}
 	rid, loaded := w.chunkQuerier.GetBlockRID(x, y, z)
 	if !loaded {
+		return false
+	}
+	if !runtimeIDToStateAvailable() {
 		return false
 	}
 	name, properties, ok := chunk.RuntimeIDToState(rid)
@@ -600,6 +687,9 @@ func (w *LocalWorldModel) isClimbableSurface(x, y, z int32) bool {
 	}
 	rid, loaded := w.chunkQuerier.GetBlockRID(x, y, z)
 	if !loaded {
+		return false
+	}
+	if !runtimeIDToStateAvailable() {
 		return false
 	}
 	name, _, ok := chunk.RuntimeIDToState(rid)

@@ -56,12 +56,12 @@ func ExecutePlan(b *bot.Bot, steps []Step, user string) {
 //
 // Craft keeps its structured path, which already returns the real outcome.
 func ExecuteAndWait(b *bot.Bot, label, param, user string) event.ActionStatus {
-	return executeAndWait(b, label, param, user, statusTimeout)
+	return ExecuteAndWaitWithTimeout(b, label, param, user, statusTimeout)
 }
 
-// executeAndWait is ExecuteAndWait with the report timeout passed in, so the
+// ExecuteAndWaitWithTimeout is ExecuteAndWait with the report timeout passed in, so the
 // expiry path can be tested without sitting out the production bound.
-func executeAndWait(b *bot.Bot, label, param, user string, timeout time.Duration) event.ActionStatus {
+func ExecuteAndWaitWithTimeout(b *bot.Bot, label, param, user string, timeout time.Duration) event.ActionStatus {
 	normalized := strings.ToLower(strings.TrimSpace(label))
 
 	// Rest and wait are satisfied by standing still. That is the instruction,
@@ -88,8 +88,8 @@ func executeAndWait(b *bot.Bot, label, param, user string, timeout time.Duration
 	// Subscribe before dispatching: handlers that report synchronously do so
 	// from inside Execute, and a subscription installed afterwards would miss
 	// the very report it is waiting for.
-	statuses := subscribeStatus(b)
-	defer unsubscribeStatus(b, statuses)
+	statuses := SubscribeStatus(b)
+	defer UnsubscribeStatus(b, statuses)
 
 	Execute(b, normalized, param, user)
 

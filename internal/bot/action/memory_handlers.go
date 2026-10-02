@@ -21,61 +21,61 @@ func init() {
 	// Storage and signage. take/store go through the labelled search so the
 	// bot opens chests one at a time, in the order the signage implies, and
 	// only from where it can actually see them.
-	actionHandlers["readsign"] = handleReadSign
-	actionHandlers["read_sign"] = handleReadSign
-	actionHandlers["take"] = handleTakeFromChest
-	actionHandlers["retrieve"] = handleTakeFromChest
-	actionHandlers["store"] = handleStoreInChest
-	actionHandlers["storeall"] = handleStoreInChest
-	actionHandlers["scan_chests"] = handleScanChests
+	ActionHandlers["readsign"] = handleReadSign
+	ActionHandlers["read_sign"] = handleReadSign
+	ActionHandlers["take"] = handleTakeFromChest
+	ActionHandlers["retrieve"] = handleTakeFromChest
+	ActionHandlers["store"] = handleStoreInChest
+	ActionHandlers["storeall"] = handleStoreInChest
+	ActionHandlers["scan_chests"] = handleScanChests
 
-	actionHandlers["remember"] = handleRemember
-	actionHandlers["recall"] = handleRecall
-	actionHandlers["memories"] = handleRecall
-	actionHandlers["forget"] = handleForget
-	actionHandlers["sethome"] = handleSetHome
-	actionHandlers["home"] = handleHome
-	actionHandlers["analyze"] = handleAnalyze
+	ActionHandlers["remember"] = handleRemember
+	ActionHandlers["recall"] = handleRecall
+	ActionHandlers["memories"] = handleRecall
+	ActionHandlers["forget"] = handleForget
+	ActionHandlers["sethome"] = handleSetHome
+	ActionHandlers["home"] = handleHome
+	ActionHandlers["analyze"] = handleAnalyze
 	// Direct-command parity with open-source MinePal forks (!move/!look).
-	actionHandlers["move"] = actionHandlers["goto"]
-	actionHandlers["look"] = actionHandlers["lookat"]
+	ActionHandlers["move"] = ActionHandlers["goto"]
+	ActionHandlers["look"] = ActionHandlers["lookat"]
 	// Navigation family. Each asks for a different arrival spot, so they are
 	// separate labels rather than one action with a mode parameter: the LLM
 	// picks a word ("stand on that block") and gets the matching behaviour.
-	actionHandlers["gotoblock"] = func(b *bot.Bot, param, user string) { goToBlock(b, param, user) }
-	actionHandlers["walkto"] = actionHandlers["gotoblock"]
-	actionHandlers["gotonearest"] = actionHandlers["gotoblock"]
-	actionHandlers["standon"] = func(b *bot.Bot, param, user string) { standOnBlock(b, param, user) }
-	actionHandlers["ontop"] = actionHandlers["standon"]
-	actionHandlers["standabove"] = actionHandlers["standon"]
-	actionHandlers["enterportal"] = func(b *bot.Bot, param, user string) { enterPortal(b, param, user) }
-	actionHandlers["portal"] = actionHandlers["enterportal"]
-	actionHandlers["usenetherportal"] = actionHandlers["enterportal"]
+	ActionHandlers["gotoblock"] = func(b *bot.Bot, param, user string) { goToBlock(b, param, user) }
+	ActionHandlers["walkto"] = ActionHandlers["gotoblock"]
+	ActionHandlers["gotonearest"] = ActionHandlers["gotoblock"]
+	ActionHandlers["standon"] = func(b *bot.Bot, param, user string) { standOnBlock(b, param, user) }
+	ActionHandlers["ontop"] = ActionHandlers["standon"]
+	ActionHandlers["standabove"] = ActionHandlers["standon"]
+	ActionHandlers["enterportal"] = func(b *bot.Bot, param, user string) { enterPortal(b, param, user) }
+	ActionHandlers["portal"] = ActionHandlers["enterportal"]
+	ActionHandlers["usenetherportal"] = ActionHandlers["enterportal"]
 }
 
 // handleRemember stores player text as a curated long-term memory.
 func handleRemember(b *bot.Bot, param, user string) {
 	if b.Memory == nil {
-		reportStatus(b, user, event.ActionStatus{Action: "remember", Success: false, Error: "memori belum siap"})
+		ReportStatus(b, user, event.ActionStatus{Action: "remember", Success: false, Error: "memori belum siap"})
 		return
 	}
 	fact, err := b.Memory.Add(param, user)
 	if err != nil {
-		reportStatus(b, user, event.ActionStatus{Action: "remember", Success: false, Error: err.Error()})
+		ReportStatus(b, user, event.ActionStatus{Action: "remember", Success: false, Error: err.Error()})
 		return
 	}
-	reportStatus(b, user, event.ActionStatus{Action: "remember", Item: fmt.Sprintf("(%d) %s", fact.ID, fact.Text), Success: true})
+	ReportStatus(b, user, event.ActionStatus{Action: "remember", Item: fmt.Sprintf("(%d) %s", fact.ID, fact.Text), Success: true})
 }
 
 // handleRecall lists memories, optionally filtered by a substring query.
 func handleRecall(b *bot.Bot, param, user string) {
 	if b.Memory == nil {
-		reportStatus(b, user, event.ActionStatus{Action: "recall", Success: false, Error: "memori belum siap"})
+		ReportStatus(b, user, event.ActionStatus{Action: "recall", Success: false, Error: "memori belum siap"})
 		return
 	}
 	facts := b.Memory.Search(param)
 	if len(facts) == 0 {
-		reportStatus(b, user, event.ActionStatus{Action: "recall", Item: "belum ada memori", Success: true})
+		ReportStatus(b, user, event.ActionStatus{Action: "recall", Item: "belum ada memori", Success: true})
 		return
 	}
 	const maxShow = 10
@@ -91,36 +91,36 @@ func handleRecall(b *bot.Bot, param, user string) {
 	if hidden := len(facts) - len(shown); hidden > 0 {
 		item += fmt.Sprintf(" (+%d lagi)", hidden)
 	}
-	reportStatus(b, user, event.ActionStatus{Action: "recall", Item: item, Count: len(facts), Success: true})
+	ReportStatus(b, user, event.ActionStatus{Action: "recall", Item: item, Count: len(facts), Success: true})
 }
 
 // handleForget removes one memory by ID or substring match.
 func handleForget(b *bot.Bot, param, user string) {
 	if b.Memory == nil {
-		reportStatus(b, user, event.ActionStatus{Action: "forget", Success: false, Error: "memori belum siap"})
+		ReportStatus(b, user, event.ActionStatus{Action: "forget", Success: false, Error: "memori belum siap"})
 		return
 	}
 	removed, ok := b.Memory.Forget(param)
 	if !ok {
-		reportStatus(b, user, event.ActionStatus{Action: "forget", Success: false, Error: "memori tidak ketemu"})
+		ReportStatus(b, user, event.ActionStatus{Action: "forget", Success: false, Error: "memori tidak ketemu"})
 		return
 	}
-	reportStatus(b, user, event.ActionStatus{Action: "forget", Item: fmt.Sprintf("(%d) %s", removed.ID, removed.Text), Success: true})
+	ReportStatus(b, user, event.ActionStatus{Action: "forget", Item: fmt.Sprintf("(%d) %s", removed.ID, removed.Text), Success: true})
 }
 
 // handleSetHome remembers the bot's current position as "home".
 func handleSetHome(b *bot.Bot, _, user string) {
 	if b.Memory == nil {
-		reportStatus(b, user, event.ActionStatus{Action: "sethome", Success: false, Error: "memori belum siap"})
+		ReportStatus(b, user, event.ActionStatus{Action: "sethome", Success: false, Error: "memori belum siap"})
 		return
 	}
 	pos := b.GetCoords()
 	place, err := b.Memory.RememberPlace("home", pos.X(), pos.Y(), pos.Z())
 	if err != nil {
-		reportStatus(b, user, event.ActionStatus{Action: "sethome", Success: false, Error: err.Error()})
+		ReportStatus(b, user, event.ActionStatus{Action: "sethome", Success: false, Error: err.Error()})
 		return
 	}
-	reportStatus(b, user, event.ActionStatus{
+	ReportStatus(b, user, event.ActionStatus{
 		Action:  "sethome",
 		Item:    fmt.Sprintf("home di X:%.0f Y:%.0f Z:%.0f", place.X, place.Y, place.Z),
 		Success: true,
@@ -130,12 +130,12 @@ func handleSetHome(b *bot.Bot, _, user string) {
 // handleHome walks back to the remembered "home" position.
 func handleHome(b *bot.Bot, _, user string) {
 	if b.Memory == nil {
-		reportStatus(b, user, event.ActionStatus{Action: "home", Success: false, Error: "memori belum siap"})
+		ReportStatus(b, user, event.ActionStatus{Action: "home", Success: false, Error: "memori belum siap"})
 		return
 	}
 	place, ok := b.Memory.Place("home")
 	if !ok {
-		reportStatus(b, user, event.ActionStatus{Action: "home", Success: false, Error: "belum ada home, pakai sethome dulu"})
+		ReportStatus(b, user, event.ActionStatus{Action: "home", Success: false, Error: "belum ada home, pakai sethome dulu"})
 		return
 	}
 	b.WalkTo(mgl32.Vec3{place.X, place.Y, place.Z})
@@ -218,5 +218,5 @@ func handleAnalyze(b *bot.Bot, _, user string) {
 	}
 	summary := fmt.Sprintf("HP %d/20, lapar %d/20, pos %s, pegang %s | Inventory: %s | Pemain dekat: %s | Mob dekat: %s | Drop: %d | Blok terlihat: %s",
 		hp, hunger, coords, held, inv, playerStr, mobStr, drops, perception.BlocksSummary(b, 12.0, 6))
-	reportStatus(b, user, event.ActionStatus{Action: "analyze", Item: summary, Success: true})
+	ReportStatus(b, user, event.ActionStatus{Action: "analyze", Item: summary, Success: true})
 }

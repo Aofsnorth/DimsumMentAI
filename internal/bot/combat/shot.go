@@ -44,7 +44,7 @@ const (
 // not sail over its head.
 const bowAimHeight float32 = 1.2
 
-// bowAimPoint is where to aim so the arrow arrives at the target rather than
+// BowAimPoint is where to aim so the arrow arrives at the target rather than
 // burying itself in the ground short of them.
 //
 // An arrow does not travel in a straight line. It is launched fast and pulled
@@ -53,18 +53,18 @@ const bowAimHeight float32 = 1.2
 // exactly where a bow is worth holding. Dropping the calculation into a pure
 // function keeps the arithmetic honest and testable: the aim point is the
 // target's centre lifted by half a gravity times the flight time squared.
-func bowAimPoint(from, target mgl32.Vec3) mgl32.Vec3 {
+func BowAimPoint(from, target mgl32.Vec3) mgl32.Vec3 {
 	return liftAimPoint(from, target, bowAimHeight)
 }
 
-// liftAimPoint is bowAimPoint for a target that is not a two-block mob.
+// liftAimPoint is BowAimPoint for a target that is not a two-block mob.
 //
 // The gravity correction is the same either way; only the height the arrow is
 // aimed at changes, so the arithmetic lives here once and the callers say how
 // tall their target is.
 func liftAimPoint(from, target mgl32.Vec3, centre float32) mgl32.Vec3 {
 	point := target.Add(mgl32.Vec3{0, centre, 0})
-	ticks := float64(horizontalDistance(from, target)) / arrowSpeed
+	ticks := float64(HorizontalDistance(from, target)) / arrowSpeed
 	drop := float32(0.5 * arrowGravity * ticks * ticks)
 	return point.Add(mgl32.Vec3{0, drop, 0})
 }
@@ -82,19 +82,19 @@ const (
 	ShotFire
 )
 
-// planShot decides the next ranged step from plain data: the chosen weapon,
+// PlanShot decides the next ranged step from plain data: the chosen weapon,
 // the ammunition, and the timing of the shot currently in flight.
-func planShot(kind WeaponKind, hasArrows bool, now time.Time, s shot) ShotAction {
+func PlanShot(kind WeaponKind, hasAmmo bool, now time.Time, s Shot) ShotAction {
 	if kind != WeaponBow && kind != WeaponCrossbow {
 		return ShotNone
 	}
-	if kind == WeaponBow && !hasArrows {
+	if kind == WeaponBow && !hasAmmo {
 		// A bow with nothing to shoot is a stick; holding it down would only
 		// lock the bot in place.
 		return ShotNone
 	}
-	if s.drawStart.IsZero() {
-		if !s.lastShot.IsZero() && now.Sub(s.lastShot) < bowShotInterval {
+	if s.DrawStart.IsZero() {
+		if !s.LastShot.IsZero() && now.Sub(s.LastShot) < bowShotInterval {
 			return ShotNone
 		}
 		return ShotDraw
@@ -103,44 +103,49 @@ func planShot(kind WeaponKind, hasArrows bool, now time.Time, s shot) ShotAction
 	if kind == WeaponCrossbow {
 		// A crossbow that already holds a bolt fires on the spot; the load
 		// phase was paid for earlier in this same shot.
-		if !s.loaded {
+		if !s.Loaded {
 			need = crossbowLoadTime
 		} else {
 			need = 0
 		}
 	}
-	if now.Sub(s.drawStart) >= need {
+	if now.Sub(s.DrawStart) >= need {
 		return ShotFire
 	}
 	return ShotNone
 }
 
-// shot is the state of the shot currently in flight. It lives on the manager
+// Shot is the state of the shot currently in flight. It lives on the manager
 // because it must survive across ticks: the draw is held for about a second
 // while the tick loop keeps running.
-type shot struct {
-	// kind and slot are the weapon the draw was started with, so the release
+type Shot struct {
+	// Kind and Slot are the weapon the draw was started with, so the release
 	// carries the same item the server saw drawn.
-	kind WeaponKind
-	slot uint32
-	// drawStart is zero while no draw is in flight.
-	drawStart time.Time
-	// loaded is whether the crossbow in flight already holds a bolt.
-	loaded bool
-	// lastShot gates the next draw, keeping shots at a human pace.
-	lastShot time.Time
+	Kind WeaponKind
+	Slot uint32
+	// DrawStart is zero while no draw is in flight.
+	DrawStart time.Time
+	// Loaded is whether the crossbow in flight already holds a bolt.
+	Loaded bool
+	// LastShot gates the next draw, keeping shots at a human pace.
+	LastShot time.Time
 }
 
 // recordDraw marks the beginning of a draw.
-func (s *shot) recordDraw(kind WeaponKind, slot uint32, now time.Time) {
-	s.kind = kind
-	s.slot = slot
-	s.drawStart = now
+func (s *Shot) recordDraw(kind WeaponKind, slot uint32, now time.Time) {
+	s.Kind = kind
+	s.Slot = slot
+	s.DrawStart = now
 }
 
 // recordRelease marks the moment the shot went off and resets the draw.
-func (s *shot) recordRelease(now time.Time) {
-	s.drawStart = time.Time{}
-	s.loaded = false
-	s.lastShot = now
+func (s *Shot) recordRelease(now time.Time) {
+	s.DrawStart = time.Time{}
+	s.Loaded = false
+	s.LastShot = now
 }
+
+// SetDrawStartForTest backdates the in-flight draw so a test can exercise the
+// release half of the draw/hold/release state machine without sleeping through
+// the real 1.1 s draw.
+func (s *Shot) SetDrawStartForTest(at time.Time) { s.DrawStart = at }

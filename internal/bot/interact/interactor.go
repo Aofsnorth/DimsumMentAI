@@ -73,10 +73,10 @@ const (
 	// ignored by the server.
 	blockReach = 4.0
 
-	// frontConeDegrees is how wide "in front of you" is. Wide enough that a
+	// FrontConeDegrees is how wide "in front of you" is. Wide enough that a
 	// player aiming roughly at a button need not be pixel-perfect, narrow
 	// enough that two buttons side by side stay distinguishable.
-	frontConeDegrees = 55.0
+	FrontConeDegrees = 55.0
 
 	// searchRadius is how far around the bot a named block is looked for.
 	searchRadius = 6
@@ -85,10 +85,10 @@ const (
 	// between aiming and interacting for entity clicks.
 	settleDelay = 120 * time.Millisecond
 
-	// eyeHeight is the camera offset above the feet. PlayerAuthInput carries
+	// EyeHeight is the camera offset above the feet. PlayerAuthInput carries
 	// the eye position, so the click transaction must too, or the two views of
 	// where the player is disagree.
-	eyeHeight = 1.62
+	EyeHeight = 1.62
 
 	// aimTimeout bounds how long a block click waits for the sent aim to turn
 	// toward the target before clicking anyway.
@@ -128,7 +128,7 @@ type Target struct {
 
 func (t Target) String() string {
 	if t.Kind == KindBlock {
-		return t.Name + " @ " + blockKey(t.Block)
+		return t.Name + " @ " + BlockKey(t.Block)
 	}
 	return t.Name + " (entity " + strconv.FormatUint(t.ID, 10) + ")"
 }
@@ -325,12 +325,12 @@ func (i *Interactor) interactBlock(ctx context.Context, target Target) (bool, st
 // keeps a stalled input loop from wedging the click forever, and on timeout
 // the click is sent anyway — hosts do not gate block clicks on the crosshair.
 func (i *Interactor) waitForAim(ctx context.Context, pos mgl32.Vec3) bool {
-	eye := i.bot.GetCoords().Add(mgl32.Vec3{0, eyeHeight, 0})
-	wantYaw, wantPitch := aimAngles(eye, pos)
+	eye := i.bot.GetCoords().Add(mgl32.Vec3{0, EyeHeight, 0})
+	wantYaw, wantPitch := AimAngles(eye, pos)
 	deadline := time.Now().Add(aimTimeout)
 	for {
 		yaw, pitch := i.bot.GetLastSentAim()
-		if angleDelta(yaw, wantYaw) <= aimYawTolerance && angleDelta(pitch, wantPitch) <= aimPitchTolerance {
+		if AngleDelta(yaw, wantYaw) <= aimYawTolerance && AngleDelta(pitch, wantPitch) <= aimPitchTolerance {
 			return true
 		}
 		if !sleepContext(ctx, aimPollInterval) {
@@ -342,10 +342,10 @@ func (i *Interactor) waitForAim(ctx context.Context, pos mgl32.Vec3) bool {
 	}
 }
 
-// aimAngles converts a direction into the yaw/pitch pair the bot sends in
+// AimAngles converts a direction into the yaw/pitch pair the bot sends in
 // PlayerAuthInput: yaw 0 faces +Z, 90 faces −X; pitch is negative looking up.
 // It is the inverse of ForwardVector and matches movement.LookAt.
-func aimAngles(from, to mgl32.Vec3) (yaw, pitch float32) {
+func AimAngles(from, to mgl32.Vec3) (yaw, pitch float32) {
 	d := to.Sub(from)
 	distH := math.Sqrt(float64(d.X()*d.X() + d.Z()*d.Z()))
 	if distH < 0.001 {
@@ -364,9 +364,9 @@ func aimAngles(from, to mgl32.Vec3) (yaw, pitch float32) {
 	return yaw, pitch
 }
 
-// angleDelta returns the absolute difference between two angles in degrees,
+// AngleDelta returns the absolute difference between two angles in degrees,
 // treating 359 and 1 as 2 degrees apart.
-func angleDelta(a, b float32) float32 {
+func AngleDelta(a, b float32) float32 {
 	d := float32(math.Abs(float64(a - b)))
 	for d >= 360 {
 		d -= 360
@@ -388,8 +388,8 @@ func (i *Interactor) clickTransaction(target Target) protocol.UseItemTransaction
 		BlockFace:       target.Face,
 		HotBarSlot:      hotbar,
 		HeldItem:        held,
-		Position:        i.bot.GetCoords().Add(mgl32.Vec3{0, eyeHeight, 0}),
-		ClickedPosition: faceClickedPosition(target.Face),
+		Position:        i.bot.GetCoords().Add(mgl32.Vec3{0, EyeHeight, 0}),
+		ClickedPosition: FaceClickedPosition(target.Face),
 	}
 	if rid, ok := i.bot.GetBlockNetworkID(target.Block.X(), target.Block.Y(), target.Block.Z()); ok {
 		tx.BlockRuntimeID = rid
@@ -420,10 +420,10 @@ func (i *Interactor) waitForStateChange(ctx context.Context, target Target, befo
 	}
 }
 
-// faceClickedPosition returns the click point on the face the bot is looking
+// FaceClickedPosition returns the click point on the face the bot is looking
 // at, relative to the block's corner — the convention the protocol expects.
 // Faces: 0 down, 1 up, 2 north (−Z), 3 south (+Z), 4 west (−X), 5 east (+X).
-func faceClickedPosition(face int32) mgl32.Vec3 {
+func FaceClickedPosition(face int32) mgl32.Vec3 {
 	switch face {
 	case 0:
 		return mgl32.Vec3{0.5, 0.0, 0.5}
@@ -480,7 +480,7 @@ func (i *Interactor) Resolve(request Request) (Target, error) {
 	blocksScanned := false
 	scanBlocks := func() []Target {
 		if !blocksScanned {
-			blocks = onlyVisible(i.bot, botPos, scanBlockTargets(i.bot, botPos, searchRadius, request))
+			blocks = OnlyVisible(i.bot, botPos, scanBlockTargets(i.bot, botPos, searchRadius, request))
 			blocksScanned = true
 		}
 		return blocks
@@ -574,7 +574,7 @@ func (i *Interactor) resolveInFront(botPos mgl32.Vec3, blocks []Target) (Target,
 		if !isInteractableEntity(ent) {
 			continue
 		}
-		if !withinCone(botPos, ent.Position, forward, frontConeDegrees) {
+		if !WithinCone(botPos, ent.Position, forward, FrontConeDegrees) {
 			continue
 		}
 		dist := horizontalDistance(botPos, ent.Position)
@@ -591,7 +591,7 @@ func (i *Interactor) resolveInFront(botPos mgl32.Vec3, blocks []Target) (Target,
 	// any other part of this request.
 	inFront := make([]Target, 0, len(blocks))
 	for _, b := range blocks {
-		if withinCone(botPos, blockAim(b), forward, frontConeDegrees) {
+		if WithinCone(botPos, blockAim(b), forward, FrontConeDegrees) {
 			inFront = append(inFront, b)
 		}
 	}
@@ -657,7 +657,7 @@ func blockAim(t Target) mgl32.Vec3 {
 	return mgl32.Vec3{float32(t.Block.X()) + 0.5, float32(t.Block.Y()) + 0.5, float32(t.Block.Z()) + 0.5}
 }
 
-func blockKey(p protocol.BlockPos) string {
+func BlockKey(p protocol.BlockPos) string {
 	return strconv.Itoa(int(p.X())) + "," + strconv.Itoa(int(p.Y())) + "," + strconv.Itoa(int(p.Z()))
 }
 
@@ -701,9 +701,9 @@ func sleepContext(ctx context.Context, d time.Duration) bool {
 	}
 }
 
-// normalise lowercases, strips the namespace, so "minecraft:oak_sign",
+// Normalise lowercases, strips the namespace, so "minecraft:oak_sign",
 // "custom:oak_sign", "Oak Sign" and "oak sign" all compare equal.
-func normalise(name string) string {
+func Normalise(name string) string {
 	name = strings.ToLower(strings.TrimSpace(name))
 	if idx := strings.IndexByte(name, ':'); idx >= 0 {
 		name = name[idx+1:]
@@ -715,9 +715,9 @@ func normalise(name string) string {
 // request asked for. Custom blocks from behaviour packs have no alias list, so
 // a substring match on the player's own words is the only way to name them.
 func rawNameMatches(blockName string, request Request) bool {
-	raw := strings.TrimSpace(normalise(request.Raw))
+	raw := strings.TrimSpace(Normalise(request.Raw))
 	if raw == "" {
 		return false
 	}
-	return strings.Contains(normalise(blockName), raw)
+	return strings.Contains(Normalise(blockName), raw)
 }

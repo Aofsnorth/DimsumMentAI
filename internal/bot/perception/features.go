@@ -41,13 +41,13 @@ type Features struct {
 	Animals int
 }
 
-// waterBlocks are the block states that mean "there is water here".
+// WaterBlocks are the block states that mean "there is water here".
 //
 // The list is by name because the world model exposes names, not state IDs, and
 // Bedrock has accumulated a long tail of water-like blocks over the years. A
 // substring match on "water" covers the modded and coloured variants without
 // pretending to know a list that could never be complete.
-var waterBlocks = []string{"water", "flowing_water", "bubble_column"}
+var WaterBlocks = []string{"water", "flowing_water", "bubble_column"}
 
 // ripeCropBlocks are the fully grown forms. Seedlings and crops at growth stage
 // zero are deliberately absent.
@@ -57,16 +57,16 @@ var ripeCropBlocks = []string{
 	"cocoa_pods",
 }
 
-// logBlocks are tree trunks.
-var logBlocks = []string{
+// LogBlocks are tree trunks.
+var LogBlocks = []string{
 	"oak_log", "birch_log", "spruce_log", "jungle_log", "acacia_log",
 	"dark_oak_log", "mangrove_log", "cherry_log", "crimson_stem", "warped_stem",
 }
 
-// farmableAnimals are the passive mobs a player keeps. Hostile mobs are
+// FarmableAnimals are the passive mobs a player keeps. Hostile mobs are
 // excluded on purpose: "tend the animals" offered next to a creeper is a task
 // the bot should not be choosing.
-var farmableAnimals = []string{
+var FarmableAnimals = []string{
 	"cow", "pig", "sheep", "chicken", "rabbit", "horse", "donkey", "mule",
 	"llama", "goat", "bee", "turtle", "cat", "wolf", "axolotl", "frog",
 }
@@ -93,7 +93,7 @@ func VisibleFeatures(b *bot.Bot, maxDistance float32) Features {
 				if !ok {
 					continue
 				}
-				clean := cleanName(name)
+				clean := CleanName(name)
 				if clean == "" || clean == "air" {
 					continue
 				}
@@ -105,16 +105,16 @@ func VisibleFeatures(b *bot.Bot, maxDistance float32) Features {
 				if center.Sub(eye).Len() > maxDistance {
 					continue
 				}
-				if !InFieldOfView(b, center) || !hasLineOfSight(b, eye, center, pos) {
+				if !InFieldOfView(b, center) || !HasLineOfSight(b, eye, center, pos) {
 					continue
 				}
 
 				switch {
-				case matchesAny(clean, waterBlocks):
+				case MatchesAny(clean, WaterBlocks):
 					f.Water = true
-				case isRipeCrop(clean):
+				case IsRipeCrop(clean):
 					f.RipeCrops++
-				case matchesAny(clean, logBlocks):
+				case MatchesAny(clean, LogBlocks):
 					f.Logs++
 				}
 			}
@@ -137,7 +137,7 @@ func countFarmableAnimals(b *bot.Bot, origin mgl32.Vec3, maxDistance float32) in
 			continue
 		}
 		name := entity.NormalizeName(info.Type)
-		if !matchesAny(name, farmableAnimals) {
+		if !MatchesAny(name, FarmableAnimals) {
 			continue
 		}
 		if info.Position.Sub(eye).Len() > maxDistance {
@@ -151,9 +151,9 @@ func countFarmableAnimals(b *bot.Bot, origin mgl32.Vec3, maxDistance float32) in
 	return count
 }
 
-// isRipeCrop distinguishes a harvestable crop from a seedling.
-func isRipeCrop(clean string) bool {
-	if !matchesAny(clean, ripeCropBlocks) {
+// IsRipeCrop distinguishes a harvestable crop from a seedling.
+func IsRipeCrop(clean string) bool {
+	if !MatchesAny(clean, ripeCropBlocks) {
 		return false
 	}
 	// Growth-stage and age suffixes are what mark an immature plant. A crop
@@ -168,7 +168,7 @@ func isRipeCrop(clean string) bool {
 	return true
 }
 
-// matchesAny reports whether a cleaned block name contains any of the given
+// MatchesAny reports whether a cleaned block name contains any of the given
 // tokens.
 //
 // Substring rather than equality, because Bedrock has far more water and crop
@@ -176,7 +176,7 @@ func isRipeCrop(clean string) bool {
 // them in ways no enumeration anticipated. Over-matching is bounded by the
 // tokens being specific enough that a false positive is an odd block name
 // rather than a wrong action.
-func matchesAny(clean string, tokens []string) bool {
+func MatchesAny(clean string, tokens []string) bool {
 	for _, token := range tokens {
 		if strings.Contains(clean, token) {
 			return true

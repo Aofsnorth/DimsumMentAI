@@ -50,11 +50,11 @@ const (
 	// endPortalFillItem is the only item that opens an End portal.
 	endPortalFillItem = "eye_of_ender"
 
-	// endPortalScanRadius bounds the box read around the first frame found. The
+	// EndPortalScanRadius bounds the box read around the first frame found. The
 	// ring is three wide and five tall, so from any one of its cells every
 	// other cell is within four; six is margin without turning one frame into
 	// a neighbourhood load.
-	endPortalScanRadius = int32(6)
+	EndPortalScanRadius = int32(6)
 	// endPortalScanBelow and endPortalScanAbove bound the vertical sweep of
 	// that box, because the seed handed over by the search can be the top
 	// frame as easily as the bottom one.
@@ -111,39 +111,39 @@ func init() {
 	// frames", "fill the end portal", or "activate the end portal", and every
 	// phrasing means the same twelve clicks.
 	fillFrames := func(b *bot.Bot, param, user string) { handleFillEndPortal(b, param, user) }
-	actionHandlers["fillframe"] = fillFrames
-	actionHandlers["fillendportal"] = fillFrames
-	actionHandlers["activateendportal"] = fillFrames
-	actionHandlers["fill_frame"] = fillFrames
+	ActionHandlers["fillframe"] = fillFrames
+	ActionHandlers["fillendportal"] = fillFrames
+	ActionHandlers["activateendportal"] = fillFrames
+	ActionHandlers["fill_frame"] = fillFrames
 
-	actionHandlers["enterendportal"] = handleEnterEndPortal
-	actionHandlers["enter_endportal"] = handleEnterEndPortal
+	ActionHandlers["enterendportal"] = handleEnterEndPortal
+	ActionHandlers["enter_endportal"] = handleEnterEndPortal
 }
 
-// endPortalPlan is what a classification of the found structure means for these
+// EndPortalPlan is what a classification of the found structure means for these
 // actions. Pure, so the routing can be tested without a bot: the two jobs are
 // genuinely different, and running the wrong one wastes the player's eyes of
 // ender or walks the bot into a sealed ring.
-type endPortalPlan int
+type EndPortalPlan int
 
 const (
-	// planEndNotPortal means there is no end portal here at all.
-	planEndNotPortal endPortalPlan = iota
-	// planEndFill means frames are present and need eyes of ender.
-	planEndFill
-	// planEndEnter means the portal is already active and only needs walking into.
-	planEndEnter
+	// PlanEndNotPortal means there is no end portal here at all.
+	PlanEndNotPortal EndPortalPlan = iota
+	// PlanEndFill means frames are present and need eyes of ender.
+	PlanEndFill
+	// PlanEndEnter means the portal is already active and only needs walking into.
+	PlanEndEnter
 )
 
-// routeEndPortalState maps a classification onto the plan.
-func routeEndPortalState(state dimension.PortalState) endPortalPlan {
+// RouteEndPortalState maps a classification onto the plan.
+func RouteEndPortalState(state dimension.PortalState) EndPortalPlan {
 	switch state {
 	case dimension.EndPortalFrame:
-		return planEndFill
+		return PlanEndFill
 	case dimension.EndPortalOpen:
-		return planEndEnter
+		return PlanEndEnter
 	default:
-		return planEndNotPortal
+		return PlanEndNotPortal
 	}
 }
 
@@ -154,11 +154,11 @@ func routeEndPortalState(state dimension.PortalState) endPortalPlan {
 // lookup, and because the scan builds it in whatever order the cache hands back.
 type endPortalCells map[[3]int32]string
 
-// posLess orders block positions bottom-first. Bottom-first is not cosmetic: the
+// PosLess orders block positions bottom-first. Bottom-first is not cosmetic: the
 // ring is five blocks tall and the bot can only reach its lower half from the
 // floor, so when eyes of ender run out the frames that went unfilled should be
 // the ones that were never clickable anyway.
-func posLess(a, b protocol.BlockPos) bool {
+func PosLess(a, b protocol.BlockPos) bool {
 	if a.Y() != b.Y() {
 		return a.Y() < b.Y()
 	}
@@ -193,13 +193,13 @@ func isFilledFrameName(name string) bool {
 	return NormaliseBlockName(name) == "end_portal"
 }
 
-// scanEndPortal collects the end portal cells in a box around seed.
+// ScanEndPortal collects the end portal cells in a box around seed.
 //
 // The lookup is the ordinary world-cache reader, so unloaded cells resolve to
 // not-ok and contribute nothing — which is what keeps half a ring from being
 // mistaken for a whole one. Nothing here assumes a shape: the orientation, and
 // even the size, are read back out of what the world actually has.
-func scanEndPortal(lookup blockLookup, seed protocol.BlockPos, radius, dyMin, dyMax int32) endPortalCells {
+func ScanEndPortal(lookup BlockLookup, seed protocol.BlockPos, radius, dyMin, dyMax int32) endPortalCells {
 	cells := make(endPortalCells)
 	for dx := -radius; dx <= radius; dx++ {
 		for dy := dyMin; dy <= dyMax; dy++ {
@@ -216,7 +216,7 @@ func scanEndPortal(lookup blockLookup, seed protocol.BlockPos, radius, dyMin, dy
 	return cells
 }
 
-// largestFrameCluster returns the biggest group of cells that belong to the same
+// LargestFrameCluster returns the biggest group of cells that belong to the same
 // portal, found by chaining through endPortalClusterGap.
 //
 // Chaining rather than a fixed rule is what makes a ruined portal work: a ring
@@ -224,12 +224,12 @@ func scanEndPortal(lookup blockLookup, seed protocol.BlockPos, radius, dyMin, dy
 // across the hole. The input is sorted first so the grouping does not depend on
 // map iteration order — an unseeded scan would otherwise pick a different
 // "biggest" group from one tick to the next.
-func largestFrameCluster(cells []protocol.BlockPos) []protocol.BlockPos {
+func LargestFrameCluster(cells []protocol.BlockPos) []protocol.BlockPos {
 	if len(cells) == 0 {
 		return nil
 	}
 	ordered := append([]protocol.BlockPos(nil), cells...)
-	sort.Slice(ordered, func(i, j int) bool { return posLess(ordered[i], ordered[j]) })
+	sort.Slice(ordered, func(i, j int) bool { return PosLess(ordered[i], ordered[j]) })
 
 	var groups [][]protocol.BlockPos
 	for _, pos := range ordered {
@@ -262,20 +262,20 @@ func largestFrameCluster(cells []protocol.BlockPos) []protocol.BlockPos {
 // the two to be part of the same portal.
 func clusterReaches(group []protocol.BlockPos, pos protocol.BlockPos) bool {
 	for _, member := range group {
-		if abs32(int(member.X()-pos.X())) <= endPortalClusterGap &&
-			abs32(int(member.Y()-pos.Y())) <= endPortalClusterGap &&
-			abs32(int(member.Z()-pos.Z())) <= endPortalClusterGap {
+		if Abs32(int(member.X()-pos.X())) <= endPortalClusterGap &&
+			Abs32(int(member.Y()-pos.Y())) <= endPortalClusterGap &&
+			Abs32(int(member.Z()-pos.Z())) <= endPortalClusterGap {
 			return true
 		}
 	}
 	return false
 }
 
-// portalParts splits the scan into the three views the rest of the file needs:
+// PortalParts splits the scan into the three views the rest of the file needs:
 // the whole rectangle (where to stand and what to classify), the frames still
 // empty (what an eye of ender can go into), and the cells already filled (what
 // somebody else, or a previous run, did). All three are position-sorted.
-func portalParts(cells endPortalCells) (rect, frames, open []protocol.BlockPos) {
+func PortalParts(cells endPortalCells) (rect, frames, open []protocol.BlockPos) {
 	all := make([]protocol.BlockPos, 0, len(cells))
 	for key, name := range cells {
 		if !isEndPortalBlockName(name) {
@@ -284,7 +284,7 @@ func portalParts(cells endPortalCells) (rect, frames, open []protocol.BlockPos) 
 		all = append(all, protocol.BlockPos{key[0], key[1], key[2]})
 	}
 
-	cluster := largestFrameCluster(all)
+	cluster := LargestFrameCluster(all)
 	rect = make([]protocol.BlockPos, 0, len(cluster))
 	frames = make([]protocol.BlockPos, 0, len(cluster))
 	open = make([]protocol.BlockPos, 0, len(cluster))
@@ -300,10 +300,10 @@ func portalParts(cells endPortalCells) (rect, frames, open []protocol.BlockPos) 
 	return rect, frames, open
 }
 
-// cellNames renders the classified rectangle back into block names, so the
+// CellNames renders the classified rectangle back into block names, so the
 // decision about what was found goes through dimension.Classify like every
 // other portal in this bot instead of through a private reimplementation of it.
-func cellNames(cells endPortalCells, rect []protocol.BlockPos) []string {
+func CellNames(cells endPortalCells, rect []protocol.BlockPos) []string {
 	names := make([]string, 0, len(rect))
 	for _, pos := range rect {
 		if name, ok := cells[[3]int32{pos.X(), pos.Y(), pos.Z()}]; ok {
@@ -313,7 +313,7 @@ func cellNames(cells endPortalCells, rect []protocol.BlockPos) []string {
 	return names
 }
 
-// endPortalInteriorCell picks the cell to stand in to go through the portal: the
+// EndPortalInteriorCell picks the cell to stand in to go through the portal: the
 // most enclosed cell of the structure, preferring a filled one, and among equals
 // the one nearest the bot.
 //
@@ -331,7 +331,7 @@ func cellNames(cells endPortalCells, rect []protocol.BlockPos) []string {
 // at the part that is actually open. A ring with nothing filled has no interior
 // to speak of and the ranking lands on a frame cell instead — which is harmless,
 // because the enter path refuses to run at all until the portal is active.
-func endPortalInteriorCell(rect, open []protocol.BlockPos, from mgl32.Vec3) (protocol.BlockPos, bool) {
+func EndPortalInteriorCell(rect, open []protocol.BlockPos, from mgl32.Vec3) (protocol.BlockPos, bool) {
 	if len(rect) == 0 {
 		return protocol.BlockPos{}, false
 	}
@@ -389,12 +389,12 @@ func ringNeighbours(occupied map[[3]int32]struct{}, x, y, z int32) int {
 	return touches
 }
 
-// emptyFrameCells lists the frames that still need an eye of ender, bottom
+// EmptyFrameCells lists the frames that still need an eye of ender, bottom
 // first. A frame that already reads as an end_portal block is somebody's work
 // already done — most often the bot's own, on a run that was interrupted — and
 // counting it as empty would both spend an item on a cell that cannot take one
 // and inflate the number reported at the end.
-func emptyFrameCells(frames, open []protocol.BlockPos) []protocol.BlockPos {
+func EmptyFrameCells(frames, open []protocol.BlockPos) []protocol.BlockPos {
 	filled := make(map[[3]int32]struct{}, len(open))
 	for _, pos := range open {
 		filled[[3]int32{pos.X(), pos.Y(), pos.Z()}] = struct{}{}
@@ -413,16 +413,16 @@ func emptyFrameCells(frames, open []protocol.BlockPos) []protocol.BlockPos {
 		seen[key] = struct{}{}
 		empty = append(empty, pos)
 	}
-	sort.Slice(empty, func(i, j int) bool { return posLess(empty[i], empty[j]) })
+	sort.Slice(empty, func(i, j int) bool { return PosLess(empty[i], empty[j]) })
 	return empty
 }
 
-// framesNeedingEyes caps the fill list at the number of eyes actually held.
+// FramesNeedingEyes caps the fill list at the number of eyes actually held.
 // Every queued cell is a UseItem that consumes one, so a twelfth empty-handed
 // click is not a harmless retry — it is a frame the bot will report as filled
 // and the server will never have touched.
-func framesNeedingEyes(frames, open []protocol.BlockPos, eyes int) []protocol.BlockPos {
-	empty := emptyFrameCells(frames, open)
+func FramesNeedingEyes(frames, open []protocol.BlockPos, eyes int) []protocol.BlockPos {
+	empty := EmptyFrameCells(frames, open)
 	if eyes <= 0 || len(empty) == 0 {
 		return nil
 	}
@@ -432,11 +432,11 @@ func framesNeedingEyes(frames, open []protocol.BlockPos, eyes int) []protocol.Bl
 	return empty[:eyes]
 }
 
-// isEyeOfEnder reports whether an inventory item name is the frame filler.
+// IsEyeOfEnder reports whether an inventory item name is the frame filler.
 // Substring match on the lowercased name, mirroring how the drop and drop-in
 // logic name items: servers report "minecraft:eye_of_ender" and behaviour packs
 // invent their own prefixes.
-func isEyeOfEnder(itemName string) bool {
+func IsEyeOfEnder(itemName string) bool {
 	return strings.Contains(strings.ToLower(itemName), endPortalFillItem)
 }
 
@@ -450,7 +450,7 @@ func findEyeOfEnderSlot(b *bot.Bot) (uint32, bool) {
 	held := b.GetHeldItemSlot()
 
 	if stack, ok := slots[held]; ok && stack.Count > 0 {
-		if name, ok := names[stack.NetworkID]; ok && isEyeOfEnder(name) {
+		if name, ok := names[stack.NetworkID]; ok && IsEyeOfEnder(name) {
 			return held, true
 		}
 	}
@@ -459,7 +459,7 @@ func findEyeOfEnderSlot(b *bot.Bot) (uint32, bool) {
 		if !ok || stack.Count == 0 {
 			continue
 		}
-		if name, ok := names[stack.NetworkID]; ok && isEyeOfEnder(name) {
+		if name, ok := names[stack.NetworkID]; ok && IsEyeOfEnder(name) {
 			return slot, true
 		}
 	}
@@ -475,13 +475,13 @@ func visibleDimension(b *bot.Bot) dimension.Dimension {
 	return dimension.Detect(names)
 }
 
-// dimensionChanged decides whether a read of the terrain counts as having
+// DimensionChanged decides whether a read of the terrain counts as having
 // arrived. Unknown is never an arrival: it is what an empty view returns, and
 // the whole world unloads during the transition, so the first readings after
 // walking in say nothing at all. Requiring a real, different answer is what
 // keeps "I travelled to the End" from being printed by a bot still standing in
 // a stronghold.
-func dimensionChanged(before, after dimension.Dimension) bool {
+func DimensionChanged(before, after dimension.Dimension) bool {
 	return after != dimension.Unknown && after != before
 }
 
@@ -508,19 +508,19 @@ type endPortalSite struct {
 // here" call for completely different next moves.
 func locateEndPortal(b *bot.Bot) (endPortalSite, bool) {
 	radii := searchRadii(b)
-	seed, found := findNearestBlock(b.GetCoords(), radii.Portal, botBlockLookup(b), isEndPortalBlockName)
+	seed, found := findNearestBlock(b.GetCoords(), radii.Portal, BotBlockLookup(b), isEndPortalBlockName)
 	if !found {
 		return endPortalSite{}, false
 	}
 
-	cells := scanEndPortal(botBlockLookup(b), seed, endPortalScanRadius, endPortalScanBelow, endPortalScanAbove)
-	rect, frames, filled := portalParts(cells)
+	cells := ScanEndPortal(BotBlockLookup(b), seed, EndPortalScanRadius, endPortalScanBelow, endPortalScanAbove)
+	rect, frames, filled := PortalParts(cells)
 	return endPortalSite{
 		seed:   seed,
 		rect:   rect,
 		frames: frames,
 		filled: filled,
-		state:  dimension.Classify(cellNames(cells, rect)),
+		state:  dimension.Classify(CellNames(cells, rect)),
 	}, true
 }
 
@@ -539,7 +539,7 @@ func endPortalVisibleHere(b *bot.Bot) bool {
 
 // endPortalFailure reports an end portal action that could not run.
 func endPortalFailure(b *bot.Bot, user, actionName string, err error) {
-	reportStatus(b, user, event.ActionStatus{
+	ReportStatus(b, user, event.ActionStatus{
 		Action:  actionName,
 		Item:    "end_portal",
 		Success: false,
@@ -572,17 +572,17 @@ func handleFillEndPortal(b *bot.Bot, _, user string) {
 		"at", fmt.Sprintf("%d,%d,%d", site.seed.X(), site.seed.Y(), site.seed.Z()),
 		"state", site.state.String(), "frames", len(site.frames), "filled", len(site.filled))
 
-	switch routeEndPortalState(site.state) {
-	case planEndEnter:
+	switch RouteEndPortalState(site.state) {
+	case PlanEndEnter:
 		// Nothing to do, and saying so plainly is worth more than spending
 		// twelve eyes of ender on a portal that is already open.
-		reportStatus(b, user, event.ActionStatus{
+		ReportStatus(b, user, event.ActionStatus{
 			Action:  "fillframe",
 			Item:    "end_portal",
 			Count:   len(site.filled),
 			Success: true,
 		})
-	case planEndFill:
+	case PlanEndFill:
 		go runFillEndPortal(b, user, site)
 	default:
 		endPortalFailure(b, user, "fillframe", fmt.Errorf("yang ketemu bukan end portal (%s)", site.state))
@@ -592,9 +592,9 @@ func handleFillEndPortal(b *bot.Bot, _, user string) {
 // runFillEndPortal does the work: check the supply, equip it, then use one eye
 // on one frame at a time, counting only the frames the world confirms.
 func runFillEndPortal(b *bot.Bot, user string, site endPortalSite) {
-	needed := emptyFrameCells(site.frames, site.filled)
+	needed := EmptyFrameCells(site.frames, site.filled)
 	if len(needed) == 0 {
-		reportStatus(b, user, event.ActionStatus{
+		ReportStatus(b, user, event.ActionStatus{
 			Action:  "fillframe",
 			Item:    "end_portal",
 			Success: true,
@@ -602,7 +602,7 @@ func runFillEndPortal(b *bot.Bot, user string, site endPortalSite) {
 		return
 	}
 
-	eyes := countInventoryItems(b.GetInventorySlots(), b.GetItemNames(), endPortalFillItem)
+	eyes := CountInventoryItems(b.GetInventorySlots(), b.GetItemNames(), endPortalFillItem)
 	if eyes == 0 {
 		endPortalFailure(b, user, "fillframe", fmt.Errorf("nggak punya %s — butuh %d buat buka portal ini", endPortalFillItem, len(needed)))
 		return
@@ -611,7 +611,7 @@ func runFillEndPortal(b *bot.Bot, user string, site endPortalSite) {
 	// A shortfall is not a reason to stop. Filling the frames it can reach and
 	// then saying exactly how many are left is more useful than refusing to
 	// start, and the report below is what keeps it from being a false success.
-	targets := framesNeedingEyes(site.frames, site.filled, eyes)
+	targets := FramesNeedingEyes(site.frames, site.filled, eyes)
 	if len(targets) < len(needed) {
 		b.Logger.Info("end portal: eye of ender nggak cukup, ngeisi seperlunya",
 			"have", eyes, "need", len(needed))
@@ -629,7 +629,7 @@ func runFillEndPortal(b *bot.Bot, user string, site endPortalSite) {
 
 	filled := fillEndPortalFrames(b, targets)
 	if filled == len(needed) {
-		reportStatus(b, user, event.ActionStatus{
+		ReportStatus(b, user, event.ActionStatus{
 			Action:  "fillframe",
 			Item:    "end_portal",
 			Count:   filled,
@@ -708,9 +708,9 @@ func handleEnterEndPortal(b *bot.Bot, _, user string) {
 		return
 	}
 
-	switch routeEndPortalState(site.state) {
-	case planEndEnter:
-		cell, ok := endPortalInteriorCell(site.rect, site.filled, b.GetCoords())
+	switch RouteEndPortalState(site.state) {
+	case PlanEndEnter:
+		cell, ok := EndPortalInteriorCell(site.rect, site.filled, b.GetCoords())
 		if !ok {
 			endPortalFailure(b, user, "enterendportal", fmt.Errorf(
 				"end portal di %d,%d,%d nggak punya ruang di dalem buat dilalui",
@@ -720,10 +720,10 @@ func handleEnterEndPortal(b *bot.Bot, _, user string) {
 		b.Logger.Info("entering end portal",
 			"cell", fmt.Sprintf("%d,%d,%d", cell.X(), cell.Y(), cell.Z()))
 		go runEnterEndPortal(b, user, cell)
-	case planEndFill:
+	case PlanEndFill:
 		endPortalFailure(b, user, "enterendportal", fmt.Errorf(
 			"end portal di %d,%d,%d belum aktif — %d frame masih kosong, isi dulu pakai fillframe",
-			site.seed.X(), site.seed.Y(), site.seed.Z(), len(emptyFrameCells(site.frames, site.filled))))
+			site.seed.X(), site.seed.Y(), site.seed.Z(), len(EmptyFrameCells(site.frames, site.filled))))
 	default:
 		endPortalFailure(b, user, "enterendportal", fmt.Errorf("yang ketemu bukan end portal (%s)", site.state))
 	}
@@ -741,7 +741,7 @@ func runEnterEndPortal(b *bot.Bot, user string, cell protocol.BlockPos) {
 		return
 	}
 	if waitForDimensionChange(b, before) {
-		reportStatus(b, user, event.ActionStatus{
+		ReportStatus(b, user, event.ActionStatus{
 			Action:  "enterendportal",
 			Item:    visibleDimension(b).String(),
 			Success: true,
@@ -760,7 +760,7 @@ func waitForDimensionChange(b *bot.Bot, before dimension.Dimension) bool {
 	time.Sleep(endPortalTravelSettle)
 	deadline := time.Now().Add(endPortalTravelTimeout)
 	for {
-		if dimensionChanged(before, visibleDimension(b)) {
+		if DimensionChanged(before, visibleDimension(b)) {
 			return true
 		}
 		if time.Now().After(deadline) {

@@ -17,7 +17,7 @@ import (
 // and dial again. This file owns that hand-off: an action asks for a switch, the
 // run loop picks it up between sessions, and nothing else has to know.
 
-const maxServerSwitches = 10
+const MaxServerSwitches = 10
 
 // joinMu guards the switch request and the session cancel below. It is
 // deliberately not b.Mu: cancelling a session closes the connection, which makes
@@ -107,8 +107,8 @@ func NormalizeServerAddress(address string) (string, error) {
 	return net.JoinHostPort(host, strconv.Itoa(port)), nil
 }
 
-// takeJoinRequest returns a pending switch request, if any.
-func (b *Bot) takeJoinRequest() (string, bool) {
+// TakeJoinRequest returns a pending switch request, if any.
+func (b *Bot) TakeJoinRequest() (string, bool) {
 	b.join.mu.Lock()
 	defer b.join.mu.Unlock()
 	if b.join.pending == "" {
@@ -126,10 +126,10 @@ func (b *Bot) CurrentServer() string {
 	return b.join.applied
 }
 
-// setSessionCancel registers the current session's cancel so a join request can
+// SetSessionCancel registers the current session's cancel so a join request can
 // end it. Passing nil on session teardown prevents a late join request from
 // cancelling a session that has already finished.
-func (b *Bot) setSessionCancel(cancel context.CancelFunc) {
+func (b *Bot) SetSessionCancel(cancel context.CancelFunc) {
 	b.join.mu.Lock()
 	defer b.join.mu.Unlock()
 	b.join.sessionCancel = cancel

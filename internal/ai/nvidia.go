@@ -198,6 +198,13 @@ func (nc *NvidiaClient) BuildSystemPrompt(botName, botCoords, playerCoords, held
 	// Anti-hallucination warning
 	prompt += "\n\n[ANTI-HALLUCINATION] Reference ONLY coordinates/inventory data above. NEVER assume items. If unsure, say 'I don't know'."
 
+	// Honesty rules last, so they are the most recent instruction the model
+	// reads before it answers. Placed after the grounding blocks above on
+	// purpose: it qualifies them rather than competing with them, and a model
+	// that has just been shown live inventory is exactly the model about to be
+	// asked "did you get it?".
+	prompt += HonestyRules
+
 	return prompt
 }
 

@@ -13,7 +13,9 @@ import (
 	"bedrock-ai/internal/ai"
 	"bedrock-ai/internal/bot"
 	"bedrock-ai/internal/bot/action"
+	"bedrock-ai/internal/bot/affordance"
 	"bedrock-ai/internal/bot/entity"
+	"bedrock-ai/internal/bot/movement"
 	"bedrock-ai/internal/bot/pathfinder"
 	"bedrock-ai/internal/bot/perception"
 	"bedrock-ai/internal/bot/rand"
@@ -89,7 +91,17 @@ type Runner struct {
 	// sinceSubmerged is when the bot's head last went under. Zero means it is
 	// breathing. The breath reflex reads the gap between this and now, which is
 	// the only air warning this bot actually has: there is no air bar to read.
+	//
+	// It is a fallback. When swimBreath is wired the reflex reads the movement
+	// package's clock instead, because two clocks sampling the same body on the
+	// same tick can be an air bar apart and the two halves of the same decision
+	// then disagree. With nothing wired this is the only record there is, and
+	// the reflex still works.
 	sinceSubmerged time.Time
+	// swimBreath is the optional seam onto the movement package's swim
+	// controller. It is an interface rather than a concrete type so this package
+	// keeps no dependency on the movement package.
+	swimBreath BreathSource
 	// episode is the recording brief: an objective with a hard wall-clock
 	// deadline. Empty is the normal state for hours at a time and is not a gap.
 	episode Episode
@@ -108,8 +120,18 @@ type Runner struct {
 	// clock alone is not enough: a server that applies a freeze still answers
 	// ticks, so a motionless bot and a healthy idle look identical on time.
 	lastPosition string
-	// lastMoved is when the bot last actually changed position.
+	// lastMoved is when the bot last actually changed position, and lastVec is
+	// where it was. The comparison is against the vector rather than the
+	// rendered coordinate string because that string is whole blocks, and a bot
+	// moving inside one block is still moving.
 	lastMoved time.Time
+	lastVec   mgl32.Vec3
+
+	// pendingAffordance is the verb the model chose this tick, waiting to be
+	// consumed by doActivity. It lives on the runner because the answer arrives
+	// in consult and is spent in doActivity, and threading a parameter between
+	// them would be one more thing to forget.
+	pendingAffordance string
 	// faultRepeats counts consecutive ticks of the same fault, so the watchdog
 	// can insist on seeing something twice before acting on the ambiguous one.
 	faultRepeats int
@@ -458,8 +480,8 @@ func (r *Runner) Tick(ctx context.Context) {
 	// Natural mode plays for its own sake. It is checked last of the three
 	// because it is the broadest: it is the one that has to cope with having no
 	// objective at all.
-	if r.modeIsNatural() {
-		r.naturalTick(ctx, snap, judgement)
+	if r.ModeIsNatural() {
+		r.NaturalTick(ctx, snap, judgement)
 		return
 	}
 
@@ -478,9 +500,14 @@ func (r *Runner) Tick(ctx context.Context) {
 		// tick it "decides" to wander.
 		activity := judgement.Activity
 		if r.recentActivity(activity) {
-			activity = r.alternativeActivity(activity)
+			activity = r.AlternativeActivity(activity)
 		}
-		r.goalProgress(activity)
+		r.GoalProgress(activity)
+		r.applyLocomotion(judgement.Locomotion)
+		r.applyDrop(judgement.DropOK)
+		r.b.SetAppetite(judgement.Appetite)
+		r.rememberAffordance(judgement.Affordance)
+		r.applyGaze(judgement.Gaze)
 		r.doActivity(activity)
 		return
 	}
@@ -506,9 +533,18 @@ func (r *Runner) Tick(ctx context.Context) {
 // Curriculum returns the activities worth offering for this snapshot.
 //
 // This is the unfiltered menu: everything plausible in the current world. The
-// active goal narrows it — see (*Runner).menu, which is what the brain actually
+// active goal narrows it — see (*Runner).Menu, which is what the brain actually
 // asks the model about. Keeping this pure and runner-free is what lets it be
 // tested against snapshots directly.
+// logsToStopOfferingGather is how many logs the bot may carry before "gather"
+// leaves the menu.
+//
+// It is a floor rather than a goal because the goal is not known here: the menu
+// is built before anything has said what number it wants. A player with thirty
+// logs is not looking for wood, and neither is a bot — offering it the choice
+// only produces an action that reports success without changing anything.
+const logsToStopOfferingGather = 16
+
 func Curriculum(s Snapshot) []string {
 	curriculum := make([]string, 0, 8)
 	// Rest leads the list and is always present. It is the answer that makes
@@ -537,7 +573,14 @@ func Curriculum(s Snapshot) []string {
 	// The test is for real block names, not for the string merely being
 	// non-empty. A rendered sentence is non-empty too, and a bot offered
 	// "gather wood" in a world it can see no wood in walks off and fails.
-	if len(blockNames(s.NearBlocks)) > 0 {
+	//
+	// Gathering is not offered when the bot is already carrying a pile of it.
+	// The offer was free before and it cost a loop: the gatherer correctly
+	// declined, the action reported itself satisfied, and the model chose it
+	// again on the next tick because the reason it was still on the menu was
+	// "there are logs in the world", not "the bot needs logs". Thirty-nine
+	// consecutive skipped gathers is what that looks like.
+	if len(blockNames(s.NearBlocks)) > 0 && s.LogsHeld < logsToStopOfferingGather {
 		curriculum = append(curriculum, jev.ActivityGather)
 		// Mining is only offered when there is a resource AND the bot is not
 		// already carrying too much. Offering "go mine" with a full inventory
@@ -590,10 +633,74 @@ func nearestVisible(s Snapshot) (string, bool) {
 	return "", false
 }
 
+// pendingVerb reads the affordance answer and clears it, reporting whether it
+// names a registry action the bot can actually perform.
+//
+// A verb that is not in the catalogue, or that is gated out for a world-changing
+// intent, is dropped rather than executed. The gate has already refused to offer
+// those, so an answer naming one means the model invented it or answered a
+// different question — and executing a label the world does not allow is exactly
+// the unverified action the affordance layer exists to prevent.
+func (r *Runner) pendingVerb() (string, bool) {
+	r.mu.Lock()
+	picked := r.pendingAffordance
+	r.pendingAffordance = ""
+	r.mu.Unlock()
+
+	if picked == "" {
+		return "", false
+	}
+	v, ok := affordance.Lookup(picked)
+	if !ok || !v.Offerable() {
+		return "", false
+	}
+	// An Activity is carried out by the brain, not dispatched as a label; the
+	// activity switch above is what handles those.
+	if v.Kind != affordance.Action {
+		return "", false
+	}
+	return v.Label, true
+}
+
+// execute dispatches a verb to the action registry.
+//
+// It is a variable so a test can observe the dispatch itself rather than
+// re-deriving what the call site would have passed. A test that calls
+// takeAffordanceParam and asserts on the result proves the helper works, which
+// is not the same as proving the handler is given the argument.
+var execute = action.Execute
+
+// takeAffordanceParam extracts the argument a picked verb carries, so the
+// handler receives what the model was shown.
+func takeAffordanceParam(label string) string {
+	_, param := affordance.SplitVerb(label)
+	return param
+}
+
 // doActivity carries out the activity Jev chose.
 func (r *Runner) doActivity(activity string) {
 	who := r.audience()
 	r.recordActivity(activity)
+
+	// The verb the model chose out of the affordance set runs first, when it is
+	// a real registry action.
+	//
+	// It goes first because it is the more specific answer. The activity menu
+	// says "gather"; the affordance set says which of the things it could do
+	// right now actually applies, and the model was asked that separately for a
+	// reason. Ignoring it and running the activity would make the second
+	// question decorative, and a decorative question is worse than no question:
+	// the model picks it every tick, nothing happens, and the bot stands still.
+	if verb, ok := r.pendingVerb(); ok {
+		r.b.Logger.Info("AGI: acting on an affordance",
+			slog.String("verb", verb),
+			slog.String("activity", activity))
+		execute(r.b, verb, takeAffordanceParam(verb), who)
+		// The activity still runs. The verb is the what; the activity is the
+		// why, and a bot that did both is not contradicting itself — it is
+		// doing the thing the model picked with the thing it picked it for.
+	}
+
 	switch activity {
 	case jev.ActivityRest:
 		// Resting is a real behaviour, not a log line: the bot settles where it
@@ -640,36 +747,36 @@ func (r *Runner) doActivity(activity string) {
 	}
 }
 
-// currentGoal returns the active goal, or the zero Goal when there is none.
-func (r *Runner) currentGoal() Goal {
+// CurrentGoal returns the active goal, or the zero Goal when there is none.
+func (r *Runner) CurrentGoal() Goal {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.goal
 }
 
-// menu is the activity list the model is asked about: the full curriculum,
+// Menu is the activity list the model is asked about: the full curriculum,
 // narrowed by the active goal.
 //
 // A goal that does not constrain the menu is a goal in name only — the bot
 // would keep making independent choices and merely describe them as progress.
-func (r *Runner) menu(s Snapshot) []string {
+func (r *Runner) Menu(s Snapshot) []string {
 	full := Curriculum(s)
-	goal := r.currentGoal()
+	goal := r.CurrentGoal()
 	if goal.Name == "" {
 		return full
 	}
 	return NarrowToGoal(full, goal)
 }
 
-// adoptGoal installs a goal and gives it a lifetime. An empty name clears it.
-func (r *Runner) adoptGoal(name string, now time.Time) {
+// AdoptGoal installs a goal and gives it a lifetime. An empty name clears it.
+func (r *Runner) AdoptGoal(name string, now time.Time) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if name == "" {
 		r.goal = Goal{}
 		return
 	}
-	entry, ok := goalCatalogue[name]
+	entry, ok := GoalCatalogue[name]
 	if !ok {
 		return
 	}
@@ -680,10 +787,10 @@ func (r *Runner) adoptGoal(name string, now time.Time) {
 		r.goal.Deadline = now.Add(goalLifetime)
 		return
 	}
-	r.goal = newGoal(entry, now, goalLifetime)
+	r.goal = NewGoal(entry, now, goalLifetime)
 }
 
-// considerGoal decides whether to adopt the model's goal choice, and reports
+// ConsiderGoal decides whether to adopt the model's goal choice, and reports
 // whether the goal actually changed.
 //
 // Switching is the part that needs guarding. A model that is unsure about a new
@@ -693,8 +800,8 @@ func (r *Runner) adoptGoal(name string, now time.Time) {
 // change their mind on evidence, not because a coin flipped. With no current
 // goal there is nothing to defend, so even a weak answer establishes one --
 // otherwise the bot could never start.
-func (r *Runner) considerGoal(choice string, confidence float64, now time.Time) bool {
-	current := r.currentGoal()
+func (r *Runner) ConsiderGoal(choice string, confidence float64, now time.Time) bool {
+	current := r.CurrentGoal()
 	// An operator-set goal outranks the model's opinion. The whole point of
 	// writing one down is that the bot keeps working on it while the model has
 	// better ideas, and a model given a free hand here will have better ideas
@@ -706,15 +813,15 @@ func (r *Runner) considerGoal(choice string, confidence float64, now time.Time) 
 	if switching && confidence < goalConfidenceFloor {
 		return false
 	}
-	r.adoptGoal(choice, now)
+	r.AdoptGoal(choice, now)
 	return true
 }
 
-// goalProgress records that an activity advanced the active goal.
-func (r *Runner) goalProgress(activity string) {
+// GoalProgress records that an activity advanced the active goal.
+func (r *Runner) GoalProgress(activity string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.goal.Name != "" && r.goal.advances(activity) {
+	if r.goal.Name != "" && r.goal.AdvancesActivity(activity) {
 		r.goal.Progress++
 	}
 }
@@ -791,7 +898,7 @@ func (r *Runner) recordActivity(activity string) {
 	}
 }
 
-// alternativeActivity picks a substitute when the model repeats itself. It
+// AlternativeActivity picks a substitute when the model repeats itself. It
 // steps down to rest rather than sideways into another action: a bot that
 // alternates between two activities on a fixed beat is as mechanical as one
 // that repeats a single action, and resting is the honest answer to "I have
@@ -800,8 +907,8 @@ func (r *Runner) recordActivity(activity string) {
 // The one exception is an activity that advances the active goal. Repeating
 // "mine" while working towards getting wood is not a loop, it is the whole
 // point; breaking out of it would make the goal impossible to finish.
-func (r *Runner) alternativeActivity(activity string) string {
-	if r.currentGoal().advances(activity) {
+func (r *Runner) AlternativeActivity(activity string) string {
+	if r.CurrentGoal().AdvancesActivity(activity) {
 		return activity
 	}
 	if activity == jev.ActivityRest {
@@ -840,6 +947,36 @@ type Judgement struct {
 	// runner rather than merely returned, because a goal that did not persist
 	// past the tick that chose it would be a suggestion, not a goal.
 	Goal string
+	// Locomotion is how Jev wants the body to travel while it does this tick's
+	// activity: walk, sprint, or sprint-jump. Auto when the model was not
+	// asked (busy/exploring ticks) or did not answer — never a zero value
+	// that means something else, so "no opinion" and "walk" stay distinct.
+	Locomotion LocomotionHint
+	// Appetite is how much risk the bot should take on purpose. It is asked on
+	// every tick and it is a disposition rather than a setting: it is the reason
+	// the same creeper at four blocks produces a different answer on different
+	// ticks, which is the whole difference between a bot and a lookup table.
+	Appetite affordance.Appetite
+	// Affordance is the verb the model picked out of the set the world allowed.
+	// It is consumed by doActivity, which is why the field exists at all: an
+	// offered choice that is never read is worse than not offering it, because
+	// the model will pick it every tick and nothing will happen.
+	Affordance string
+	// DropOK is Jev's answer to "leap this ledge, or stop at the edge". It is
+	// only asked when there is a drop, and it is deliberately separate from the
+	// gait: "sprint" is how fast to travel, "drop" is whether to leave the ground
+	// at all. Default false means "stop", which is the safe reading of a
+	// question that was not asked.
+	DropOK bool
+	// Gaze is what Jev wants the head to settle on while the bot is standing
+	// still: a player, a creature, a block, or nothing in particular. Auto when
+	// the model was not asked or did not answer.
+	//
+	// Separate from Locomotion because it answers the opposite question at the
+	// opposite moment: locomotion is about a body that is going somewhere, gaze
+	// is about a body that has stopped. A single "style" field would have had to
+	// mean both, and every value in it would have been wrong half the time.
+	Gaze GazeHint
 	// Known is true when a Jev answer actually arrived. A missing answer must
 	// never be read as a confident "no" — that would silently turn the brain
 	// off whenever the API hiccups.
@@ -853,18 +990,18 @@ func (r *Runner) consult(ctx context.Context, snap Snapshot) Judgement {
 	// An expired goal is cleared before the model is asked what to do, so the
 	// goal question sees the real state and the bot is not told it is midway
 	// through something it abandoned an hour ago.
-	if goal := r.currentGoal(); goal.Name != "" && goal.Expired(snap.Now) {
+	if goal := r.CurrentGoal(); goal.Name != "" && goal.Expired(snap.Now) {
 		r.b.Logger.Info("AGI: goal expired",
 			slog.String("goal", goal.Name),
 			slog.Int("progress", goal.Progress),
 		)
-		r.adoptGoal("", snap.Now)
+		r.AdoptGoal("", snap.Now)
 	}
 
 	if r.cfg.Jev == nil {
 		return Judgement{}
 	}
-	state := describeState(snap)
+	state := DescribeState(snap)
 
 	resp, err := r.cfg.Jev.Evaluate(ctx, state, r.questions(snap))
 	if err != nil {
@@ -894,11 +1031,29 @@ func (r *Runner) consult(ctx context.Context, snap Snapshot) Judgement {
 		j.Activity = choice
 		j.ActivityConfidence = confidence
 	}
+	if choice, _, ok := resp.Choice(jev.QLocomotion); ok {
+		j.Locomotion = parseLocomotion(choice)
+	}
+	if choice, _, ok := resp.Choice(jev.QDrop); ok {
+		// Absent means "stop". The body refuses a cliff on its own, so the only
+		// thing this can add is the deliberate leap; an unasked question must
+		// never be read as permission.
+		j.DropOK = strings.EqualFold(strings.TrimSpace(choice), jev.DropLeap)
+	}
+	if choice, _, ok := resp.Choice(jev.QRisk); ok {
+		j.Appetite = affordance.ParseAppetite(choice)
+	}
+	if choice, _, ok := resp.Choice(jev.QAffordance); ok {
+		j.Affordance = choice
+	}
+	if choice, _, ok := resp.Choice(jev.QGaze); ok {
+		j.Gaze = parseGaze(choice)
+	}
 	if p, ok := resp.Noul(EscalateQuestion); ok {
 		j.Escalate = p
 	}
 	if choice, confidence, ok := resp.Choice(jev.QGoal); ok {
-		if r.considerGoal(choice, confidence, snap.Now) {
+		if r.ConsiderGoal(choice, confidence, snap.Now) {
 			j.Goal = choice
 		}
 	}
@@ -912,6 +1067,8 @@ func (r *Runner) consult(ctx context.Context, snap Snapshot) Judgement {
 		slog.Bool("engaged", j.Engaged),
 		slog.String("activity", j.Activity),
 		slog.Float64("confidence", j.ActivityConfidence),
+		slog.String("locomotion", string(j.Locomotion)),
+		slog.String("gaze", string(j.Gaze)),
 		slog.Int("input_tokens", resp.Usage.InputTokens),
 	)
 	return j
@@ -929,6 +1086,26 @@ func (r *Runner) questions(s Snapshot) map[string]json.RawMessage {
 	// model, so its opinion has to be in the batch or the gate never opens.
 	questions[EscalateQuestion] = jev.MustNoul(EscalateInstructions)
 
+	// The disposition is asked on every tick, INCLUDING a busy one, and it is the
+	// one question that sits above the early return below.
+	//
+	// That return is right for everything after it: a bot that is already
+	// working does not need asking what to work on. It is wrong for the
+	// disposition, because a disposition is exactly what changes mid-task. A bot
+	// gathering wood when a creeper walks up is not a bot that should be asked
+	// what to do next; it is a bot whose idea of what is reasonable has just
+	// changed, and a dial it can only move while idle cannot express that.
+	//
+	// It rides in the same parallel batch, so the honest answer to "does this
+	// cost a round trip" is no.
+	for name, raw := range jev.BuildRiskQuestion() {
+		questions[name] = raw
+	}
+
+	// Everything below here is skipped while the body is committed. A busy bot is
+	// not asked what to do next, where to go, or what to look at: it is already
+	// doing one of those things and changing its mind mid-action is how work gets
+	// abandoned half-finished.
 	if s.Busy || s.Exploring {
 		return questions
 	}
@@ -942,7 +1119,7 @@ func (r *Runner) questions(s Snapshot) map[string]json.RawMessage {
 		for _, g := range goals {
 			descriptions[g.Name] = g.Description
 		}
-		current := r.currentGoal()
+		current := r.CurrentGoal()
 		currentName := ""
 		if current.Name != "" {
 			currentName = current.Name
@@ -954,16 +1131,92 @@ func (r *Runner) questions(s Snapshot) map[string]json.RawMessage {
 
 	// The activity menu is narrowed by the goal, so the model is choosing among
 	// things that actually move it forward rather than among everything.
-	for name, raw := range jev.BuildActivityQuestion(r.menu(s)) {
+	for name, raw := range jev.BuildActivityQuestion(r.Menu(s)) {
 		questions[name] = raw
 	}
+
+	// And underneath that, the verbs themselves, derived from where the body
+	// actually is.
+	//
+	// This is the question the whole affordance layer exists to improve. The
+	// activity menu is a programmer's list of intentions; this is the world's
+	// list of possibilities. It is offered separately rather than merged because
+	// the two answer different questions — "what should this tick be for" and
+	// "what could the body even do" — and collapsing them into one menu is how
+	// a model ends up choosing an intention whose verb does not work here.
+	if available := r.affordances(s); len(available) > 0 {
+		for name, raw := range jev.BuildAffordanceQuestion(available) {
+			questions[name] = raw
+		}
+	}
+
+	// Travel style is only worth asking about when the activity it seasons
+	// covers ground. Asking a resting bot how to move spends a decision on
+	// noise; asking a wandering one lets Jev pick the gait for the trip.
+	if s.Busy || s.Exploring {
+		return questions
+	}
+	menu := r.Menu(s)
+	for _, a := range menu {
+		if a == jev.ActivityWander || a == jev.ActivityExplore || a == jev.ActivityApproach || a == jev.ActivityChat {
+			for name, raw := range jev.BuildLocomotionQuestion() {
+				questions[name] = raw
+			}
+			break
+		}
+	}
+	// Attention, for the same reasoning as gait: asking a bot that is about to
+	// sprint across a field what it feels like looking at spends a decision on
+	// noise. It rides in the same parallel batch, so it costs no extra round trip
+	// and the answer is simply unused on the ticks the body is travelling.
+	if anyGazeApplies(r.Menu(s)) {
+		for name, raw := range jev.BuildGazeQuestion() {
+			questions[name] = raw
+		}
+	}
+
+	// The drop question rides in the same batch and costs no extra round trip.
+	// It is asked only when there is actually a cliff, because "there is no drop
+	// in front of you, so should the bot leap?" is a question whose only answer
+	// is "no" and it is asked every tick.
+	if s.LedgeAhead {
+		for name, raw := range jev.BuildDropQuestion() {
+			questions[name] = raw
+		}
+	}
+
 	return questions
 }
 
-// describeState renders the snapshot as the flat text Jev reasons over. It is
+// anyGazeApplies reports whether the menu holds an activity where the head is
+// free, and so where the answer could be used.
+// affordances renders what the body could actually do from where it is standing.
+//
+// The intent class is the one the snapshot implies rather than one the caller
+// passes: a bot with a goal in hand is doing something to the world, and a bot
+// idling is not. Offering an idle bot only world-changing verbs would make it
+// busy, and offering a busy bot only self-changing ones would make it inert.
+func (r *Runner) affordances(s Snapshot) map[string]string {
+	if r == nil || r.b == nil {
+		return nil
+	}
+	changesWorld := s.GoalSummary != "" && s.GoalSummary != "no goal"
+	return r.b.DeriveAffordances(changesWorld).Criteria()
+}
+
+func anyGazeApplies(menu []string) bool {
+	for _, a := range menu {
+		if gazeAppliesTo(a) {
+			return true
+		}
+	}
+	return false
+}
+
+// DescribeState renders the snapshot as the flat text Jev reasons over. It is
 // deliberately a short, factual description: Jev decides, so it needs the
 // situation, not a personality and not instructions about how to talk.
-func describeState(s Snapshot) string {
+func DescribeState(s Snapshot) string {
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "Health %d/20. Hunger %d/20. Position %s.\n", s.HP, s.Hunger, s.Coords)
 	fmt.Fprintf(&sb, "Time: %s. Free inventory slots: %d.\n", timeOfDay(s), s.FreeSlots)
@@ -995,6 +1248,9 @@ func describeState(s Snapshot) string {
 	fmt.Fprintf(&sb, "Nearby blocks: %s.\n", s.nearBlocksForPrompt())
 	fmt.Fprintf(&sb, "Visible signs: %s.\n", describeSigns(s))
 	fmt.Fprintf(&sb, "Players nearby: %s.\n", DescribePeople(s.Nearby))
+	if s.LedgeAhead {
+		sb.WriteString("There is a drop ahead. The bot will stop at the edge unless you ask it to leap.\n")
+	}
 	if s.Busy {
 		sb.WriteString("The bot is already doing something.\n")
 	}
@@ -1014,11 +1270,11 @@ func describeState(s Snapshot) string {
 // in means a bot standing on nothing is offered mining, which is the same
 // failure wearing a different hat.
 func blockNames(nearBlocks string) []string {
-	names, _ := readableBlockNames(nearBlocks)
+	names, _ := ReadableBlockNames(nearBlocks)
 	return names
 }
 
-// readableBlockNames returns the distinct block names in a summary, and whether
+// ReadableBlockNames returns the distinct block names in a summary, and whether
 // the summary was a list of names in the first place.
 //
 // The second return value is the important one. "The scan found no blocks" and
@@ -1026,14 +1282,14 @@ func blockNames(nearBlocks string) []string {
 // a caller that cannot tell them apart will read every unreadable summary as an
 // empty world — which for the single-block detector means a conclusion it has no
 // evidence for, confirmed on the next tick into a state the bot never leaves.
-func readableBlockNames(nearBlocks string) (names []string, readable bool) {
+func ReadableBlockNames(nearBlocks string) (names []string, readable bool) {
 	text := strings.TrimSpace(nearBlocks)
 	if text == "" {
 		// Nothing was scanned. That is a real absence, not a parsing failure.
 		return nil, true
 	}
 
-	terms := splitList(text)
+	terms := SplitList(text)
 	if len(terms) == 0 {
 		// There was content, and none of it was a bare name. The summary is in a
 		// shape this code does not understand.
@@ -1130,6 +1386,28 @@ func (r *Runner) thresholds() Thresholds {
 // without qualifying a name that would shadow the agi package qualifier.
 func agiIsNight(ticks, start, end int64) bool { return IsNightTime(ticks, start, end) }
 
+// wantsToMove reports whether the body has an outstanding reason to be in
+// motion: it is travelling somewhere or has a path left to walk.
+//
+// It is read off the body rather than off the decision the model happened to
+// make this tick. "rest" is only rest if the body is not also part-way along a
+// path it has not finished, and a decision to walk is not a reason to move once
+// the path is done — the path and the movement state are what the movement loop
+// is actually obeying.
+//
+// A known travelling state only. An unknown or empty state is not intent: when
+// in doubt the watchdog stays quiet, because ActUnstick clears the world model
+// and a watchdog that damages a healthy bot is one nobody leaves switched on.
+func wantsToMove(b *bot.Bot) bool {
+	if b == nil {
+		return false
+	}
+	b.Mu.Lock()
+	state, onPath := b.MovementState, len(b.CurrentPath) > 0
+	b.Mu.Unlock()
+	return onPath || state == "walk_to" || state == "follow"
+}
+
 // Observe builds an immutable reading of the world for one decision.
 func (r *Runner) Observe() Snapshot {
 	b := r.b
@@ -1147,7 +1425,6 @@ func (r *Runner) Observe() Snapshot {
 	// calls Observe, and wedges silently on the first tick with nothing in the
 	// log to say why. The whole autonomy layer looked "enabled but inert" and
 	// the only visible symptom was a bot standing still.
-	moving := b.MovementState != "idle"
 	pos := b.Pos
 	lookTarget := ""
 	if b.LookTargetName != "" && time.Now().Before(b.LookTargetUntil) {
@@ -1163,9 +1440,16 @@ func (r *Runner) Observe() Snapshot {
 	}
 	b.Mu.Unlock()
 
-	// The planner half of IsBusy needs no lock — it is the bot's own field and
-	// the planner guards its own state.
-	busy := moving || (b.Planner != nil && b.Planner.IsRunning())
+	// IsBusy is asked for here, outside b.Mu, rather than recomputed inline.
+	//
+	// It used to be recomputed inline, and that is precisely the copy this method
+	// exists to prevent: IsBusy carries the rule that a body with work in
+	// progress is spoken for, and an inline copy of the motion-only half of that
+	// rule reported a chopping bot — standing still, arm swinging — as free. The
+	// natural loop then correctly saw a free body and started an exploration.
+	// It has to be called after the unlock above, because IsBusy takes b.Mu
+	// itself and sync.Mutex is not reentrant.
+	busy := b.IsBusy()
 
 	// Grounded perception, the same line-of-sight view the chat prompt uses.
 	// Jev is deciding from this text, so anything it is told has to be true.
@@ -1198,21 +1482,28 @@ func (r *Runner) Observe() Snapshot {
 		Hunger:         hunger,
 		HeldItem:       b.GetHeldItem(),
 		Inventory:      b.GetInventorySummary(),
-		Conversation:   r.conversationContext(),
+		Conversation:   r.ConversationContext(),
 		VisibleMob:     visibleMobs,
 		NearBlocks:     nearBlocks,
 		NearBlocksText: nearBlocksText,
 		Busy:           busy,
 		Exploring:      b.Explorer != nil && b.Explorer.IsExploring(),
+		WantsToMove:    wantsToMove(b),
 		IsNight:        r.isNight(),
 		HasBed:         r.hasBed(),
 		FreeSlots:      r.freeInventorySlots(),
 		Nearby:         r.nearbyPeople(pos, lookTarget),
 		VisibleSigns:   r.visibleSignText(),
-		GoalSummary:    describeGoal(r.currentGoal()),
-		PlanSummary:    renderPlan(r.currentPlan()),
+		GoalSummary:    DescribeGoal(r.CurrentGoal()),
+		PlanSummary:    RenderPlan(r.CurrentPlan()),
 		Features:       perception.VisibleFeatures(b, r.cfg.BlockScanDistance),
 		Craftable:      r.craftableCount(),
+		LogsHeld:       b.CountInventoryItemsFor("oak_log") + b.CountInventoryItemsFor("birch_log") + b.CountInventoryItemsFor("spruce_log"),
+
+		// Read the cliff the same way the body will. Measuring it here from a
+		// second source would let the model decide against a cliff the bot
+		// never sees, which is the one disagreement this cannot afford.
+		LedgeAhead: movement.SenseLedge(b.WorldModel, pos, r.facingYaw()).IsCliff(),
 
 		Underwater:        underwater,
 		SecondsUnderwater: secondsUnder,
@@ -1230,16 +1521,27 @@ func (r *Runner) Observe() Snapshot {
 	// The episode description carries the time left, which is the part the
 	// model needs: a brief without a clock is a wish, and the model will happily
 	// propose a build that takes two hours inside a 24 minute recording.
-	if ep := r.currentEpisode(); ep.Objective != "" {
+	if ep := r.CurrentEpisode(); ep.Objective != "" {
 		snap.EpisodeText = ep.Describe(snap.Now)
 	}
 
 	return snap
 }
 
-// conversationContext uses the same per-player history as chat, without holding
+// facingYaw reads the direction the body is pointing, for the readings that have
+// to agree with the movement layer's.
+func (r *Runner) facingYaw() float32 {
+	if r == nil || r.b == nil {
+		return 0
+	}
+	r.b.Mu.Lock()
+	defer r.b.Mu.Unlock()
+	return r.b.Yaw
+}
+
+// ConversationContext uses the same per-player history as chat, without holding
 // the bot mutex while acquiring the history lock. Internal result prompts are omitted.
-func (r *Runner) conversationContext() string {
+func (r *Runner) ConversationContext() string {
 	b := r.b
 	if b.AiClient == nil || b.AiClient.History == nil {
 		return ""
@@ -1444,6 +1746,13 @@ type waterWorld interface {
 // waterWorldOf returns the bot's world model as something that can answer
 // questions about water, or nil when it cannot.
 func (r *Runner) waterWorldOf() waterWorld {
+	// A runner with no bot is a legitimate state — the decision methods are
+	// written to survive it, and NewBareForTest exists to exercise exactly that.
+	// Asking a nil bot for its world model is not a thing that can be answered,
+	// so the guard is here rather than at every call site.
+	if r.b == nil {
+		return nil
+	}
 	model := r.b.GetLocalWorldModel()
 	if model == nil {
 		return nil
@@ -1481,6 +1790,9 @@ func (r *Runner) headUnderwater() bool {
 // It resets on the surface rather than decaying, so surfacing for one tick and
 // ducking back down does not hand the bot a fresh air supply it never had.
 func (r *Runner) secondsUnderwater() int {
+	if _, seconds, known := r.breath(); known {
+		return seconds
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.sinceSubmerged.IsZero() {
@@ -1489,9 +1801,49 @@ func (r *Runner) secondsUnderwater() int {
 	return int(time.Since(r.sinceSubmerged) / time.Second)
 }
 
+// BreathSource is the read-only view of the movement package's swim controller.
+//
+// It is declared here rather than imported so the AGI layer keeps no dependency
+// on movement, and it is read-only on purpose: the reflex must not be able to
+// start, stop or age the clock, because a second writer is how the two clocks
+// came to disagree in the first place.
+type BreathSource interface {
+	Breath() (underwater bool, secondsUnder int, known bool)
+}
+
+// SetBreathSource points the breath reflex at the swim controller's clock.
+func (r *Runner) SetBreathSource(src BreathSource) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.swimBreath = src
+}
+
+// breath reports the submersion reading, preferring the swim controller's and
+// falling back to this runner's own clock when nothing is wired.
+func (r *Runner) breath() (underwater bool, seconds int, known bool) {
+	r.mu.Lock()
+	src := r.swimBreath
+	r.mu.Unlock()
+	if src != nil {
+		return src.Breath()
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.sinceSubmerged.IsZero() {
+		return false, 0, false
+	}
+	return true, int(time.Since(r.sinceSubmerged) / time.Second), true
+}
+
 // observeSubmersion updates the submersion clock and reports the two facts the
 // breath reflex reads.
 func (r *Runner) observeSubmersion(now time.Time) (underwater bool, seconds int) {
+	// The swim controller's reading wins when it has one, so the snapshot the
+	// brain sees and the plan the body is following are the same reading.
+	if u, s, known := r.breath(); known {
+		return u, s
+	}
+
 	underwater = r.headUnderwater()
 
 	r.mu.Lock()
@@ -1622,7 +1974,7 @@ func (r *Runner) deliberate(ctx context.Context, snap Snapshot, judgement Judgem
 		r.b.Logger.Debug("AGI: deliberating without the right to speak")
 	}
 
-	systemPrompt, prompt := r.buildDecisionPrompt(snap)
+	systemPrompt, prompt := r.BuildDecisionPrompt(snap)
 
 	reply, err := r.b.AiClient.Ask(r.audience(), systemPrompt, prompt)
 	if err != nil {

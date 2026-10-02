@@ -41,7 +41,7 @@ func (bp *BlockPlacer) PlaceBlockAt(ctx context.Context, x, y, z int, blockName 
 
 	// A site the bot is not willing to clear is a site it must not build into
 	// either. Placing anyway would put a block inside somebody's chest.
-	if !bp.clearObstructions(ctx, x, y, z) {
+	if !bp.ClearObstructions(ctx, x, y, z) {
 		return false
 	}
 

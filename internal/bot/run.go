@@ -21,6 +21,7 @@ import (
 	"bedrock-ai/internal/bot/husbandry"
 	"bedrock-ai/internal/bot/interact"
 	"bedrock-ai/internal/bot/inventory"
+	"bedrock-ai/internal/bot/inventory/trading"
 	"bedrock-ai/internal/bot/survival"
 	"bedrock-ai/internal/debuglog"
 	"bedrock-ai/internal/event"
@@ -55,31 +56,31 @@ func (e *ServerDisconnect) HostClosedWorld() bool {
 }
 
 const (
-	// maxReconnectAttempts is how many times the bot tries to rejoin a world
+	// MaxReconnectAttempts is how many times the bot tries to rejoin a world
 	// that disappeared under it. Enough to ride out a host restart, small enough
 	// that a genuinely gone server does not leave the process hanging.
-	maxReconnectAttempts = 5
+	MaxReconnectAttempts = 5
 
-	// reconnectBaseDelay is the first backoff step; it doubles per attempt up to
-	// reconnectMaxDelay.
-	reconnectBaseDelay = 2 * time.Second
-	reconnectMaxDelay  = 20 * time.Second
+	// ReconnectBaseDelay is the first backoff step; it doubles per attempt up to
+	// ReconnectMaxDelay.
+	ReconnectBaseDelay = 2 * time.Second
+	ReconnectMaxDelay  = 20 * time.Second
 )
 
-// reconnectDelay returns the wait before rejoin attempt n (1-based).
-func reconnectDelay(attempt int) time.Duration {
+// ReconnectDelay returns the wait before rejoin attempt n (1-based).
+func ReconnectDelay(attempt int) time.Duration {
 	if attempt < 1 {
 		attempt = 1
 	}
-	delay := reconnectBaseDelay
+	delay := ReconnectBaseDelay
 	for i := 1; i < attempt; i++ {
 		delay *= 2
-		if delay >= reconnectMaxDelay {
-			return reconnectMaxDelay
+		if delay >= ReconnectMaxDelay {
+			return ReconnectMaxDelay
 		}
 	}
-	if delay > reconnectMaxDelay {
-		return reconnectMaxDelay
+	if delay > ReconnectMaxDelay {
+		return ReconnectMaxDelay
 	}
 	return delay
 }
@@ -93,9 +94,9 @@ func (b *Bot) Run(ctx context.Context) error {
 		// A pending switch (from the join action) is applied before the session
 		// starts, and gets a fresh retry budget: deliberately leaving a server is
 		// not a failure to recover from.
-		if target, ok := b.takeJoinRequest(); ok {
+		if target, ok := b.TakeJoinRequest(); ok {
 			switches++
-			if switches > maxServerSwitches {
+			if switches > MaxServerSwitches {
 				b.Logger.Error("too many server switches, giving up",
 					slog.Int("switches", switches),
 					slog.String("address", target),
@@ -136,23 +137,23 @@ func (b *Bot) Run(ctx context.Context) error {
 		// Anything else past the first session means the world was lost and the
 		// host is not answering yet. That is the case worth waiting out.
 
-		if attempts >= maxReconnectAttempts {
+		if attempts >= MaxReconnectAttempts {
 			b.Logger.Error("world closed and the bot could not get back in",
 				slog.Int("attempts", attempts),
 				slog.String("host", b.ServerHost),
-				slog.String("last_error", errText(result.Err)),
+				slog.String("last_error", ErrText(result.Err)),
 				slog.String("hint", "start the world again on the host, or check that it is still open to LAN"),
 			)
 			return result.Err
 		}
 		attempts++
 
-		delay := reconnectDelay(attempts)
+		delay := ReconnectDelay(attempts)
 		b.Logger.Warn("world closed by the host, waiting to rejoin",
 			slog.Int("attempt", attempts),
-			slog.Int("max_attempts", maxReconnectAttempts),
+			slog.Int("max_attempts", MaxReconnectAttempts),
 			slog.Duration("retry_in", delay),
-			slog.String("last_error", errText(result.Err)),
+			slog.String("last_error", ErrText(result.Err)),
 		)
 
 		timer := time.NewTimer(delay)
@@ -189,8 +190,8 @@ func (b *Bot) runSession(ctx context.Context) sessionResult {
 	defer endSession()
 	// Registered so a join request can end this session; cleared on the way out
 	// so a request that arrives late cannot cancel a session already gone.
-	b.setSessionCancel(endSession)
-	defer b.setSessionCancel(nil)
+	b.SetSessionCancel(endSession)
+	defer b.SetSessionCancel(nil)
 
 	conn, gd, err := b.connect(sessionCtx)
 	if err != nil {
@@ -207,7 +208,7 @@ func (b *Bot) runSession(ctx context.Context) sessionResult {
 	// A rejoin is a different world: the host may have closed and reopened it,
 	// with a new seed. Keeping the old chunks would let pathfinding walk through
 	// terrain that does not exist any more.
-	b.resetSessionState()
+	b.ResetSessionState()
 	b.noteServer(b.ServerHost)
 
 	b.initSpawn(gd)
@@ -229,16 +230,16 @@ func (b *Bot) runSession(ctx context.Context) sessionResult {
 	return sessionResult{Connected: true, Err: err}
 }
 
-// errText renders an error for a log field without panicking on a nil.
-func errText(err error) string {
+// ErrText renders an error for a log field without panicking on a nil.
+func ErrText(err error) string {
 	if err == nil {
 		return ""
 	}
 	return err.Error()
 }
 
-// resetSessionState drops the per-world state a new session must not inherit.
-func (b *Bot) resetSessionState() {
+// ResetSessionState drops the per-world state a new session must not inherit.
+func (b *Bot) ResetSessionState() {
 	if b.WorldCache != nil {
 		b.WorldCache.Reset()
 	}
@@ -272,6 +273,13 @@ func (b *Bot) resetSessionState() {
 	// runtime ID would keep naming the previous server's item.
 	b.ItemNames = make(map[int32]string)
 	b.Mu.Unlock()
+
+	// Enchantment options are a recipe network ID from the world that issued
+	// them, so they cannot outlive it. A rejoin that kept them would let the
+	// manager ask a server it has just joined to craft recipe numbers it never
+	// sent. This is deliberately outside the b.Mu section: the enchanting state
+	// has its own lock, and the order between the two is not something to depend on.
+	ResetEnchantState(b)
 
 	if b.WorldModel != nil {
 		b.WorldModel.PurgeFalseSolidOverrides()
@@ -400,6 +408,35 @@ func (b *Bot) initSubsystems(gd minecraft.GameData) {
 	b.Fisher = fishing.NewFisher(b, b.Logger)
 	b.HusbandryMgr = husbandry.NewManager(b, b.Logger)
 	b.Explorer = exploration.NewExplorer(b, b.Logger)
+
+	// Wire the observation seam. Each of these managers refuses to report
+	// success without a server signal, and with nothing wired they refuse
+	// always: a fishing rod that never sees a bite, a wolf that can never be
+	// confirmed collared, a crop whose age cannot be read. The adapters exist
+	// because the three packages each declare their own event type, so one
+	// recorded ring is presented three ways.
+	b.Fisher.SetActorEventSource(FisherEvents{B: b})
+	b.HusbandryMgr.SetActorEventSource(HusbandryEvents{B: b})
+	b.HusbandryMgr.SetEntityMetaSource(HusbandryEntityMeta{B: b})
+	b.Farmer.SetBlockStateSource(BlockStates{B: b})
+
+	// Trading needs two observation seams, both of which only exist because the
+	// bot now records them: the server's per-villager offer list, and the XP
+	// level that pays for the offers that cost XP. Without the first the manager
+	// has no prices; without the second it cannot know whether an XP-costing
+	// offer is affordable, and it refuses rather than guessing.
+	b.Trading = trading.NewManager(b, b.Logger)
+	b.Trading.SetTradeObserver(TradeWindows{B: b})
+	b.Trading.SetXPObserver(Levels{})
+
+	// The enchanting table needs the same two things trading does, from the same
+	// place. The server's offers arrive on packet.PlayerEnchantOptions and are
+	// recorded by the handler in network/player; the XP level that pays for them
+	// arrives on UpdateAttributes and is folded in by the same path trading uses.
+	// Without this the manager refuses every enchant with ErrNoEnchanter, which
+	// is the intended behaviour for a missing seam and the wrong behaviour for a
+	// wired one — the table is useless, and silently so, which is worse.
+	b.InventoryMgr.Station().SetEnchanter(EnchantTable{B: b})
 
 	b.Bus.Publish(event.SpawnEvent{GameData: gd})
 

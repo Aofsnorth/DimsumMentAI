@@ -26,6 +26,17 @@ GOFLAGS     := -count=1
 TEST_PKGS   := ./internal/... ./tests/...
 BUILD_PKGS  := ./cmd/... ./internal/...
 
+# Packages that coverage is measured against.
+#
+# Tests live in tests/ as black-box (package X_test) files, so a test binary no
+# longer sits beside the code it exercises. Without this, `go test -coverprofile`
+# attributes coverage to the test package's own (empty) files and reports
+# "[no statements]", while internal/... packages with no test files beside them
+# drop out of the denominator entirely — which silently over-reports coverage.
+# Pointing -coverpkg at internal/... makes the tests/ binaries instrument and
+# credit the real code.
+COVERPKGS   := ./internal/...
+
 # Coverage threshold (0–100). The harness fails if total coverage falls
 # below this percentage. Set to 0 to disable the gate.
 COVERAGE_MIN ?= 0
@@ -119,14 +130,14 @@ race: ## Run tests with race detector
 .PHONY: cover
 cover: ## Run tests with coverage report
 	@echo "$(CLR_INFO)→ go test -coverprofile$(CLR_RESET)"
-	@$(GO) test $(GOFLAGS) -coverprofile=coverage.out $(TEST_PKGS)
+	@$(GO) test $(GOFLAGS) -coverpkg=$(COVERPKGS) -coverprofile=coverage.out $(TEST_PKGS)
 	@$(GO) tool cover -func=coverage.out | tail -1
 	@echo "  Full report: $(GO) tool cover -html=coverage.out"
 
 .PHONY: cover-check
 cover-check: ## Run tests with coverage and enforce minimum threshold (COVERAGE_MIN)
 	@echo "$(CLR_INFO)→ coverage check (min $(COVERAGE_MIN)%)$(CLR_RESET)"
-	@$(GO) test $(GOFLAGS) -coverprofile=coverage.out $(TEST_PKGS) 2>/dev/null
+	@$(GO) test $(GOFLAGS) -coverpkg=$(COVERPKGS) -coverprofile=coverage.out $(TEST_PKGS) 2>/dev/null
 	@total=$$($(GO) tool cover -func=coverage.out | tail -1 | grep -oE '[0-9]+\.[0-9]+' | head -1); \
 	if [ -z "$$total" ]; then \
 		echo "$(CLR_FAIL)✗ Could not parse coverage$(CLR_RESET)"; \
@@ -141,7 +152,7 @@ cover-check: ## Run tests with coverage and enforce minimum threshold (COVERAGE_
 
 .PHONY: cover-html
 cover-html: ## Generate HTML coverage report
-	@$(GO) test $(GOFLAGS) -coverprofile=coverage.out $(TEST_PKGS)
+	@$(GO) test $(GOFLAGS) -coverpkg=$(COVERPKGS) -coverprofile=coverage.out $(TEST_PKGS)
 	@$(GO) tool cover -html=coverage.out -o coverage.html
 	@echo "Coverage report: coverage.html"
 

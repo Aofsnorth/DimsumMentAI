@@ -7,6 +7,7 @@ import (
 
 	"bedrock-ai/internal/bot"
 	"bedrock-ai/internal/bot/action"
+	"bedrock-ai/internal/bot/affordance"
 	"bedrock-ai/internal/event"
 )
 
@@ -50,6 +51,7 @@ var adminCommandHandlers = map[string]func(b *bot.Bot, param, user string){
 	"cancelplan": handleAdminCancelPlan,
 	"cmd":        handleAdminCmd,
 	"command":    handleAdminCmd,
+	"verb":       handleAdminVerb,
 }
 
 // handleAdminCmd runs a server command from chat: "!cmd /register pass pass".
@@ -84,20 +86,23 @@ func handleAdminFollow(b *bot.Bot, param, user string) {
 }
 
 func handleAdminGoto(b *bot.Bot, param, user string) {
+	// No status report here: the goto handler reports the real outcome when
+	// navigation finishes. Reporting success now claims arrival while the bot
+	// is still walking, and the chat line lands mid-journey after LLM latency.
 	action.Execute(b, "goto", param, user)
-	b.ReportActionStatus(user, event.ActionStatus{Action: "goto", Item: param, Success: true})
 }
 
 // The MinePal-parity admin commands below delegate to the action dispatch so
 // chat (!) and LLM (<action>) share one code path.
 func handleAdminMove(b *bot.Bot, param, user string) {
+	// Same as goto: the handler owns the arrival verdict.
 	action.Execute(b, "move", param, user)
-	b.ReportActionStatus(user, event.ActionStatus{Action: "goto", Item: param, Success: true})
 }
 
 func handleAdminLook(b *bot.Bot, param, user string) {
+	// The lookat handler reports its own outcome; an instant ack here would
+	// claim the look before it happens.
 	action.Execute(b, "look", param, user)
-	b.ReportActionStatus(user, event.ActionStatus{Action: "lookat", Item: param, Success: true})
 }
 
 func handleAdminAnalyze(b *bot.Bot, param, user string) {
@@ -153,4 +158,64 @@ func handleAdminCancelPlan(b *bot.Bot, param, user string) {
 	b.Planner.Cancel()
 	b.Planner.TodoClear()
 	b.ReportActionStatus(user, event.ActionStatus{Action: "cancelplan", Success: true})
+}
+
+// handleAdminVerb runs one verb of the affordance catalogue by name, through the
+// same lookup, the same gate and the same registry dispatch the deciding model's
+// own answer goes through.
+//
+// It exists so a run can cover the catalogue deliberately. The model picks a verb
+// once per tick and takes whatever the situation invites, so ordinary play
+// returns to a handful of the set and never reaches the rest — a live run
+// recorded zero dispatches across several minutes of wandering — and "the
+// affordance layer was exercised" would otherwise be an impression rather than a
+// fact.
+//
+// The verdict is logged rather than only answered in chat, because the record is
+// the point of the exercise: which verbs were named, which the gate held back and
+// why, and which actually dispatched.
+func handleAdminVerb(b *bot.Bot, param, user string) {
+	label := strings.ToLower(strings.TrimSpace(param))
+	if label == "" {
+		b.ReportActionStatus(user, event.ActionStatus{Action: "verb", Success: false, Error: "pakai: !verb <label>"})
+		return
+	}
+	v, ok := affordance.Lookup(label)
+	if !ok {
+		b.Logger.Warn("affordance: no such verb", "verb", label)
+		b.ReportActionStatus(user, event.ActionStatus{Action: "verb", Success: false, Error: "verb gak dikenal: " + label})
+		return
+	}
+
+	// The same three refusals the model's own answer gets, in the same order.
+	// Skipping any of them would exercise a different path than the one being
+	// claimed, which is exactly how a probe ends up proving less than it reports.
+	if !v.Offerable() {
+		b.Logger.Warn("affordance: verb held back by the gate",
+			"verb", v.Label, "changesWorld", v.ChangesWorld,
+			"confirmation", v.Confirmation.String())
+		b.ReportActionStatus(user, event.ActionStatus{Action: "verb", Success: false,
+			Error: v.Label + " mengubah dunia tapi gak bisa dibuktikan (" + v.Confirmation.String() + ")"})
+		return
+	}
+	if v.Kind != affordance.Action {
+		// An Activity is carried out by the brain and has no registry entry, so
+		// there is nothing to dispatch. Reported as exercised all the same: the
+		// Kind branch is one of the things a run has to cover.
+		b.Logger.Info("affordance: verb exercised",
+			"verb", v.Label, "confirmation", v.Confirmation.String(),
+			"changesWorld", v.ChangesWorld, "dispatched", false,
+			"reason", "activity: dijalankan otak sendiri, bukan registry")
+		b.ReportActionStatus(user, event.ActionStatus{Action: "verb", Success: true, Item: v.Label + " (activity)"})
+		return
+	}
+
+	// Mirrors doActivity exactly: the label carries its own argument, and both
+	// halves go to the registry so a verb like "take:oak_log" is dispatched with
+	// the thing the model was shown rather than without it.
+	_, arg := affordance.SplitVerb(v.Label)
+	b.Logger.Info("affordance: verb exercised",
+		"verb", v.Label, "confirmation", v.Confirmation.String(),
+		"changesWorld", v.ChangesWorld, "arg", arg, "dispatched", true)
+	action.Execute(b, v.Label, arg, user)
 }

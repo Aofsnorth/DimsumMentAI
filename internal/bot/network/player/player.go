@@ -37,6 +37,10 @@ var packetHandlers = map[uint32]func(*bot.Bot, packet.Packet) bool{
 	packet.IDSetTime:                     handleSetTime,
 	packet.IDPlayStatus:                  handlePlayStatus,
 	packet.IDLevelEvent:                  handleLevelEvent,
+	packet.IDActorEvent:                  bot.HandleActorEvent,
+	packet.IDSetActorData:                handleSetActorData,
+	packet.IDUpdateTrade:                 handleUpdateTrade,
+	packet.IDPlayerEnchantOptions:        handlePlayerEnchantOptions,
 }
 
 // HandlePlayerPacket dispatches a packet to the appropriate handler.

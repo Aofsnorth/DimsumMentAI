@@ -19,7 +19,7 @@ func (tc *TickContext) performActiveSteering() {
 	if tc.scaffoldingBlocksMovement() {
 		return
 	}
-	tc.updateShouldMoveState()
+	tc.UpdateShouldMoveState()
 	if !tc.ShouldMove {
 		// Standing still. Take the occasional small step a real player takes
 		// while idling — see idle_nudge.go for why this is a survival need on
@@ -27,7 +27,30 @@ func (tc *TickContext) performActiveSteering() {
 		tc.maybeIdleNudge()
 		return
 	}
-	if tc.closeFollowTarget() {
+	if tc.CloseFollowTarget() {
+		tc.MoveVec = mgl32.Vec2{}
+		return
+	}
+
+	// A cliff in front of a body that is moving stops it there.
+	//
+	// The pathfinder routes around drops, so a following bot is fine — but a
+	// wandering one has no path, and "straight ahead" includes straight off a
+	// mountain. A bot that walks off blind is not being bold, it is not looking.
+	//
+	// The one thing that overrides this is Jev asking for the drop: a player
+	// leaps off a ledge on purpose and lands five blocks down, and that is a
+	// decision, not an accident. When it is not asked for, a body with no room
+	// to stand simply stops at the edge.
+	//
+	// The gate refuses a step when there is a drop AND nobody asked for it.
+	//
+	// The two halves are joined by "and", not "or", and getting that backwards
+	// is the worst shape this bug can take: an authorised drop stopped the body
+	// dead, and an unauthorised one let it walk off. Both at once, so neither
+	// symptom would have looked like this feature working.
+	if !tc.DropAuthorised() && tc.stopsAtLedge() {
+		tc.HasHorizontalMove = false
 		tc.MoveVec = mgl32.Vec2{}
 		return
 	}
@@ -54,7 +77,7 @@ func (tc *TickContext) scaffoldingBlocksMovement() bool {
 	return false
 }
 
-func (tc *TickContext) updateShouldMoveState() {
+func (tc *TickContext) UpdateShouldMoveState() {
 	tc.ShouldMove = tc.MState != "idle" && tc.AllowDirectSteering
 	tc.PlayerHeightDiff = 0.0
 	tc.FollowWalking = false
@@ -88,7 +111,7 @@ func (tc *TickContext) updateFollowWalkLatch() {
 	tc.FollowWalking = walking
 }
 
-func (tc *TickContext) closeFollowTarget() bool {
+func (tc *TickContext) CloseFollowTarget() bool {
 	return tc.MState == "follow" && !tc.FollowWalking
 }
 
@@ -196,6 +219,10 @@ func (tc *TickContext) advancePath(maxHeightDiff float32) {
 			tc.B.MovementState = "idle"
 			tc.B.Logger.Debug("bot arrived at target destination", slog.Float64("x", float64(tc.TPos.X())), slog.Float64("z", float64(tc.TPos.Z())))
 		}
+		// The trip Jev styled is over; the next one starts unstlyled. A
+		// sprint latch that survived arrival would run the bot's next idle
+		// drift at full pace.
+		tc.B.ClearSprintHintLocked()
 	}
 }
 
@@ -210,6 +237,7 @@ func (tc *TickContext) checkWalkToArrival() {
 		tc.B.Mu.Lock()
 		tc.B.MovementState = "idle"
 		tc.B.Mu.Unlock()
+		tc.B.ClearSprintHint()
 		tc.B.Logger.Debug("bot arrived at target destination", slog.Float64("x", float64(tc.TPos.X())), slog.Float64("y", float64(tc.TPos.Y())), slog.Float64("z", float64(tc.TPos.Z())), slog.Float64("tolerance", float64(tol)))
 	}
 }
@@ -231,22 +259,22 @@ func (tc *TickContext) refreshTarget() {
 }
 
 const (
-	// stuckIdleTicks is how many consecutive motionless ticks count as wedged.
+	// StuckIdleTicks is how many consecutive motionless ticks count as wedged.
 	// This only catches a hard freeze, where the movement code cancels the step
 	// outright and the position stops changing.
-	stuckIdleTicks = 12
+	StuckIdleTicks = 12
 
-	// stuckProgressWindow / stuckProgressMinMove catch the cases the per-tick
+	// StuckProgressWindow / StuckProgressMinMove catch the cases the per-tick
 	// counter is blind to: the host rubberbanding the bot back to the same spot
 	// every few ticks, or the bot sliding sideways along a wall. Both keep
 	// changing the position each tick, so TicksStuck stays at zero and no
 	// recovery ever runs — yet the bot gains no ground. Real progress inside the
 	// window is net displacement, not summed movement, so oscillation and
 	// rubberbanding both read as "no progress".
-	stuckProgressWindow    = 1500 * time.Millisecond
-	stuckProgressMinMove   = 0.4
-	stuckPenaltyBaseWindow = 3 * time.Second
-	stuckPenaltyMaxWindow  = 12 * time.Second
+	StuckProgressWindow    = 1500 * time.Millisecond
+	StuckProgressMinMove   = 0.4
+	StuckPenaltyBaseWindow = 3 * time.Second
+	StuckPenaltyMaxWindow  = 12 * time.Second
 	stuckPenaltyMaxSteps   = 2
 
 	// parkourRejumpCooldown is how long the bot waits before re-attempting a gap
@@ -255,47 +283,47 @@ const (
 	// that a failed jump recovers in well under the stuck-escalation window.
 	parkourRejumpCooldown = 600 * time.Millisecond
 
-	// walkToRepathInterval / walkToRepathMaxInterval bound how often a walk_to
+	// WalkToRepathInterval / WalkToRepathMaxInterval bound how often a walk_to
 	// that lost its route re-plans. The lower bound keeps the freeze from being
 	// noticeable; the backoff keeps an unsolvable target from re-running A* every
 	// tick and starving the movement loop.
-	walkToRepathInterval    = 500 * time.Millisecond
-	walkToRepathMaxInterval = 4 * time.Second
+	WalkToRepathInterval    = 500 * time.Millisecond
+	WalkToRepathMaxInterval = 4 * time.Second
 	// stuckProgressMinTargetDist is how close the destination has to be for the
 	// forward axis to stop being meaningful.
 	stuckProgressMinTargetDist = 0.5
 )
 
-// walkToRepathIntervalFor backs the re-path interval off as consecutive attempts
+// WalkToRepathIntervalFor backs the re-path interval off as consecutive attempts
 // fail, so a target A* cannot solve costs less and less often.
-func walkToRepathIntervalFor(failures int) time.Duration {
-	interval := walkToRepathInterval
-	for i := 0; i < failures && interval < walkToRepathMaxInterval; i++ {
+func WalkToRepathIntervalFor(failures int) time.Duration {
+	interval := WalkToRepathInterval
+	for i := 0; i < failures && interval < WalkToRepathMaxInterval; i++ {
 		interval *= 2
 	}
-	if interval > walkToRepathMaxInterval {
-		return walkToRepathMaxInterval
+	if interval > WalkToRepathMaxInterval {
+		return WalkToRepathMaxInterval
 	}
 	return interval
 }
 
-// stuckPenaltyWindow grows the temp-solid penalty for the cells the bot is
+// StuckPenaltyWindow grows the temp-solid penalty for the cells the bot is
 // pressing into, so a blocker it failed to walk past stays blocked for longer
 // after each failed attempt. The doubling is stepped, not looped per count:
 // multiplying a time.Duration by two enough times overflows int64 and wraps to a
 // negative window, which would expire the penalty immediately.
-func stuckPenaltyWindow(consecutiveStuck int) time.Duration {
-	window := stuckPenaltyBaseWindow
+func StuckPenaltyWindow(consecutiveStuck int) time.Duration {
+	window := StuckPenaltyBaseWindow
 	for i := 1; i < consecutiveStuck && i <= stuckPenaltyMaxSteps; i++ {
 		window *= 2
 	}
-	if window > stuckPenaltyMaxWindow {
-		return stuckPenaltyMaxWindow
+	if window > StuckPenaltyMaxWindow {
+		return StuckPenaltyMaxWindow
 	}
 	return window
 }
 
-// forwardProgress is how many blocks of real ground the bot covered toward the
+// ForwardProgress is how many blocks of real ground the bot covered toward the
 // destination between two positions.
 //
 // Displacement on its own is not a progress signal: a bot sliding sideways along
@@ -304,19 +332,19 @@ func stuckPenaltyWindow(consecutiveStuck int) time.Duration {
 // onto the horizontal axis pointing at the destination catches both, and unlike
 // a distance-to-target comparison it does not misfire when the destination is a
 // moving player who is simply running away at the bot's own speed.
-func forwardProgress(from, to, target mgl32.Vec3) float32 {
+func ForwardProgress(from, to, target mgl32.Vec3) float32 {
 	dx := target.X() - from.X()
 	dz := target.Z() - from.Z()
 	horiz := float32(math.Sqrt(float64(dx*dx + dz*dz)))
 	if horiz < stuckProgressMinTargetDist {
 		// Standing on top of the destination: there is no forward axis left, and
 		// the arrival check owns this case.
-		return stuckProgressMinMove
+		return StuckProgressMinMove
 	}
 	return (to.X()-from.X())*dx/horiz + (to.Z()-from.Z())*dz/horiz
 }
 
-// ensureWalkToHasPath re-plans a walk_to that has no usable route.
+// EnsureWalkToHasPath re-plans a walk_to that has no usable route.
 //
 // Without this, losing the path is terminal. The host wipes CurrentPath whenever
 // it corrects our position by more than two blocks (CorrectPlayerMovePrediction),
@@ -324,7 +352,7 @@ func forwardProgress(from, to, target mgl32.Vec3) float32 {
 // straight at, so AllowDirectSteering goes false, ShouldMove goes false, and the
 // bot stands perfectly still until a new chat command restarts it — with no log
 // line at all to explain the silence.
-func (tc *TickContext) ensureWalkToHasPath() {
+func (tc *TickContext) EnsureWalkToHasPath() {
 	if tc.MState != "walk_to" || tc.HasPath || tc.B.WorldModel == nil {
 		return
 	}
@@ -338,7 +366,7 @@ func (tc *TickContext) ensureWalkToHasPath() {
 	}
 
 	tc.B.Mu.Lock()
-	if time.Since(tc.B.LastPathRecalcTime) < walkToRepathIntervalFor(tc.B.WalkToRepathFailures) {
+	if time.Since(tc.B.LastPathRecalcTime) < WalkToRepathIntervalFor(tc.B.WalkToRepathFailures) {
 		tc.B.Mu.Unlock()
 		return
 	}
@@ -348,20 +376,33 @@ func (tc *TickContext) ensureWalkToHasPath() {
 	RecalculatePath(tc.B)
 
 	tc.B.Mu.Lock()
-	if len(tc.B.CurrentPath) > 0 {
+	hasPath := len(tc.B.CurrentPath) > 0
+	feet := pathfinder.Node{
+		X: int32(math.Floor(float64(tc.B.Pos.X()))),
+		Y: int32(math.Floor(float64(tc.B.Pos.Y() + 0.1))),
+		Z: int32(math.Floor(float64(tc.B.Pos.Z()))),
+	}
+	tc.B.Mu.Unlock()
+
+	if hasPath {
+		tc.B.Mu.Lock()
 		tc.B.WalkToRepathFailures = 0
-	} else {
-		// Only count as a failure if terrain is actually loaded. A failure
-		// caused by unloaded chunks is transient and will resolve on its own;
-		// counting it triggers exponential backoff (up to 30s) that makes the
-		// bot give up right before the terrain arrives.
-		if terrainReady(tc.B, pathfinder.Node{
-			X: int32(math.Floor(float64(tc.B.Pos.X()))),
-			Y: int32(math.Floor(float64(tc.B.Pos.Y() + 0.1))),
-			Z: int32(math.Floor(float64(tc.B.Pos.Z()))),
-		}) {
-			tc.B.WalkToRepathFailures++
-		}
+		tc.B.Mu.Unlock()
+		return
+	}
+
+	// Only count as a failure if terrain is actually loaded. A failure
+	// caused by unloaded chunks is transient and will resolve on its own;
+	// counting it triggers exponential backoff (up to 30s) that makes the
+	// bot give up right before the terrain arrives.
+	//
+	// The readiness question is asked with b.Mu released. It reaches into the
+	// world model, and holding the bot lock across a world-model call is the
+	// lock order that lets a chunk decode and this tick wait on each other.
+	ready := terrainReady(tc.B, feet)
+	tc.B.Mu.Lock()
+	if ready {
+		tc.B.WalkToRepathFailures++
 	}
 	tc.B.Mu.Unlock()
 }
@@ -371,8 +412,8 @@ func (tc *TickContext) handleStuck() {
 		return
 	}
 	tc.B.Mu.Lock()
-	frozen := tc.updateStuckCounter()
-	stalled := tc.updateStuckProgressWindow()
+	frozen := tc.UpdateStuckCounter()
+	stalled := tc.UpdateStuckProgressWindow()
 	if !frozen && !stalled {
 		tc.B.Mu.Unlock()
 		return
@@ -397,14 +438,14 @@ func (tc *TickContext) handleStuck() {
 	tc.B.Mu.Unlock()
 }
 
-// updateStuckCounter counts consecutive motionless ticks. Returns true once the
-// bot has been frozen for stuckIdleTicks.
+// UpdateStuckCounter counts consecutive motionless ticks. Returns true once the
+// bot has been frozen for StuckIdleTicks.
 //
 // Note what it no longer does: any per-tick movement used to clear the
 // escalation counter, so a bot that jittered or slid while wedged restarted the
 // whole recovery ladder on every twitch and could never reach the steps that
 // actually break it out. Escalation is now cleared by net progress instead.
-func (tc *TickContext) updateStuckCounter() bool {
+func (tc *TickContext) UpdateStuckCounter() bool {
 	moveDeltaX := tc.CurrPos.X() - tc.B.LastTickPos.X()
 	moveDeltaZ := tc.CurrPos.Z() - tc.B.LastTickPos.Z()
 	moveDeltaY := tc.CurrPos.Y() - tc.B.LastTickPos.Y()
@@ -414,14 +455,14 @@ func (tc *TickContext) updateStuckCounter() bool {
 		tc.B.TicksStuck = 0
 		tc.B.LastTickPos = tc.CurrPos
 	}
-	return tc.B.TicksStuck >= stuckIdleTicks
+	return tc.B.TicksStuck >= StuckIdleTicks
 }
 
-// updateStuckProgressWindow reports whether the bot spent a full window trying
+// UpdateStuckProgressWindow reports whether the bot spent a full window trying
 // to move without gaining ground toward its destination. Forward progress over
 // the window is the signal, so rubberbanding and wall-sliding are both caught
 // and real travel clears the escalation ladder.
-func (tc *TickContext) updateStuckProgressWindow() bool {
+func (tc *TickContext) UpdateStuckProgressWindow() bool {
 	now := time.Now()
 	if tc.B.StuckWindowStart.IsZero() {
 		tc.B.StuckWindowStart = now
@@ -429,7 +470,7 @@ func (tc *TickContext) updateStuckProgressWindow() bool {
 		return false
 	}
 
-	if forwardProgress(tc.B.StuckWindowPos, tc.CurrPos, tc.TPos) >= stuckProgressMinMove {
+	if ForwardProgress(tc.B.StuckWindowPos, tc.CurrPos, tc.TPos) >= StuckProgressMinMove {
 		// Genuine ground gained: restart the window and drop the escalation
 		// ladder, so a bot that struggled once and then got free is not treated
 		// as a repeat offender.
@@ -439,7 +480,7 @@ func (tc *TickContext) updateStuckProgressWindow() bool {
 		return false
 	}
 
-	if now.Sub(tc.B.StuckWindowStart) < stuckProgressWindow {
+	if now.Sub(tc.B.StuckWindowStart) < StuckProgressWindow {
 		return false
 	}
 
@@ -486,7 +527,7 @@ func (tc *TickContext) handleStuckRecalcLocked() {
 	// against the same model returns the same route and the bot walks into the
 	// same blocker again — the recovery loop that made "stuck" permanent. Marking
 	// the blocker is what makes the next attempt actually go around it.
-	tc.markBlockingCellsTempSolidLocked(stuckPenaltyWindow(consecutive))
+	tc.MarkBlockingCellsTempSolidLocked(StuckPenaltyWindow(consecutive))
 	tc.markCurrentPathTempSolidLocked()
 	tc.recalculatePathLocked()
 
@@ -497,7 +538,7 @@ func (tc *TickContext) handleStuckRecalcLocked() {
 	// over. Past that radius a nil path means no steering at all, which is the
 	// freeze this ladder is supposed to prevent — so escalate the penalty and
 	// keep the route instead of giving up on it.
-	if !tc.canDirectSteerToTarget() {
+	if !tc.CanDirectSteerToTarget() {
 		return
 	}
 	tc.B.Logger.Warn("Multiple stuck detections, attempting direct movement fallback", "consecutive_count", consecutive)
@@ -506,13 +547,13 @@ func (tc *TickContext) handleStuckRecalcLocked() {
 	tc.B.ConsecutiveStuckCount = 0
 }
 
-// markBlockingCellsTempSolidLocked forces the cells the bot is walking into to
+// MarkBlockingCellsTempSolidLocked forces the cells the bot is walking into to
 // read as solid for a while, so the next path routes around them.
 //
 // The cells are chosen from the actual movement direction, not from the path
 // node being approached: a smoothed link can span several blocks, so the node
 // the bot is "walking toward" is often nowhere near the thing stopping it.
-func (tc *TickContext) markBlockingCellsTempSolidLocked(window time.Duration) {
+func (tc *TickContext) MarkBlockingCellsTempSolidLocked(window time.Duration) {
 	if tc.B.WorldModel == nil || tc.Dist <= 0.01 {
 		return
 	}
@@ -540,13 +581,18 @@ func (tc *TickContext) markBlockingCellsTempSolidLocked(window time.Duration) {
 		//
 		// A legitimate step still gets its jump first: tryStuckJump runs on the
 		// first stuck event and only returns here once that has already failed.
+		// The world write happens with b.Mu released. The caller's lock
+		// protects the path bookkeeping, not the model, and carrying both at
+		// once is what lets a chunk decode and this tick wait on each other.
+		tc.B.Mu.Unlock()
 		tc.B.WorldModel.SetTempSolid(bx, feetY, bz, window)
+		tc.B.Mu.Lock()
 	}
 }
 
-// canDirectSteerToTarget mirrors the radii in updateAllowDirectSteering: it
+// CanDirectSteerToTarget mirrors the radii in updateAllowDirectSteering: it
 // reports whether dropping the path would still leave the bot able to walk.
-func (tc *TickContext) canDirectSteerToTarget() bool {
+func (tc *TickContext) CanDirectSteerToTarget() bool {
 	dx := tc.TPos.X() - tc.CurrPos.X()
 	dy := tc.TPos.Y() - tc.CurrPos.Y()
 	dz := tc.TPos.Z() - tc.CurrPos.Z()
@@ -576,7 +622,10 @@ func (tc *TickContext) markCurrentPathTempSolidLocked() {
 	}
 	node := tc.B.CurrentPath[tc.B.PathIndex]
 	if node.Y == int32(math.Floor(float64(tc.CurrPos.Y()))) {
+		// Released for the world write, same reason as the cells above.
+		tc.B.Mu.Unlock()
 		tc.B.WorldModel.SetTempSolid(node.X, node.Y, node.Z, 5*time.Second)
+		tc.B.Mu.Lock()
 	}
 }
 

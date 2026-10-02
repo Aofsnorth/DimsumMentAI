@@ -33,7 +33,20 @@ type Health struct {
 	// server that applies a freeze still answers ticks, and time alone would
 	// call a motionless bot healthy.
 	PositionChanged bool
-	// Exploring is true when the bot is deliberately moving somewhere.
+	// WantsToMove reports that the body has an outstanding reason to be in
+	// motion: it is walking somewhere, following someone, part-way along a
+	// path, or out exploring.
+	//
+	// It is the question the stuck judgement actually turns on. Stillness means
+	// nothing on its own — a bot that decided to rest, or that is standing in
+	// front of a tree swinging an axe, is exactly as motionless as one wedged
+	// against terrain, and only one of the three is broken.
+	WantsToMove bool
+	// Exploring is true when the bot is out wandering on purpose.
+	//
+	// An exemption rather than an intent, and a stronger one than WantsToMove:
+	// a wanderer pauses to look at things constantly, and a watchdog that fires
+	// on those twitches the bot out of its own journey every thirty seconds.
 	Exploring bool
 }
 
@@ -106,13 +119,13 @@ func (a Action) String() string {
 // stuck bot is caught on the very next decision rather than a minute later.
 const stuckAfter = 30 * time.Second
 
-// stuckNeedsRepeats is how many consecutive readings must agree before the
+// StuckNeedsRepeats is how many consecutive readings must agree before the
 // watchdog acts.
 //
 // One reading is not enough: a single tick can be a server hiccup, and a bot
 // that panics at the first one spends a three-hour stream reconnecting to a
 // problem it did not have. Two is the smallest number that is actually evidence.
-const stuckNeedsRepeats = 2
+const StuckNeedsRepeats = 2
 
 // Diagnose names the fault, and only one.
 //
@@ -135,9 +148,18 @@ func Diagnose(h Health) Fault {
 
 // IsStuck reports whether the bot has been motionless too long to be deliberate.
 //
-// Exploring is exempt. A bot walking somewhere on purpose is supposed to leave
-// its position alone, and calling that stuck produces a bot that interrupts its
-// own journey every thirty seconds to twitch.
+// The exemption is the whole judgement. Stillness is only a fault when the body
+// was trying to move and did not: a bot resting, chatting, or standing still to
+// break a block is supposed to leave its position alone, and calling that stuck
+// produces a bot that interrupts itself every thirty seconds. It also produces
+// the stutter this was found by — a live run had the watchdog fire ActUnstick
+// sixteen times in a row on a resting bot, each one clearing the world model and
+// none of them moving the body, which is visible as a repeated hop that goes
+// nowhere.
+//
+// A body that has never moved is different and stays stuck regardless: that is a
+// bot that has not started, and no resting bot reaches it, because the first
+// reading stamps LastMoved.
 func IsStuck(h Health) bool {
 	if h.Exploring || h.HP <= 0 || h.Disconnected {
 		return false
@@ -149,6 +171,10 @@ func IsStuck(h Health) bool {
 		// Never moved at all. That is a bot that has not started, and it is
 		// stuck by any reasonable reading.
 		return true
+	}
+	if !h.WantsToMove {
+		// Stillness with no reason to be moving is rest, not a wedge.
+		return false
 	}
 	return h.Now.Sub(h.LastMoved) > stuckAfter
 }
@@ -168,7 +194,7 @@ func Decide(h Health, repeats int) (Fault, Action) {
 	case FaultDead:
 		return fault, ActRespawn
 	case FaultStuck:
-		if repeats < stuckNeedsRepeats {
+		if repeats < StuckNeedsRepeats {
 			// Not yet. The one thing the watchdog must not do is thrash.
 			return fault, ActNone
 		}
@@ -178,8 +204,8 @@ func Decide(h Health, repeats int) (Fault, Action) {
 	}
 }
 
-// watchReport is the one-line summary of a watchdog pass, for the log.
-func watchReport(fault Fault, action Action, repeats int) string {
+// WatchReport is the one-line summary of a watchdog pass, for the log.
+func WatchReport(fault Fault, action Action, repeats int) string {
 	if fault == FaultNone {
 		return ""
 	}

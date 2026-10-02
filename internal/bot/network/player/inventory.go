@@ -13,10 +13,10 @@ import (
 )
 
 const (
-	// playerInvSlotCount is the number of slots in the combined hotbar + main
+	// PlayerInvSlotCount is the number of slots in the combined hotbar + main
 	// inventory window (WindowIDInventory). A full sync always has this many
 	// entries.
-	playerInvSlotCount = 36
+	PlayerInvSlotCount = 36
 )
 
 type heldItemState struct {
@@ -52,11 +52,11 @@ func heldItemChanged(before, after heldItemState) bool {
 	return before != after
 }
 
-// isPlayerInventoryContainer reports whether a ContainerID refers to a slot in
+// IsPlayerInventoryContainer reports whether a ContainerID refers to a slot in
 // the player's own inventory family. The server may push updates via any of
 // these IDs depending on what triggered the change (pickup, /give, drop into
 // open inventory UI, etc.).
-func isPlayerInventoryContainer(id byte) bool {
+func IsPlayerInventoryContainer(id byte) bool {
 	switch id {
 	case protocol.ContainerInventory,
 		protocol.ContainerHotBar,
@@ -72,7 +72,7 @@ func isPlayerInventoryContent(p *packet.InventoryContent) bool {
 	if p.WindowID == protocol.WindowIDInventory {
 		return true
 	}
-	return isPlayerInventoryContainer(p.Container.ContainerID)
+	return IsPlayerInventoryContainer(p.Container.ContainerID)
 }
 
 func isPlayerInventorySlot(p *packet.InventorySlot) bool {
@@ -80,7 +80,7 @@ func isPlayerInventorySlot(p *packet.InventorySlot) bool {
 		return true
 	}
 	if c, ok := p.Container.Value(); ok {
-		return isPlayerInventoryContainer(c.ContainerID)
+		return IsPlayerInventoryContainer(c.ContainerID)
 	}
 	return false
 }
@@ -94,9 +94,9 @@ func windowIDValue(windowID protocol.Optional[int8]) int {
 	return -1
 }
 
-// isPlayerInventoryTransaction reports whether an InventoryTransaction action
+// IsPlayerInventoryTransaction reports whether an InventoryTransaction action
 // updates the bot's own inventory (hotbar + main inventory, armor, or offhand).
-func isPlayerInventoryTransaction(action protocol.InventoryAction) bool {
+func IsPlayerInventoryTransaction(action protocol.InventoryAction) bool {
 	if action.SourceType != protocol.InventoryActionSourceContainer {
 		return false
 	}
@@ -107,7 +107,7 @@ func isPlayerInventoryTransaction(action protocol.InventoryAction) bool {
 	return false
 }
 
-// containerSlotOffset returns the global inventory slot offset for a given
+// ContainerSlotOffset returns the global inventory slot offset for a given
 // container ID. Bedrock sends inventory updates per-container, where each
 // container's slot array starts at 0 — but the bot's InventoryMap uses global
 // slot indices matching the full 41-slot player inventory:
@@ -120,7 +120,7 @@ func isPlayerInventoryTransaction(action protocol.InventoryAction) bool {
 // Without this offset, a ContainerInventory update (27 main-inventory slots
 // indexed 0-26) would overwrite HotBar slots 0-8 instead of mapping to global
 // slots 9-35.
-func containerSlotOffset(containerID byte) uint32 {
+func ContainerSlotOffset(containerID byte) uint32 {
 	switch containerID {
 	case protocol.ContainerHotBar:
 		return 0 // slots 0-8
@@ -137,7 +137,7 @@ func containerSlotOffset(containerID byte) uint32 {
 	}
 }
 
-// applyInventoryContent merges an InventoryContent update into the bot's
+// ApplyInventoryContent merges an InventoryContent update into the bot's
 // InventoryMap WITHOUT wiping slots that belong to other containers. A full
 // sync (WindowIDInventory + exactly 36 items) refreshes slots 0-35. Partial
 // syncs use the container ID to determine which slot range to touch.
@@ -146,7 +146,7 @@ func containerSlotOffset(containerID byte) uint32 {
 // items. Previously this was treated as a full sync and wiped the main
 // inventory; now we fall back to the container ID so only the relevant slots
 // are cleared.
-func applyInventoryContent(b *bot.Bot, p *packet.InventoryContent) bool {
+func ApplyInventoryContent(b *bot.Bot, p *packet.InventoryContent) bool {
 	containerID := p.Container.ContainerID
 
 	b.Mu.Lock()
@@ -162,32 +162,32 @@ func applyInventoryContent(b *bot.Bot, p *packet.InventoryContent) bool {
 		// content length to determine which slots are being sent so we
 		// don't wipe slots that weren't included in the packet.
 		switch len(p.Content) {
-		case playerInvSlotCount:
-			coveredSlots = slotRange(0, playerInvSlotCount)
+		case PlayerInvSlotCount:
+			coveredSlots = SlotRange(0, PlayerInvSlotCount)
 			offset = 0
 		case 9:
-			coveredSlots = slotRange(0, 9)
+			coveredSlots = SlotRange(0, 9)
 			offset = 0
 		case 27:
-			coveredSlots = slotRange(9, 36)
+			coveredSlots = SlotRange(9, 36)
 			offset = 9
 		case 4:
-			coveredSlots = slotRange(36, 40)
+			coveredSlots = SlotRange(36, 40)
 			offset = 36
 		case 1:
-			coveredSlots = slotRange(40, 41)
+			coveredSlots = SlotRange(40, 41)
 			offset = 40
 		default:
 			// Unknown partial size — fall back to the container ID.
-			coveredSlots = coveredSlotSet(containerID)
-			offset = containerSlotOffset(containerID)
+			coveredSlots = CoveredSlotSet(containerID)
+			offset = ContainerSlotOffset(containerID)
 		}
 	} else {
-		coveredSlots = coveredSlotSet(containerID)
-		offset = containerSlotOffset(containerID)
+		coveredSlots = CoveredSlotSet(containerID)
+		offset = ContainerSlotOffset(containerID)
 	}
 
-	isFullInventory := len(p.Content) == playerInvSlotCount && p.WindowID == protocol.WindowIDInventory
+	isFullInventory := len(p.Content) == PlayerInvSlotCount && p.WindowID == protocol.WindowIDInventory
 
 	// Clear only the slots this container owns, then re-populate from the
 	// content array. This prevents stale items from lingering when the
@@ -224,14 +224,14 @@ func applyInventoryContent(b *bot.Bot, p *packet.InventoryContent) bool {
 	return heldItemChanged(before, heldItemStateLocked(b))
 }
 
-// applyInventorySlot applies a single-slot InventorySlot update with the
+// ApplyInventorySlot applies a single-slot InventorySlot update with the
 // correct global slot offset for the container.
-func applyInventorySlot(b *bot.Bot, p *packet.InventorySlot) bool {
+func ApplyInventorySlot(b *bot.Bot, p *packet.InventorySlot) bool {
 	containerID := byte(0)
 	if c, ok := p.Container.Value(); ok {
 		containerID = c.ContainerID
 	}
-	offset := containerSlotOffset(containerID)
+	offset := ContainerSlotOffset(containerID)
 	globalSlot := offset + p.Slot
 
 	b.Mu.Lock()
@@ -262,27 +262,28 @@ func applyInventorySlot(b *bot.Bot, p *packet.InventorySlot) bool {
 	return heldItemChanged(before, heldItemStateLocked(b))
 }
 
-// coveredSlotSet returns the set of global slot indices that a container
+// CoveredSlotSet returns the set of global slot indices that a container
 // owns. Used to clear stale entries before applying a fresh InventoryContent
 // update for that container.
-func coveredSlotSet(containerID byte) map[uint32]struct{} {
+func CoveredSlotSet(containerID byte) map[uint32]struct{} {
 	switch containerID {
 	case protocol.ContainerHotBar:
-		return slotRange(0, 9) // 9 hotbar slots
+		return SlotRange(0, 9) // 9 hotbar slots
 	case protocol.ContainerInventory:
-		return slotRange(9, 36) // 27 main inventory slots
+		return SlotRange(9, 36) // 27 main inventory slots
 	case protocol.ContainerArmor:
-		return slotRange(36, 40) // 4 armor slots
+		return SlotRange(36, 40) // 4 armor slots
 	case protocol.ContainerOffhand:
-		return slotRange(40, 41) // 1 offhand slot
+		return SlotRange(40, 41) // 1 offhand slot
 	case protocol.ContainerCombinedHotBarAndInventory:
-		return slotRange(0, 36) // 36 combined slots
+		return SlotRange(0, 36) // 36 combined slots
 	default:
 		return nil
 	}
 }
 
-func slotRange(start, end uint32) map[uint32]struct{} {
+// SlotRange returns the set of global slot indices in [start, end).
+func SlotRange(start, end uint32) map[uint32]struct{} {
 	m := make(map[uint32]struct{}, int(end-start))
 	for i := start; i < end; i++ {
 		m[i] = struct{}{}
@@ -290,14 +291,14 @@ func slotRange(start, end uint32) map[uint32]struct{} {
 	return m
 }
 
-// transactionSlotToGlobal maps a slot from an InventoryTransaction container
+// TransactionSlotToGlobal maps a slot from an InventoryTransaction container
 // action to the bot's global inventory slot index. InventoryTransaction uses
 // the same 0-35 hotbar+inventory layout as WindowIDInventory, but also
 // supports armor (WindowIDArmour) and offhand (WindowIDOffHand).
-func transactionSlotToGlobal(action protocol.InventoryAction) (uint32, bool) {
+func TransactionSlotToGlobal(action protocol.InventoryAction) (uint32, bool) {
 	switch windowIDValue(action.WindowID) {
 	case protocol.WindowIDInventory:
-		if action.InventorySlot >= playerInvSlotCount {
+		if action.InventorySlot >= PlayerInvSlotCount {
 			return 0, false
 		}
 		return action.InventorySlot, true
@@ -316,12 +317,12 @@ func transactionSlotToGlobal(action protocol.InventoryAction) (uint32, bool) {
 	}
 }
 
-// applyInventoryTransaction processes server-sent InventoryTransaction
+// ApplyInventoryTransaction processes server-sent InventoryTransaction
 // packets. These are used by many Bedrock servers (PMMP, Nukkit, vanilla) to
 // push inventory changes that don't fit into InventorySlot/InventoryContent,
 // most importantly item pickups from the ground. Each container action tells
 // us the destination slot and the new stack after the transaction.
-func applyInventoryTransaction(b *bot.Bot, p *packet.InventoryTransaction) bool {
+func ApplyInventoryTransaction(b *bot.Bot, p *packet.InventoryTransaction) bool {
 	// We only care about NormalTransactionData (or nil, which defaults to
 	// normal). Other transaction types (UseItem, ReleaseItem, etc.) describe
 	// player interactions and don't directly update persistent inventory slots.
@@ -352,10 +353,10 @@ func applyInventoryTransaction(b *bot.Bot, p *packet.InventoryTransaction) bool 
 			slog.Int("new_net_id", int(action.NewItem.Stack.NetworkID)),
 		)
 
-		if !isPlayerInventoryTransaction(action) {
+		if !IsPlayerInventoryTransaction(action) {
 			continue
 		}
-		globalSlot, ok := transactionSlotToGlobal(action)
+		globalSlot, ok := TransactionSlotToGlobal(action)
 		if !ok {
 			continue
 		}
@@ -392,19 +393,19 @@ func applyInventoryTransaction(b *bot.Bot, p *packet.InventoryTransaction) bool 
 	return heldItemChanged(before, heldItemStateLocked(b))
 }
 
-// stackResponseSlotOffset maps ItemStackResponse container slots to the bot's
+// StackResponseSlotOffset maps ItemStackResponse container slots to the bot's
 // global inventory slots. Unlike InventoryContent, ContainerInventory already
 // uses the combined 0..35 slot numbering in StackRequest responses.
-func stackResponseSlotOffset(containerID byte) uint32 {
+func StackResponseSlotOffset(containerID byte) uint32 {
 	if containerID == protocol.ContainerInventory || containerID == protocol.ContainerCombinedHotBarAndInventory {
 		return 0
 	}
-	return containerSlotOffset(containerID)
+	return ContainerSlotOffset(containerID)
 }
 
-// applyItemStackResponse applies authoritative slot updates from the server's
+// ApplyItemStackResponse applies authoritative slot updates from the server's
 // response to an ItemStackRequest.
-func applyItemStackResponse(b *bot.Bot, p *packet.ItemStackResponse) bool {
+func ApplyItemStackResponse(b *bot.Bot, p *packet.ItemStackResponse) bool {
 	b.Mu.Lock()
 	defer b.Mu.Unlock()
 	before := heldItemStateLocked(b)
@@ -439,14 +440,14 @@ func processItemStackResponse(b *bot.Bot, resp protocol.ItemStackResponse) {
 	updates := make([]bot.StackResponseUpdate, 0)
 	for _, container := range resp.ContainerInfo {
 		containerID := container.Container.ContainerID
-		offset := stackResponseSlotOffset(containerID)
+		offset := StackResponseSlotOffset(containerID)
 		for _, slotInfo := range container.SlotInfo {
 			updates = append(updates, bot.StackResponseUpdate{
 				ContainerID:    containerID,
 				Slot:           slotInfo.Slot,
 				StackNetworkID: slotInfo.StackNetworkID,
 			})
-			if isPlayerInventoryContainer(containerID) {
+			if IsPlayerInventoryContainer(containerID) {
 				globalSlot := offset + uint32(slotInfo.Slot)
 				applySlotUpdate(b, slotInfo, globalSlot, craftOutputNetID)
 			}

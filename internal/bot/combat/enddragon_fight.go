@@ -61,8 +61,8 @@ func (cm *CombatManager) dragonSituation(dragon *entity.Info, botPos mgl32.Vec3,
 		// The weapon that matters in this fight is the one that reaches a
 		// crystal, not the one that reaches a mob, so that is the one the plan
 		// is told about.
-		Weapon:    crystalChoice(inventory).Kind,
-		HasArrows: hasArrows(inventory),
+		Weapon:    CrystalChoice(inventory).Kind,
+		HasArrows: HasArrows(inventory),
 		Health:    health,
 		MaxHealth: maxHealth,
 	}
@@ -70,7 +70,7 @@ func (cm *CombatManager) dragonSituation(dragon *entity.Info, botPos mgl32.Vec3,
 	// a crystal the bot cannot reach yet is the reason to reposition, and
 	// reporting zero for it would look exactly like a crystal underfoot.
 	if nearest := PickCrystal(crystals, botPos, math.MaxFloat32); nearest != nil {
-		s.NearestCrystalDistance = horizontalDistance(botPos, nearest.Position)
+		s.NearestCrystalDistance = HorizontalDistance(botPos, nearest.Position)
 	}
 	return s
 }
@@ -112,7 +112,7 @@ func (cm *CombatManager) logDragonPlan(action DragonAction, s DragonSituation) {
 // fightCrystal makes a crystal the target: the fastest way to hurt the dragon
 // and the only thing that stops the healing.
 func (cm *CombatManager) fightCrystal(s DragonSituation, botPos mgl32.Vec3, dragon *entity.Info, crystals []*entity.Info) {
-	crystal := PickCrystal(crystals, botPos, crystalRange)
+	crystal := PickCrystal(crystals, botPos, CrystalRange)
 	if crystal == nil {
 		// The plan and the arena disagree: the last crystal went up between
 		// the reading and this line. Repositioning is always safe, and drawing
@@ -130,31 +130,31 @@ func (cm *CombatManager) fightCrystal(s DragonSituation, botPos mgl32.Vec3, drag
 		return
 	}
 
-	choice := crystalChoice(cm.slotNames())
+	choice := CrystalChoice(cm.slotNames())
 	if choice.Kind == WeaponNone {
 		cm.fightReposition(s, botPos, dragon, crystals)
 		return
 	}
 
 	cm.holdWeapon(choice)
-	cm.bot.LookAt(crystalAimPoint(botPos, crystal.Position))
+	cm.bot.LookAt(CrystalAimPoint(botPos, crystal.Position))
 	cm.fightCrystalGround(s, botPos, dragon, crystal.Position)
 	// Re-read the ammunition rather than trusting the reading the plan was
 	// made on: the whole reason the bow can be useless is that the arrows ran
 	// out, and that can happen between two ticks.
-	cm.shootRanged(choice, hasArrows(cm.slotNames()), crystal)
+	cm.shootRanged(choice, HasArrows(cm.slotNames()), crystal)
 }
 
 // fightCrystalGround is the standing-room half of a crystal shot: hold the
 // shooting band, give the space back if pushed into the crystal, and close if
 // the arrow would be spending too long in the air.
 func (cm *CombatManager) fightCrystalGround(s DragonSituation, botPos mgl32.Vec3, dragon *entity.Info, crystal mgl32.Vec3) {
-	hd := horizontalDistance(botPos, crystal)
+	hd := HorizontalDistance(botPos, crystal)
 	ground, moving := botPos, false
 	switch {
-	case hd < crystalBandMin:
-		ground, moving = retreatPoint(botPos, crystal, crystalBandMin), true
-	case hd > crystalBandMax:
+	case hd < CrystalBandMin:
+		ground, moving = RetreatPoint(botPos, crystal, CrystalBandMin), true
+	case hd > CrystalBandMax:
 		ground, moving = crystal, true
 	}
 
@@ -208,7 +208,7 @@ func (cm *CombatManager) fightRetreat(botPos mgl32.Vec3, dragon *entity.Info) {
 	if int(time.Now().Unix()/2)%2 == 1 {
 		side = -1
 	}
-	cm.bot.NavigateTo(dragonDodgePoint(botPos, dragon.Position, side))
+	cm.bot.NavigateTo(DragonDodgePoint(botPos, dragon.Position, side))
 	cm.bot.LookAt(dragon.Position)
 }
 

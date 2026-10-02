@@ -4,6 +4,8 @@ package gathering
 import (
 	"strings"
 	"time"
+
+	"github.com/sandertv/gophertunnel/minecraft/protocol"
 )
 
 type blockRule struct {
@@ -135,4 +137,44 @@ func (bm *BlockMiner) equippedToolName() string {
 	}
 	names := bot.GetItemNames()
 	return names[item.NetworkID]
+}
+
+// BreakDuration reports how long the bot must actually work on a block before
+// the server will let it predict the destroy.
+//
+// It is exported because three build paths were each sleeping a hardcoded
+// 300-500ms and calling that the break. A fixed sleep is right for exactly one
+// block: for obsidian it finishes the "break" long before the server agrees the
+// block is gone, and an early PredictDestroy on a server-authoritative host is
+// silently rejected — so the block survives, silently, forever.
+func BreakDuration(b BreakProbe, blockName string) time.Duration {
+	serverAuth := false
+	if sabd, ok := b.(interface{ ServerAuthBlockBreaking() bool }); ok {
+		serverAuth = sabd.ServerAuthBlockBreaking()
+	}
+	return sabdBreakDuration(serverAuth, blockName, heldToolName(b))
+}
+
+// BreakProbe is the part of a bot the break duration needs: what is in its hand,
+// and whether this host wants its destroys predicted.
+//
+// It is deliberately three methods wide rather than the full gathering.Bot. The
+// build paths hold a common.BotInterface, which is a smaller interface, and
+// widening it to satisfy a mining abstraction would have meant every builder
+// implementing mining methods it has no use for.
+type BreakProbe interface {
+	GetHeldItemSlot() uint32
+	GetInventorySlots() map[uint32]protocol.ItemStack
+	GetItemNames() map[int32]string
+}
+
+// heldToolName is equippedToolName for a bot rather than for a miner: the tool
+// in the hand is a property of the body, not of the thing doing the mining.
+func heldToolName(b BreakProbe) string {
+	slot := b.GetHeldItemSlot()
+	item, ok := b.GetInventorySlots()[slot]
+	if !ok || item.Count == 0 {
+		return ""
+	}
+	return b.GetItemNames()[item.NetworkID]
 }

@@ -15,6 +15,18 @@ import (
 	"github.com/sandertv/gophertunnel/minecraft/protocol/packet"
 )
 
+// Journey is the movement intent a caller can snapshot before a detour and put
+// back afterwards. The looter walks to item drops, which re-aims navigation
+// mid-journey; without a snapshot the sweep overwrites the caller's destination
+// and the journey it interrupted dies where the bot is standing.
+type Journey struct {
+	State        string
+	Target       mgl32.Vec3
+	TargetPlayer string
+	LookTarget   string
+	LookUntil    time.Time
+}
+
 type Bot interface {
 	GetCoords() mgl32.Vec3
 	WritePacket(pk packet.Packet) error
@@ -22,6 +34,8 @@ type Bot interface {
 	NavigateTo(pos mgl32.Vec3)
 	NavigateToBlock(x, y, z int32, tolerance float32) bool
 	StopMovement()
+	SnapshotJourney() Journey
+	RestoreJourney(j Journey)
 	LookAt(pos mgl32.Vec3)
 	SetTargetTolerance(t float32)
 	InjectAIEvent(msg string)
@@ -36,7 +50,24 @@ type Bot interface {
 	GetLocalWorldModel() entity.WorldModel
 	DropItem(name string, count int) error
 	GetBlockName(x, y, z int32) (string, bool)
+	// GetBlockNetworkID and HeldItemInstance are what scaffold.PlaceVerified
+	// needs to speak the vanilla placement sequence: the support block by its
+	// BDS wire ID, the held item with its stack network ID.
+	GetBlockNetworkID(x, y, z int32) (uint32, bool)
+	HeldItemInstance() (uint32, protocol.ItemInstance, bool)
 	FormatItemName(name string) string
+	TriggerEmoteFor(name string, ticks int)
+
+	// A real jump, and the two questions the scaffolder asks about it.
+	//
+	// TriggerEmoteFor above is the jump *emote* — the character springs and the
+	// body never leaves the floor. Placing a block under yourself needs the body
+	// to actually be off the ground, because the server refuses a placement into
+	// the cell the player is standing in, and only the movement loop can produce
+	// that jump. These three are how it is asked for.
+	RequestJump()
+	JumpRequested() bool
+	Grounded() bool
 }
 
 // serverAuthBreaking reports whether the bot's current server negotiated

@@ -76,12 +76,43 @@ func (cm *CombatManager) Tick(ctx context.Context) {
 	// Mob-specific movement comes before the weapon decision: a tactic that
 	// ends the fight (the creeper flee) must win over everything else in the
 	// tick.
-	plan := mobMovePlan(normalizedMobName(target), horizontalDistance(botPos, target.Position))
-	if plan.flee {
+	plan := MobMovePlan(normalizedMobName(target), HorizontalDistance(botPos, target.Position), cm.bot.Appetite())
+	if plan.Flee {
+		// Put something between the body and the blast before leaving, if there
+		// is time and a block to put. This is the composed answer rather than
+		// the reflex one: the reflex is "run", and running works, but a player
+		// who sees a creeper at two blocks drops a block first and walks away
+		// behind it.
+		//
+		// It is best-effort by construction. The placement goes through the
+		// confirmed path, so a bot with nothing to place, or with no time
+		// before the fuse, simply runs — which is the old behaviour, still
+		// correct, and never worse than what came before.
+		if plan.BlockUp {
+			if slot, _, held := cm.bot.FindScaffoldItem(); held {
+				if err := cm.bot.EquipItem(slot); err == nil {
+					if placed := cm.bot.PlaceShield(context.Background(), target.Position); placed {
+						cm.logger.Info("Tactic: dropped a block between the body and the threat",
+							"mob", normalizedMobName(target), "distance", dist)
+					}
+				}
+			} else {
+				cm.logger.Debug("Tactic: no block to put up, fleeing anyway",
+					"mob", normalizedMobName(target), "distance", dist)
+			}
+		}
 		cm.logger.Info("Tactic: disengaging and fleeing", "mob", normalizedMobName(target), "distance", dist)
 		cm.Disengage()
-		cm.bot.NavigateTo(retreatPoint(botPos, target.Position, plan.safeDistance))
+		cm.bot.NavigateTo(RetreatPoint(botPos, target.Position, plan.SafeDistance))
 		return
+	}
+
+	// HoldGround is the reckless disposition's answer to a creeper: stay and
+	// find out what happens. It is checked after the flee branch so a tier that
+	// both flees and holds ground still does the thing that keeps it alive.
+	if plan.HoldGround {
+		cm.logger.Info("Tactic: holding ground", "mob", normalizedMobName(target),
+			"distance", dist, "appetite", cm.bot.Appetite().String())
 	}
 
 	// What to hold, decided before anything else in the tick. Doing it here
@@ -103,8 +134,8 @@ func (cm *CombatManager) Tick(ctx context.Context) {
 	if ranged {
 		// A dropped arrow needs the aim lifted by the distance, or the shot
 		// lands in front of the target rather than in it.
-		aimPoint = bowAimPoint(botPos, target.Position)
-	} else if plan.look == LookFeet {
+		aimPoint = BowAimPoint(botPos, target.Position)
+	} else if plan.Look == LookFeet {
 		// Endermen take eye contact as a challenge, so aim at the feet while
 		// still tracking the target.
 		aimPoint = target.Position.Add(mgl32.Vec3{0, 0.2, 0})
@@ -178,25 +209,25 @@ func (cm *CombatManager) slotNames() map[uint32]string {
 // moveByPlan turns the mob tactic into movement: strafing inside a distance
 // band, holding the line outside it, or plain closing on the target when no
 // band applies.
-func (cm *CombatManager) moveByPlan(botPos, targetPos mgl32.Vec3, dist float32, plan movePlan) {
-	if plan.strafe && plan.bandMin > 0 {
-		hd := horizontalDistance(botPos, targetPos)
+func (cm *CombatManager) moveByPlan(botPos, targetPos mgl32.Vec3, dist float32, plan MovePlan) {
+	if plan.Strafe && plan.BandMin > 0 {
+		hd := HorizontalDistance(botPos, targetPos)
 		switch {
-		case hd < plan.bandMin:
+		case hd < plan.BandMin:
 			// Pushed inside the band: back away along the line.
-			cm.bot.NavigateTo(retreatPoint(botPos, targetPos, plan.bandMax))
+			cm.bot.NavigateTo(RetreatPoint(botPos, targetPos, plan.BandMax))
 			return
-		case hd > plan.bandMax:
+		case hd > plan.BandMax:
 			cm.bot.NavigateTo(targetPos)
 			return
-		case within(hd, plan.bandMin, plan.bandMax):
+		case within(hd, plan.BandMin, plan.BandMax):
 			sign := float32(1)
 			// Flip the strafe side every couple of seconds so the motion is
 			// not one predictable circle.
 			if int(time.Now().Unix()/2)%2 == 1 {
 				sign = -1
 			}
-			cm.bot.NavigateTo(strafePoint(botPos, targetPos, hd, sign))
+			cm.bot.NavigateTo(StrafePoint(botPos, targetPos, hd, sign))
 			return
 		}
 	}
@@ -210,13 +241,13 @@ func (cm *CombatManager) moveByPlan(botPos, targetPos mgl32.Vec3, dist float32, 
 // shootRanged runs the draw/hold/release state machine for the bow or
 // crossbow currently held. It is driven by the combat tick (~200ms), so the
 // draw is held across ticks rather than blocked on.
-func (cm *CombatManager) shootRanged(choice WeaponChoice, hasArrows bool, target *entity.Info) {
+func (cm *CombatManager) shootRanged(choice WeaponChoice, hasAmmo bool, target *entity.Info) {
 	cm.mu.Lock()
-	s := cm.shot
+	s := cm.Shot
 	cm.mu.Unlock()
 	now := time.Now()
 
-	switch planShot(choice.Kind, hasArrows, now, s) {
+	switch PlanShot(choice.Kind, hasAmmo, now, s) {
 	case ShotDraw:
 		cm.beginDraw(choice, now)
 	case ShotFire:
@@ -248,20 +279,20 @@ func (cm *CombatManager) beginDraw(choice WeaponChoice, now time.Time) {
 		return
 	}
 	cm.mu.Lock()
-	cm.shot.recordDraw(choice.Kind, choice.Slot, now)
+	cm.Shot.recordDraw(choice.Kind, choice.Slot, now)
 	cm.mu.Unlock()
 	cm.logger.Info("Drawing ranged weapon", "kind", choice.Kind.String())
 }
 
 // fireShot releases the draw, letting the arrow or bolt go. The head position
 // is the eye height, which is what the release is measured from.
-func (cm *CombatManager) fireShot(s shot, now time.Time, target *entity.Info) {
+func (cm *CombatManager) fireShot(s Shot, now time.Time, target *entity.Info) {
 	head := cm.bot.GetCoords().Add(mgl32.Vec3{0, 1.62, 0})
 	tx := &packet.InventoryTransaction{
 		TransactionData: &protocol.ReleaseItemTransactionData{
-			ActionType:  protocol.ReleaseItemActionRelease,
-			HotBarSlot:  safecast.To[int32](s.slot),
-			HeldItem:    protocol.ItemInstance{Stack: cm.bot.GetInventorySlots()[s.slot]},
+			ActionType:   protocol.ReleaseItemActionRelease,
+			HotBarSlot:   safecast.To[int32](s.Slot),
+			HeldItem:     protocol.ItemInstance{Stack: cm.bot.GetInventorySlots()[s.Slot]},
 			HeadPosition: head,
 		},
 	}
@@ -270,12 +301,12 @@ func (cm *CombatManager) fireShot(s shot, now time.Time, target *entity.Info) {
 		return
 	}
 	cm.mu.Lock()
-	cm.shot.recordRelease(now)
+	cm.Shot.recordRelease(now)
 	// A crossbow holds its bolt once loaded, so the next release fires
 	// instantly instead of paying the load time again.
-	cm.shot.loaded = s.kind == WeaponCrossbow
+	cm.Shot.Loaded = s.Kind == WeaponCrossbow
 	cm.mu.Unlock()
-	cm.logger.Info("Shot released", "target", target.Name, "kind", s.kind.String())
+	cm.logger.Info("Shot released", "target", target.Name, "kind", s.Kind.String())
 }
 
 // normalizedMobName is the target's mob name in the canonical form the tactic
@@ -287,10 +318,10 @@ func normalizedMobName(target *entity.Info) string {
 	return entity.NormalizeName(target.Type)
 }
 
-// horizontalDistance is the ground distance between two points, ignoring
+// HorizontalDistance is the ground distance between two points, ignoring
 // height: tactics care about how far the bot is across the ground, not
 // through the air.
-func horizontalDistance(a, b mgl32.Vec3) float32 {
+func HorizontalDistance(a, b mgl32.Vec3) float32 {
 	dx, dz := a.X()-b.X(), a.Z()-b.Z()
 	return float32(math.Sqrt(float64(dx*dx + dz*dz)))
 }
@@ -312,17 +343,17 @@ func (cm *CombatManager) situation(dist float32) Situation {
 	}
 
 	inventory := cm.slotNames()
-	s.HasArrows = hasArrows(inventory)
+	s.HasArrows = HasArrows(inventory)
 	s.Health, s.MaxHealth = cm.botHealth()
 	return s
 }
 
-// hasArrows looks for ammunition rather than assuming a bow implies one.
+// HasArrows looks for ammunition rather than assuming a bow implies one.
 //
 // A bow with nothing to shoot is a stick, and a bot that switches to it because
 // the target moved out of range and then stands there holding it is worse than
 // one that never switched.
-func hasArrows(inventory map[uint32]string) bool {
+func HasArrows(inventory map[uint32]string) bool {
 	for _, name := range inventory {
 		short := name
 		if i := strings.LastIndexByte(short, ':'); i >= 0 {

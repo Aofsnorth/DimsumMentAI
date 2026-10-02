@@ -110,6 +110,14 @@ func NewManager(bot Bot, logger *slog.Logger) *Manager {
 	}
 }
 
+// SetSmeltBudget overrides the wait for the smelt output. Production leaves the
+// budget zero and lets smeltTimeoutFor decide from the stack count; the override
+// exists so a test can shorten a wait that would otherwise be measured in
+// minutes.
+func (fm *Manager) SetSmeltBudget(budget time.Duration) {
+	fm.smeltBudget = budget
+}
+
 // IsFurnaceBlock reports whether a block name is a block that can be smelted
 // in: a furnace, blast furnace, or smoker, lit or unlit.
 //
@@ -135,7 +143,7 @@ func IsFurnaceBlock(name string) bool {
 // is a false with the reason logged. An action layer that reports a successful
 // smelt that never happened is worse than one that admits failure.
 func (fm *Manager) SmeltItem(ctx context.Context, itemName string) bool {
-	pos, ok := fm.findNearbyFurnace()
+	pos, ok := fm.FindNearbyFurnace()
 	if !ok {
 		fm.logger.Warn("SmeltItem: no furnace nearby", "item", itemName)
 		return false
@@ -167,9 +175,9 @@ func (fm *Manager) SmeltItem(ctx context.Context, itemName string) bool {
 	return fm.waitForOutput(ctx, windowID, rawName, rawCount)
 }
 
-// findNearbyFurnace returns the closest block that is actually a furnace, by
+// FindNearbyFurnace returns the closest block that is actually a furnace, by
 // name rather than by solidity.
-func (fm *Manager) findNearbyFurnace() (protocol.BlockPos, bool) {
+func (fm *Manager) FindNearbyFurnace() (protocol.BlockPos, bool) {
 	pos := fm.bot.GetCoords()
 	bx := int32(math.Floor(float64(pos.X())))
 	by := int32(math.Floor(float64(pos.Y())))

@@ -39,7 +39,7 @@ type LocalWorldModel struct {
 	targetX, targetY, targetZ int32
 }
 
-// packBlockKey encodes a block coordinate into a single int64 map key.
+// PackBlockKey encodes a block coordinate into a single int64 map key.
 //
 // The obvious implementation is fmt.Sprintf("%d,%d,%z"), and that is what this
 // used to do. It runs in the hottest path in the bot: IsSolid is called for
@@ -55,15 +55,15 @@ type LocalWorldModel struct {
 // This is NOT the same encoding as packKey in astar.go. That one packs 21-bit
 // fields and is never unpacked, so its range never mattered; block keys are
 // unpacked again during PurgeFalseSolidOverrides and need the real range.
-func packBlockKey(x, y, z int32) int64 {
+func PackBlockKey(x, y, z int32) int64 {
 	ux := uint64(int64(x)) & 0x3FFFFFF
 	uy := uint64(int64(y)) & 0xFFF
 	uz := uint64(int64(z)) & 0x3FFFFFF
 	return int64(uz | uy<<26 | ux<<38)
 }
 
-func unpackBlockKey(key int64) (x, y, z int32) {
-	// Read the fields back in the order packBlockKey wrote them.
+func UnpackBlockKey(key int64) (x, y, z int32) {
+	// Read the fields back in the order PackBlockKey wrote them.
 	uz := uint64(key) & 0x3FFFFFF
 	uy := (uint64(key) >> 26) & 0xFFF
 	ux := (uint64(key) >> 38) & 0x3FFFFFF
@@ -81,6 +81,102 @@ func unpackBlockKey(key int64) (x, y, z int32) {
 	return int32(ux), int32(uy), int32(uz)
 }
 
+// --- Read-only accessors for learned state ---------------------------------
+//
+// Reset() clears every learned fact at once so a dimension change cannot leave
+// the bot believing a Nether cell is solid. These accessors let that behaviour be
+// observed from outside the package without exporting the maps themselves and
+// handing callers a way to mutate them behind the mutex.
+
+// HasSolidOverride reports whether a persistent solid/passable override is
+// recorded for the cell.
+func (w *LocalWorldModel) HasSolidOverride(x, y, z int32) bool {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+	_, ok := w.solidBlocks[PackBlockKey(x, y, z)]
+	return ok
+}
+
+// HasPassableOverride reports whether a mined-or-placed passable override is
+// recorded for the cell.
+func (w *LocalWorldModel) HasPassableOverride(x, y, z int32) bool {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+	_, ok := w.passableBlocks[PackBlockKey(x, y, z)]
+	return ok
+}
+
+// HasHazardOverride reports whether a learned hazard is recorded for the cell.
+func (w *LocalWorldModel) HasHazardOverride(x, y, z int32) bool {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+	_, ok := w.hazardBlocks[PackBlockKey(x, y, z)]
+	return ok
+}
+
+// HasTempSolidOverride reports whether a stuck-recovery marker is recorded for
+// the cell.
+func (w *LocalWorldModel) HasTempSolidOverride(x, y, z int32) bool {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+	_, ok := w.tempSolidBlocks[PackBlockKey(x, y, z)]
+	return ok
+}
+
+// HasBodyClearance reports whether the bot's body volume is marked for the cell
+// this tick.
+func (w *LocalWorldModel) HasBodyClearance(x, y, z int32) bool {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+	return w.bodyClearance[PackBlockKey(x, y, z)]
+}
+
+// HasChunkQuerier reports whether a chunk source is attached. Reset must keep it:
+// without it the bot cannot see its own world at all.
+func (w *LocalWorldModel) HasChunkQuerier() bool {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+	return w.chunkQuerier != nil
+}
+
+// HasPathBounds reports whether the current trip's bounds are set. Reset must
+// keep them: they describe where the bot is going, not what the world is like.
+func (w *LocalWorldModel) HasPathBounds() bool {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+	return w.hasBounds
+}
+
+// unbreakableBlocks are blocks a bot must not plan a route through.
+//
+// Obsidian is the one that matters in practice. It is technically breakable —
+// about nine seconds with a diamond pickaxe, far longer without one — and
+// planning through it turns a fifteen-second detour into a multi-minute one that
+// the bot abandons halfway anyway. Bedrock is here too, and the portal blocks
+// and command blocks, which are walls rather than shortcuts.
+var unbreakableBlocks = map[string]bool{
+	"minecraft:bedrock":                 true,
+	"minecraft:obsidian":                true,
+	"minecraft:ancient_debris":          true,
+	"minecraft:nether_portal":           true,
+	"minecraft:end_portal":              true,
+	"minecraft:end_portal_frame":        true,
+	"minecraft:end_gateway":             true,
+	"minecraft:command_block":           true,
+	"minecraft:chain_command_block":     true,
+	"minecraft:repeating_command_block": true,
+	"minecraft:structure_block":         true,
+	"minecraft:barrier":                 true,
+}
+
+// IsBreakable reports whether a bot should plan to break a block to get through
+// it.
+//
+// It is asked at plan time, before anything has been tried, so "breakable" has
+// to mean "worth the detour" and not merely "has a hardness value". That is what
+// kept obsidian out of routes: the old check was only for bedrock, so a route
+// through an obsidian pillar looked perfectly reasonable to the planner and the
+// bot then stood in front of it for minutes.
 func (w *LocalWorldModel) IsBreakable(x, y, z int32) bool {
 	w.mu.RLock()
 	defer w.mu.RUnlock()
@@ -89,7 +185,7 @@ func (w *LocalWorldModel) IsBreakable(x, y, z int32) bool {
 		if loaded {
 			name, ok := blockNameFor(w.chunkQuerier, rid)
 			if ok {
-				return name != "minecraft:bedrock"
+				return !unbreakableBlocks[name]
 			}
 		}
 	}
@@ -120,7 +216,7 @@ func (w *LocalWorldModel) ClearBodyClearance() {
 // SetBodyClearance marks a block as non-solid for collision this tick only.
 func (w *LocalWorldModel) SetBodyClearance(x, y, z int32) {
 	w.mu.Lock()
-	w.bodyClearance[packBlockKey(x, y, z)] = true
+	w.bodyClearance[PackBlockKey(x, y, z)] = true
 	w.mu.Unlock()
 }
 
@@ -157,7 +253,7 @@ func (w *LocalWorldModel) SetPathBounds(start, target Node) {
 func (w *LocalWorldModel) SetSolid(x, y, z int32, solid bool) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	k := packBlockKey(x, y, z)
+	k := PackBlockKey(x, y, z)
 
 	if solid {
 		w.solidBlocks[k] = true
@@ -176,7 +272,7 @@ func (w *LocalWorldModel) PurgeFalseSolidOverrides() {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	for k := range w.passableBlocks {
-		x, y, z := unpackBlockKey(k)
+		x, y, z := UnpackBlockKey(k)
 		if w.chunkSaysSolid(x, y, z) {
 			delete(w.passableBlocks, k)
 			delete(w.solidBlocks, k)
@@ -186,7 +282,7 @@ func (w *LocalWorldModel) PurgeFalseSolidOverrides() {
 		if solid {
 			continue
 		}
-		x, y, z := unpackBlockKey(k)
+		x, y, z := UnpackBlockKey(k)
 		if w.chunkSaysSolid(x, y, z) {
 			delete(w.passableBlocks, k)
 			delete(w.solidBlocks, k)
@@ -223,13 +319,13 @@ func (w *LocalWorldModel) Reset() {
 func (w *LocalWorldModel) SetTempSolid(x, y, z int32, duration time.Duration) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	w.tempSolidBlocks[packBlockKey(x, y, z)] = time.Now().Add(duration)
+	w.tempSolidBlocks[PackBlockKey(x, y, z)] = time.Now().Add(duration)
 }
 
 func (w *LocalWorldModel) IsSolid(x, y, z int32) bool {
 	w.mu.RLock()
 	defer w.mu.RUnlock()
-	k := packBlockKey(x, y, z)
+	k := PackBlockKey(x, y, z)
 
 	// Bot body volume wins over everything else this tick. If the bot just
 	// got marked tempSolid at its own position (stuck-recovery), treating the
@@ -290,7 +386,7 @@ func (w *LocalWorldModel) IsLoaded(x, y, z int32) bool {
 
 	// Explicit overrides are knowledge in their own right: the bot mined or
 	// placed these cells, or a stuck-recovery penalty marked them.
-	k := packBlockKey(x, y, z)
+	k := PackBlockKey(x, y, z)
 	if w.solidBlocks[k] || w.passableBlocks[k] || w.hazardBlocks[k] {
 		return true
 	}
@@ -310,7 +406,7 @@ func (w *LocalWorldModel) IsLoaded(x, y, z int32) bool {
 func (w *LocalWorldModel) SetHazard(x, y, z int32, hazard bool) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	k := packBlockKey(x, y, z)
+	k := PackBlockKey(x, y, z)
 	if hazard {
 		w.hazardBlocks[k] = true
 	} else {
@@ -355,7 +451,7 @@ func (w *LocalWorldModel) IsHazard(x, y, z int32) bool {
 	defer w.mu.RUnlock()
 
 	// 1. Check self-learned hazards
-	if w.hazardBlocks[packBlockKey(x, y, z)] {
+	if w.hazardBlocks[PackBlockKey(x, y, z)] {
 		return true
 	}
 

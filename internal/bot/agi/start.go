@@ -40,19 +40,19 @@ func StartLoop(ctx context.Context, b *bot.Bot) {
 	} else {
 		b.Logger.Info("unprompted speech is now owned by the AGI brain")
 	}
-	installEpisodeHooks(b, runner)
+	InstallEpisodeHooks(b, runner)
 	go runner.Run(ctx)
 }
 
-// installEpisodeHooks wires the chat layer to the brain.
+// InstallEpisodeHooks wires the chat layer to the brain.
 //
 // A brief arrives as a chat message, so without this the parser exists and
 // nothing ever calls it — which is the shape of a feature that gets described,
 // built, tested, and then quietly does nothing.
-func installEpisodeHooks(b *bot.Bot, r *Runner) {
+func InstallEpisodeHooks(b *bot.Bot, r *Runner) {
 	b.Mu.Lock()
 	b.AutonomyContextFunc = func() string {
-		return "Current goal: " + describeGoal(r.currentGoal()) + "\nActive plan:\n" + renderPlan(r.currentPlan())
+		return "Current goal: " + DescribeGoal(r.CurrentGoal()) + "\nActive plan:\n" + RenderPlan(r.CurrentPlan())
 	}
 	b.Mu.Unlock()
 	b.BeginEpisodeFunc = func(line string, now time.Time) (int, time.Duration, string, bool) {
@@ -65,7 +65,7 @@ func installEpisodeHooks(b *bot.Bot, r *Runner) {
 	b.SuspendFunc = r.Suspend
 	b.EndEpisodeFunc = r.EndEpisode
 	b.OneBlockFunc = func(nearBlocks string) string {
-		return r.oneBlockStyle(nearBlocks)
+		return r.OneBlockStyle(nearBlocks)
 	}
 }
 

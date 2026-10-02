@@ -76,7 +76,7 @@ func (e *Explorer) ExploreSpiral(ctx context.Context, maxRadius int, waypointInt
 	angle := 0.0
 	radius := float64(waypointInterval)
 
-	for radius <= float64(maxRadius) {
+	for radius <= float64(maxRadius) && e.IsExploring() {
 		select {
 		case <-ctx.Done():
 			e.bot.ReportActionStatus("", event.ActionStatus{
@@ -105,7 +105,7 @@ func (e *Explorer) ExploreSpiral(ctx context.Context, maxRadius int, waypointInt
 		e.mu.Unlock()
 
 		if !visited {
-			if e.walkWaypoint(ctx, target, 3*time.Second) {
+			if e.WalkWaypoint(ctx, target, 3*time.Second) {
 				waypoints++
 			}
 
@@ -159,13 +159,6 @@ func (e *Explorer) ExploreRandom(ctx context.Context, duration time.Duration) in
 	for time.Now().Before(deadline) && e.IsExploring() {
 		select {
 		case <-ctx.Done():
-			e.bot.ReportActionStatus("", event.ActionStatus{
-				Action:  "explore",
-				Item:    "random",
-				Count:   waypoints,
-				Success: false,
-				Error:   "dihentikan",
-			})
 			return waypoints
 		default:
 		}
@@ -180,19 +173,15 @@ func (e *Explorer) ExploreRandom(ctx context.Context, duration time.Duration) in
 		z := pos.Z() + float32(math.Sin(angle))*float32(dist)
 		target := mgl32.Vec3{x, pos.Y(), z}
 
-		if e.walkWaypoint(ctx, target, 4*time.Second) {
+		if e.WalkWaypoint(ctx, target, 4*time.Second) {
 			waypoints++
 		}
 
 		e.logger.Info("Random exploration waypoint", "pos", target)
 	}
 
-	e.bot.ReportActionStatus("", event.ActionStatus{
-		Action:  "explore",
-		Item:    "random",
-		Count:   waypoints,
-		Success: waypoints > 0,
-	})
+	// The action caller reports results. Background wandering must not start
+	// another LLM conversation outside the AGI speech gate.
 	return waypoints
 }
 
@@ -228,21 +217,14 @@ func (e *Explorer) ExploreDirection(ctx context.Context, direction string, dista
 	case "southwest", "barat_daya":
 		angle = 135
 	default:
-		e.bot.ReportActionStatus("", event.ActionStatus{
-			Action:  "exploredir",
-			Item:    direction,
-			Count:   0,
-			Success: false,
-			Error:   "arah tidak dikenal",
-		})
 		return 0
 	}
 
 	waypoints := 0
 	pos := e.bot.GetCoords()
-	stepSize := 30
+	stepSize := 8
 
-	for traveled := 0; traveled < distance; traveled += stepSize {
+	for traveled := stepSize; traveled <= distance && e.IsExploring(); traveled += stepSize {
 		select {
 		case <-ctx.Done():
 			return waypoints
@@ -253,17 +235,11 @@ func (e *Explorer) ExploreDirection(ctx context.Context, direction string, dista
 		z := pos.Z() + float32(math.Sin(angle*math.Pi/180))*float32(traveled)
 		target := mgl32.Vec3{x, pos.Y(), z}
 
-		if e.walkWaypoint(ctx, target, 4*time.Second) {
+		if e.WalkWaypoint(ctx, target, 4*time.Second) {
 			waypoints++
 		}
 	}
 
-	e.bot.ReportActionStatus("", event.ActionStatus{
-		Action:  "exploredir",
-		Item:    direction,
-		Count:   waypoints,
-		Success: waypoints > 0,
-	})
 	return waypoints
 }
 
@@ -333,8 +309,8 @@ func (e *Explorer) Stop() {
 	e.bot.StopMovement()
 }
 
-// walkWaypoint counts arrival, never an issued navigation request.
-func (e *Explorer) walkWaypoint(ctx context.Context, target mgl32.Vec3, budget time.Duration) bool {
+// WalkWaypoint counts arrival, never an issued navigation request.
+func (e *Explorer) WalkWaypoint(ctx context.Context, target mgl32.Vec3, budget time.Duration) bool {
 	if ctx.Err() != nil || !e.IsExploring() {
 		return false
 	}
@@ -350,19 +326,20 @@ func (e *Explorer) walkWaypoint(ctx context.Context, target mgl32.Vec3, budget t
 		case <-ctx.Done():
 			return false
 		case <-timer.C:
-			return waypointReached(origin, e.bot.GetCoords(), target)
+			return WaypointReached(origin, e.bot.GetCoords(), target)
 		case <-ticker.C:
 			if !e.IsExploring() {
 				return false
 			}
-			if waypointReached(origin, e.bot.GetCoords(), target) {
+			if WaypointReached(origin, e.bot.GetCoords(), target) {
 				return true
 			}
 		}
 	}
 }
 
-func waypointReached(origin, current, target mgl32.Vec3) bool {
+// WaypointReached reports whether the bot both moved and arrived.
+func WaypointReached(origin, current, target mgl32.Vec3) bool {
 	return current.Sub(origin).Len() >= 1 && current.Sub(target).Len() <= 2
 }
 

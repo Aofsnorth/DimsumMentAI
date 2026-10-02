@@ -1,6 +1,7 @@
 package combat
 
 import (
+	"context"
 	"log/slog"
 	"sync"
 	"time"
@@ -9,7 +10,9 @@ import (
 	"bedrock-ai/internal/bot/entity"
 	"bedrock-ai/internal/event"
 
+	"bedrock-ai/internal/bot/affordance"
 	"github.com/go-gl/mathgl/mgl32"
+
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
 	"github.com/sandertv/gophertunnel/minecraft/protocol/packet"
 )
@@ -33,6 +36,18 @@ type Bot interface {
 	GetLocalWorldModel() entity.WorldModel
 	GetBlockName(x, y, z int32) (string, bool)
 	FindPlayer(username string) (uint64, mgl32.Vec3, bool)
+	// Appetite is how much risk the bot takes on purpose. It is read per tick
+	// rather than captured at construction because the model moves it, and a
+	// tactic computed once would be the same rigidity this replaced.
+	Appetite() affordance.Appetite
+	// FindScaffoldItem locates a block the bot could put down, which is what a
+	// composed defence needs before it can compose anything.
+	FindScaffoldItem() (uint32, protocol.ItemStack, bool)
+	// PlaceShield puts a block between the body and a threat. It reports
+	// whether the server actually placed it, so the caller can tell a wall from
+	// a wish — which matters here, because the alternative to the wall is
+	// running, and running is the safe answer either way.
+	PlaceShield(ctx context.Context, threat mgl32.Vec3) bool
 }
 
 // Weapon priorities for automatic equipment
@@ -50,11 +65,11 @@ type CombatManager struct {
 	inCombat     bool
 	friendlyMode bool
 	shieldUp     bool
-	mu         sync.Mutex
-	lastAttack time.Time
-	// shot is the state of the ranged shot currently in flight: the draw is
+	mu           sync.Mutex
+	lastAttack   time.Time
+	// Shot is the state of the ranged shot currently in flight: the draw is
 	// held across several ticks before the release goes out.
-	shot        shot
+	Shot Shot
 	// dragonAction is the posture the End fight last chose. It is kept only so
 	// the fight can log the moment the plan changes instead of logging the same
 	// line five times a second, which is how a log becomes unreadable.
@@ -96,6 +111,23 @@ func (cm *CombatManager) InCombat() bool {
 	cm.mu.Lock()
 	defer cm.mu.Unlock()
 	return cm.inCombat
+}
+
+// PvpTargetForTest reports the retained PVP username, so a test can prove the
+// engagement was resolved by name and not by a stale entity ID.
+func (cm *CombatManager) PvpTargetForTest() string {
+	cm.mu.Lock()
+	defer cm.mu.Unlock()
+	return cm.pvpTarget
+}
+
+// SetShotDrawStartForTest backdates the in-flight draw under the manager lock, so
+// a test can reach the release half of the draw/hold/release state machine
+// without sleeping out the real 1.1 s draw.
+func (cm *CombatManager) SetShotDrawStartForTest(at time.Time) {
+	cm.mu.Lock()
+	defer cm.mu.Unlock()
+	cm.Shot.SetDrawStartForTest(at)
 }
 
 func (cm *CombatManager) EngageTarget(id uint64) {

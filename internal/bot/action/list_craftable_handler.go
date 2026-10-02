@@ -11,10 +11,13 @@ import (
 func handleListCraftable(b *bot.Bot, param, user string) {
 	showAll := strings.Contains(strings.ToLower(param), "all")
 
-	// Check if bot has crafting table in inventory
-	b.Mu.Lock()
-	inv := b.InventoryMap
-	names := b.ItemNames
+	// The snapshot accessors, not the raw fields. Aliasing b.InventoryMap and
+	// iterating it reads as the bug it used to be in ListCraftableItems, where
+	// the unlock came before the loop and the map detector killed the process.
+	// Here the iteration happens to be inside the lock, but the accessors copy
+	// first so that stops being load-bearing.
+	inv := b.GetInventorySlots()
+	names := b.GetItemNames()
 	hasCraftingTable := false
 	for _, stack := range inv {
 		if stack.Count > 0 {
@@ -25,7 +28,6 @@ func handleListCraftable(b *bot.Bot, param, user string) {
 			}
 		}
 	}
-	b.Mu.Unlock()
 
 	craftable := b.ListCraftableItems(hasCraftingTable)
 

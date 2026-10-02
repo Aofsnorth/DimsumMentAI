@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"bedrock-ai/internal/bot/building/common"
+	"bedrock-ai/internal/bot/gathering"
 	"bedrock-ai/internal/bot/movement/animation"
 	"bedrock-ai/internal/event"
 	"bedrock-ai/internal/safecast"
@@ -135,14 +136,29 @@ func (ba *BuilderAgent) executeUndoLoop(ctx context.Context, count int) {
 		ba.bot.LookAt(mgl32.Vec3{float32(entry.X) + 0.5, float32(entry.Y) + 0.5, float32(entry.Z) + 0.5})
 		time.Sleep(100 * time.Millisecond)
 
-		_ = ba.bot.WritePacket(animation.MineSwing(ba.bot.GetEntityRuntimeID()))
+		// The arm swings on the shared rhythm and for the block's real break
+		// time, not for a fixed 300ms. See animation/rhythm.go: a fixed interval
+		// restarts the viewer's arm cycle before it finishes, and a fixed sleep
+		// predicts the destroy early on anything slower than dirt, which a
+		// server-authoritative host rejects without a word.
+		centre := mgl32.Vec3{float32(entry.X) + 0.5, float32(entry.Y) + 0.5, float32(entry.Z) + 0.5}
+		blockName, _ := ba.bot.GetBlockName(pos.X(), pos.Y(), pos.Z())
+		runtimeID := ba.bot.GetEntityRuntimeID()
 		_ = ba.bot.WritePacket(&packet.PlayerAction{
-			EntityRuntimeID: ba.bot.GetEntityRuntimeID(),
+			EntityRuntimeID: runtimeID,
 			ActionType:      protocol.PlayerActionStartBreak,
 			BlockPosition:   pos,
 			BlockFace:       1,
 		})
-		time.Sleep(300 * time.Millisecond)
+		for i, beat := range animation.Beats(gathering.BreakDuration(ba.bot, blockName), centre) {
+			time.Sleep(beat.Wait)
+			if i == 0 {
+				// The first beat is the wind-up; the arm is still being raised.
+				continue
+			}
+			_ = ba.bot.WritePacket(animation.MineSwing(runtimeID))
+			ba.bot.LookAt(beat.Aim)
+		}
 		_ = ba.bot.WritePacket(&packet.PlayerAction{
 			EntityRuntimeID: ba.bot.GetEntityRuntimeID(),
 			ActionType:      protocol.PlayerActionCrackBreak,

@@ -10,26 +10,28 @@ import (
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
 )
 
-type ingredientPick struct {
-	slot            uint32
-	count           int
-	ingredientIndex int
+// IngredientPick is one resolved recipe ingredient: the inventory slot it will
+// be taken from, how many items to take, and which recipe ingredient it serves.
+type IngredientPick struct {
+	Slot            uint32
+	Count           int
+	IngredientIndex int
 }
 
-type ingredientSourceSnapshot struct {
+type IngredientSourceSnapshot struct {
 	stack    protocol.ItemStack
 	consumed int
 }
 
-func snapshotIngredientSources(inventory map[uint32]protocol.ItemStack, picks []ingredientPick) map[uint32]ingredientSourceSnapshot {
-	sources := make(map[uint32]ingredientSourceSnapshot, len(picks))
+func SnapshotIngredientSources(inventory map[uint32]protocol.ItemStack, picks []IngredientPick) map[uint32]IngredientSourceSnapshot {
+	sources := make(map[uint32]IngredientSourceSnapshot, len(picks))
 	for _, pick := range picks {
-		source, exists := sources[pick.slot]
+		source, exists := sources[pick.Slot]
 		if !exists {
-			source.stack = inventory[pick.slot]
+			source.stack = inventory[pick.Slot]
 		}
-		source.consumed += pick.count
-		sources[pick.slot] = source
+		source.consumed += pick.Count
+		sources[pick.Slot] = source
 	}
 	return sources
 }
@@ -37,10 +39,10 @@ func snapshotIngredientSources(inventory map[uint32]protocol.ItemStack, picks []
 // snapshotIngredientSourcesFromRecipe builds ingredient source snapshots from
 // the recipe's ingredient descriptors rather than from pick plans, for use with
 // AutoCraft where we don't plan individual grid placements.
-func snapshotIngredientSourcesFromRecipe(inv map[uint32]protocol.ItemStack, names map[int32]string, ingredients []protocol.ItemDescriptorCount, crafts int) map[uint32]ingredientSourceSnapshot {
-	sources := make(map[uint32]ingredientSourceSnapshot)
+func snapshotIngredientSourcesFromRecipe(inv map[uint32]protocol.ItemStack, names map[int32]string, ingredients []protocol.ItemDescriptorCount, crafts int) map[uint32]IngredientSourceSnapshot {
+	sources := make(map[uint32]IngredientSourceSnapshot)
 	for _, ing := range ingredients {
-		targetName, networkID := resolveIngredientIdentity(ing.Descriptor, names)
+		targetName, networkID := ResolveIngredientIdentity(ing.Descriptor, names)
 		if targetName == "" && networkID == 0 {
 			continue
 		}
@@ -52,7 +54,7 @@ func snapshotIngredientSourcesFromRecipe(inv map[uint32]protocol.ItemStack, name
 			itemName := names[item.NetworkID]
 			matched := false
 			if targetName != "" {
-				matched = itemName != "" && itemNameMatches(itemName, targetName)
+				matched = itemName != "" && ItemNameMatches(itemName, targetName)
 			} else {
 				matched = item.NetworkID == safecast.To[int32](networkID)
 			}
@@ -62,17 +64,17 @@ func snapshotIngredientSourcesFromRecipe(inv map[uint32]protocol.ItemStack, name
 			if _, exists := sources[slot]; exists {
 				continue
 			}
-			sources[slot] = ingredientSourceSnapshot{stack: item, consumed: needed}
+			sources[slot] = IngredientSourceSnapshot{stack: item, consumed: needed}
 			break
 		}
 	}
 	return sources
 }
 
-// reconcileCraftIngredientCounts repairs missing client-side predictions after
+// ReconcileCraftIngredientCounts repairs missing client-side predictions after
 // an accepted craft. ItemStackResponse remains authoritative: counts already at
 // or below the expected value are preserved.
-func reconcileCraftIngredientCounts(inventory map[uint32]protocol.ItemStack, stackNetworkIDs map[uint32]int32, sources map[uint32]ingredientSourceSnapshot) {
+func ReconcileCraftIngredientCounts(inventory map[uint32]protocol.ItemStack, stackNetworkIDs map[uint32]int32, sources map[uint32]IngredientSourceSnapshot) {
 	for slot, source := range sources {
 		expected := int(source.stack.Count) - source.consumed
 		if expected < 0 {
@@ -93,7 +95,7 @@ func reconcileCraftIngredientCounts(inventory map[uint32]protocol.ItemStack, sta
 	}
 }
 
-// planIngredientConsumption resolves each recipe ingredient to inventory slots
+// PlanIngredientConsumption resolves each recipe ingredient to inventory slots
 // containing matching items and computes per-slot consume counts. Returns an
 // error if any ingredient cannot be satisfied for `times` repetitions.
 //
@@ -102,8 +104,8 @@ func reconcileCraftIngredientCounts(inventory map[uint32]protocol.ItemStack, sta
 // network ID than oak_log in the inventory). We therefore match primarily by
 // item name, falling back to strict network ID equality only when the name
 // cannot be resolved.
-func consumeMatchingSlots(inv map[uint32]protocol.ItemStack, itemNames map[int32]string, remaining map[uint32]int, need int, match func(itemName string, itemNetID int32) bool) ([]ingredientPick, int) {
-	picks := make([]ingredientPick, 0)
+func consumeMatchingSlots(inv map[uint32]protocol.ItemStack, itemNames map[int32]string, remaining map[uint32]int, need int, match func(itemName string, itemNetID int32) bool) ([]IngredientPick, int) {
+	picks := make([]IngredientPick, 0)
 	for slot, item := range inv {
 		if remaining[slot] <= 0 {
 			continue
@@ -116,7 +118,7 @@ func consumeMatchingSlots(inv map[uint32]protocol.ItemStack, itemNames map[int32
 		if take > need {
 			take = need
 		}
-		picks = append(picks, ingredientPick{slot: slot, count: take})
+		picks = append(picks, IngredientPick{Slot: slot, Count: take})
 		remaining[slot] -= take
 		need -= take
 		if need <= 0 {
@@ -126,7 +128,7 @@ func consumeMatchingSlots(inv map[uint32]protocol.ItemStack, itemNames map[int32
 	return picks, need
 }
 
-func planIngredientConsumption(inv map[uint32]protocol.ItemStack, itemNames map[int32]string, ingredients []protocol.ItemDescriptorCount, times int) ([]ingredientPick, error) {
+func PlanIngredientConsumption(inv map[uint32]protocol.ItemStack, itemNames map[int32]string, ingredients []protocol.ItemDescriptorCount, times int) ([]IngredientPick, error) {
 	// Track per-slot remaining count as we consume so multiple ingredients
 	// can share a slot without overcounting.
 	remaining := make(map[uint32]int, len(inv))
@@ -134,24 +136,24 @@ func planIngredientConsumption(inv map[uint32]protocol.ItemStack, itemNames map[
 		remaining[slot] = int(item.Count)
 	}
 
-	picks := make([]ingredientPick, 0, len(ingredients))
+	picks := make([]IngredientPick, 0, len(ingredients))
 	for ingredientIndex, ing := range ingredients {
 		need := int(ing.Count) * times
 		if need <= 0 {
 			continue
 		}
 
-		targetName, networkID := resolveIngredientIdentity(ing.Descriptor, itemNames)
+		targetName, networkID := ResolveIngredientIdentity(ing.Descriptor, itemNames)
 		if targetName == "" && networkID == 0 {
 			// Non-default/tag/MoLang descriptors that we can't resolve. The
 			// server will handle consumption itself for these.
 			continue
 		}
 
-		var matched []ingredientPick
+		var matched []IngredientPick
 		if targetName != "" {
 			matched, need = consumeMatchingSlots(inv, itemNames, remaining, need, func(itemName string, itemNetID int32) bool {
-				return itemName != "" && itemNameMatches(itemName, targetName)
+				return itemName != "" && ItemNameMatches(itemName, targetName)
 			})
 		} else {
 			matched, need = consumeMatchingSlots(inv, itemNames, remaining, need, func(itemName string, itemNetID int32) bool {
@@ -159,7 +161,7 @@ func planIngredientConsumption(inv map[uint32]protocol.ItemStack, itemNames map[
 			})
 		}
 		for i := range matched {
-			matched[i].ingredientIndex = ingredientIndex
+			matched[i].IngredientIndex = ingredientIndex
 		}
 		picks = append(picks, matched...)
 
@@ -170,12 +172,12 @@ func planIngredientConsumption(inv map[uint32]protocol.ItemStack, itemNames map[
 	return picks, nil
 }
 
-// resolveIngredientIdentity extracts a human-readable name and/or a network ID
+// ResolveIngredientIdentity extracts a human-readable name and/or a network ID
 // from an item descriptor. DefaultItemDescriptor now carries the namespaced item
 // identifier instead of a network ID, so the identifier is matched against the
 // names the bot knows. ItemTagItemDescriptor returns the tag name. Other
 // descriptors return empty values and are treated as server-handled.
-func resolveIngredientIdentity(descriptor protocol.ItemDescriptor, itemNames map[int32]string) (string, int32) {
+func ResolveIngredientIdentity(descriptor protocol.ItemDescriptor, itemNames map[int32]string) (string, int32) {
 	switch desc := descriptor.(type) {
 	case *protocol.DefaultItemDescriptor:
 		if desc.Name == "" {
@@ -227,11 +229,11 @@ func itemNameMatchesIdentifier(itemName, identifier string) bool {
 	return normalise(itemName) == normalise(identifier)
 }
 
-// stackRequestItemFromStack converts an item stack into the name-addressed form
+// StackRequestItemFromStack converts an item stack into the name-addressed form
 // used by craft-result stack request actions. Item stacks are identified by
 // network ID rather than name, so the caller supplies the resolved name. Names
 // that cannot be described this way are rejected.
-func stackRequestItemFromStack(stack protocol.ItemStack, name string) (protocol.StackRequestItem, bool) {
+func StackRequestItemFromStack(stack protocol.ItemStack, name string) (protocol.StackRequestItem, bool) {
 	if name == "" {
 		return protocol.StackRequestItem{}, false
 	}
@@ -281,7 +283,7 @@ func normalizeEquivalentName(name string) string {
 	return name
 }
 
-// itemNameMatches reports whether an inventory item name satisfies a recipe
+// ItemNameMatches reports whether an inventory item name satisfies a recipe
 // ingredient. It accepts exact matches, prefixed variants ("minecraft:oak_log"
 // vs "oak_log"), and shared prefixes (e.g. any "*_log" for a generic "log"
 // ingredient). The comparison is case-insensitive.
@@ -289,7 +291,7 @@ func normalizeEquivalentName(name string) string {
 // Plank variants are treated as interchangeable: a recipe requiring
 // "warped_planks" is satisfied by "oak_planks" (and vice-versa), since
 // Bedrock crafting tables accept any plank type for stick/plank recipes.
-func itemNameMatches(itemName, ingredientName string) bool {
+func ItemNameMatches(itemName, ingredientName string) bool {
 	itemName = normalizeEquivalentName(itemName)
 	ingredientName = normalizeEquivalentName(ingredientName)
 	if itemName == ingredientName {
@@ -336,7 +338,7 @@ func findFirstEmptyPlayerSlot(inv map[uint32]protocol.ItemStack) (uint32, bool) 
 func (b *Bot) IngredientName(ing protocol.ItemDescriptorCount) string {
 	b.Mu.Lock()
 	defer b.Mu.Unlock()
-	name, _ := resolveIngredientIdentity(ing.Descriptor, b.ItemNames)
+	name, _ := ResolveIngredientIdentity(ing.Descriptor, b.ItemNames)
 	return name
 }
 
@@ -351,7 +353,7 @@ func (b *Bot) CountItemLike(name string) int {
 			continue
 		}
 		itemName := b.ItemNames[item.NetworkID]
-		if itemName != "" && itemNameMatches(itemName, name) {
+		if itemName != "" && ItemNameMatches(itemName, name) {
 			total += int(item.Count)
 		}
 	}

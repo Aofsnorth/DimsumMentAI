@@ -310,7 +310,24 @@ func (b *Bot) findContainerSlotFor(items map[uint32]protocol.ItemInstance, itemN
 // container into the bot's inventory through a server-authoritative
 // ItemStackRequest. The authoritative response updates InventoryMap the same
 // way crafting does, so no local guessing happens.
+//
+// The window ID doubles as the container ID here, which is correct for a chest
+// and for nothing else. A station resolves its slots against per-station
+// protocol constants, so those callers use TakeFromContainerSlotIn.
 func (b *Bot) TakeFromContainerSlot(windowID byte, slot uint32, count int, stackNetID int32, itemName string) error {
+	return b.TakeFromContainerSlotIn(windowID, slot, count, stackNetID, itemName)
+}
+
+// TakeFromContainerSlotIn is TakeFromContainerSlot for callers that address a
+// container by its protocol container ID rather than by its window ID.
+//
+// The distinction is the server's, not this bot's. A chest's container ID is
+// the window ID the server assigned, so the two coincide. A station does not
+// work that way: the server matches StackRequestSlotInfo.Container.ContainerID
+// against constants like protocol.ContainerAnvilInput and answers an
+// unrecognised container with a rejection, so a station transfer addressed by
+// window ID is refused while looking for all like it worked.
+func (b *Bot) TakeFromContainerSlotIn(containerID byte, slot uint32, count int, stackNetID int32, itemName string) error {
 	if count <= 0 {
 		count = MaxStackSize
 	}
@@ -322,7 +339,7 @@ func (b *Bot) TakeFromContainerSlot(windowID byte, slot uint32, count int, stack
 		return fmt.Errorf("inventory full, cannot take %s", itemName)
 	}
 	source := protocol.StackRequestSlotInfo{
-		Container:      protocol.FullContainerName{ContainerID: windowID},
+		Container:      protocol.FullContainerName{ContainerID: containerID},
 		Slot:           byte(slot),
 		StackNetworkID: stackNetID,
 	}
@@ -348,7 +365,17 @@ func (b *Bot) TakeFromContainerSlot(windowID byte, slot uint32, count int, stack
 // authoritative stack ID already in that container slot (0 when empty), which
 // the server cross-checks; sending the item type there instead makes it reject
 // the move as an unknown stack.
+//
+// As with TakeFromContainerSlot, the window ID is correct as a container ID for
+// a chest and for nothing else; stations use PlaceIntoContainerSlotIn.
 func (b *Bot) PlaceIntoContainerSlot(windowID byte, containerSlot uint32, destStackNetID int32, srcSlot uint32, count int) error {
+	return b.PlaceIntoContainerSlotIn(windowID, containerSlot, destStackNetID, srcSlot, count)
+}
+
+// PlaceIntoContainerSlotIn is PlaceIntoContainerSlot for callers that address a
+// container by its protocol container ID. See TakeFromContainerSlotIn for why
+// the two addressing schemes come apart at a station.
+func (b *Bot) PlaceIntoContainerSlotIn(containerID byte, containerSlot uint32, destStackNetID int32, srcSlot uint32, count int) error {
 	b.Mu.Lock()
 	item, ok := b.InventoryMap[srcSlot]
 	if !ok || item.Count <= 0 {
@@ -370,7 +397,7 @@ func (b *Bot) PlaceIntoContainerSlot(windowID byte, containerSlot uint32, destSt
 		StackNetworkID: srcStackNetID,
 	}
 	place.Destination = protocol.StackRequestSlotInfo{
-		Container:      protocol.FullContainerName{ContainerID: windowID},
+		Container:      protocol.FullContainerName{ContainerID: containerID},
 		Slot:           byte(containerSlot),
 		StackNetworkID: destStackNetID,
 	}

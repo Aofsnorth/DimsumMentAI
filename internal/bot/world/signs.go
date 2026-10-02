@@ -19,11 +19,11 @@ import (
 // world from growing the map without limit.
 const maxStoredSigns = 4096
 
-// scanSignBlockEntities parses data as a sequence of little-endian NBT
+// ScanSignBlockEntities parses data as a sequence of little-endian NBT
 // compounds and stores the text of every sign it finds. A decode error simply
 // stops the scan: partial data still yields any signs decoded so far, and the
 // rest of the cache is unaffected.
-func (wc *WorldCache) scanSignBlockEntities(data []byte) {
+func (wc *WorldCache) ScanSignBlockEntities(data []byte) {
 	if len(data) == 0 {
 		return
 	}

@@ -120,18 +120,18 @@ type PlanPoint struct {
 
 // HasPlan reports whether there is a plan to work on.
 func (r *Runner) HasPlan() bool {
-	return r.currentPlan().Objective != ""
+	return r.CurrentPlan().Objective != ""
 }
 
-// currentPlan returns the active plan, or the zero Plan.
-func (r *Runner) currentPlan() Plan {
+// CurrentPlan returns the active plan, or the zero Plan.
+func (r *Runner) CurrentPlan() Plan {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.plan
 }
 
-// setPlan installs a plan, replacing any previous one.
-func (r *Runner) setPlan(plan Plan) {
+// SetPlan installs a plan, replacing any previous one.
+func (r *Runner) SetPlan(plan Plan) {
 	r.mu.Lock()
 	r.plan = plan
 	r.mu.Unlock()
@@ -148,7 +148,7 @@ func (r *Runner) clearPlan() {
 // or the first pending one so a plan that was never started still has a first
 // thing to do.
 func (r *Runner) CurrentStep() (PlanStep, int, bool) {
-	plan := r.currentPlan()
+	plan := r.CurrentPlan()
 	if plan.Objective == "" || len(plan.Steps) == 0 {
 		return PlanStep{}, 0, false
 	}
@@ -242,8 +242,8 @@ func (r *Runner) AbandonFailedStep(index int) {
 	r.plan.Steps[index].State = StepActive
 }
 
-// planExpired reports whether the plan is due for re-examination.
-func (p Plan) planExpired(now time.Time) bool {
+// PlanExpired reports whether the plan is due for re-examination.
+func (p Plan) PlanExpired(now time.Time) bool {
 	return !p.Expires.IsZero() && now.After(p.Expires)
 }
 
@@ -257,13 +257,13 @@ func (p Plan) progress() (done, total int) {
 	return done, len(p.Steps)
 }
 
-// renderPlan is the plan as text for the planner and for logs.
+// RenderPlan is the plan as text for the planner and for logs.
 //
 // It is deliberately compact and numbered. A planner reasoning about a long
 // unstructured blob makes worse plans than one reasoning about "step 2 of 5,
 // currently: mine obsidian", and a person reading the log needs the same
 // shape to make sense of it.
-func renderPlan(p Plan) string {
+func RenderPlan(p Plan) string {
 	if p.Objective == "" {
 		return "no plan"
 	}
@@ -296,12 +296,12 @@ func renderPlan(p Plan) string {
 	return sb.String()
 }
 
-// planDueForReplanning reports whether the planner should be consulted again.
-func (p Plan) planDueForReplanning(now time.Time) bool {
+// PlanDueForReplanning reports whether the planner should be consulted again.
+func (p Plan) PlanDueForReplanning(now time.Time) bool {
 	if p.Objective == "" {
 		return false
 	}
-	if p.planExpired(now) {
+	if p.PlanExpired(now) {
 		return true
 	}
 	if p.ReplanAfter <= 0 {

@@ -60,8 +60,8 @@ func (g Goal) Expired(now time.Time) bool {
 	return !g.Deadline.IsZero() && now.After(g.Deadline)
 }
 
-// advances reports whether an activity makes progress on this goal.
-func (g Goal) advances(activity string) bool {
+// AdvancesActivity reports whether an activity makes progress on this goal.
+func (g Goal) AdvancesActivity(activity string) bool {
 	for _, a := range g.Advances {
 		if a == activity {
 			return true
@@ -75,9 +75,9 @@ func (g Goal) Duration() time.Duration {
 	return g.Deadline.Sub(g.Started)
 }
 
-// goalCatalogue is the full vocabulary. Only goals that make sense in the
+// GoalCatalogue is the full vocabulary. Only goals that make sense in the
 // current world are offered to the model; this is the catalogue, not the menu.
-var goalCatalogue = map[string]Goal{
+var GoalCatalogue = map[string]Goal{
 	jev.GoalStockUp: {
 		Name:        jev.GoalStockUp,
 		Description: "gather the basic supplies it is short of, so it is prepared rather than empty-handed",
@@ -122,39 +122,39 @@ var goalCatalogue = map[string]Goal{
 // is not a goal when there is no wood in sight and the inventory is full;
 // offering it anyway produces a confident, pointless plan.
 func AvailableGoals(s Snapshot) []Goal {
-	out := make([]Goal, 0, len(goalCatalogue))
+	out := make([]Goal, 0, len(GoalCatalogue))
 
 	// Idle is always available. A goal set that never contains "do nothing" is a
 	// goal set that guarantees the bot is always busy, which is precisely the
 	// failure this package exists to prevent.
-	out = append(out, goalCatalogue[jev.GoalIdle])
+	out = append(out, GoalCatalogue[jev.GoalIdle])
 
 	// Anything it could actually gather or mine.
 	if len(blockNames(s.NearBlocks)) > 0 && s.InventoryFree() {
-		out = append(out, goalCatalogue[jev.GoalStockUp])
-		out = append(out, goalCatalogue[jev.GoalGatherWood])
+		out = append(out, GoalCatalogue[jev.GoalStockUp])
+		out = append(out, GoalCatalogue[jev.GoalGatherWood])
 	}
 
 	// Storage is only a goal when there is storage or signage to find.
 	if len(s.VisibleSigns) > 0 {
-		out = append(out, goalCatalogue[jev.GoalFindStorage])
+		out = append(out, GoalCatalogue[jev.GoalFindStorage])
 	} else if strings.Contains(strings.ToLower(s.NearBlocks), "chest") {
-		out = append(out, goalCatalogue[jev.GoalFindStorage])
+		out = append(out, GoalCatalogue[jev.GoalFindStorage])
 	}
 
 	// Exploring is always worth offering: it has no precondition beyond being
 	// able to walk, which makes it the reliable fallback for a goal that wants
 	// to see new things.
-	out = append(out, goalCatalogue[jev.GoalExplore])
+	out = append(out, GoalCatalogue[jev.GoalExplore])
 
 	// Shelter becomes urgent at night, and pointless at midday.
 	if s.IsNight {
-		out = append(out, goalCatalogue[jev.GoalBuildShelter])
+		out = append(out, GoalCatalogue[jev.GoalBuildShelter])
 	}
 
 	// Socialising only when there is actually someone to be near.
 	if _, ok := nearestVisible(s); ok {
-		out = append(out, goalCatalogue[jev.GoalSocialise])
+		out = append(out, GoalCatalogue[jev.GoalSocialise])
 	}
 
 	sort.SliceStable(out, func(i, j int) bool { return out[i].Name < out[j].Name })
@@ -182,14 +182,39 @@ func GoalsFor(goals []Goal) []string {
 // possibly count as advancing it, and narrowing on an empty Advances list would
 // leave the bot able to do exactly one thing: stand still. An operator names a
 // destination, not a method; the method is the planner's to work out.
+// NarrowToGoal filters a curriculum down to what advances the active goal,
+// always keeping "rest" reachable.
+//
+// Rest stays because a bot locked into a goal with no way to stop is not
+// persistent, it is compulsive. Everything else is removed: a goal that
+// tolerates every activity has not narrowed anything.
+//
+// It is an INTERSECTION, not a replacement, and that distinction is the whole
+// point. The curriculum has already decided what the bot can actually do here —
+// no axe means no gathering, no water means no fishing, a full inventory means
+// no picking anything up. Replacing the menu with the goal's advances threw
+// that away and re-offered every activity the situation had just ruled out, so
+// a bot with no tools and a "stock up" goal was handed "gather" every tick and
+// had it refused every tick. Narrowing can only ever remove what the world
+// permits; it must never add to it.
+//
+// A pinned operator goal is the exception, and it has to be. It is free text —
+// "kill the ender dragon" — so there is no list of activities that could
+// possibly count as advancing it, and narrowing on an empty Advances list would
+// leave the bot able to do exactly one thing: stand still. An operator names a
+// destination, not a method; the method is the planner's to work out.
 func NarrowToGoal(curriculum []string, goal Goal) []string {
 	if goal.Name == "" || goal.Pinned {
 		return curriculum
 	}
-	narrowed := make([]string, 0, len(curriculum))
+	offered := make(map[string]bool, len(curriculum))
+	for _, activity := range curriculum {
+		offered[activity] = true
+	}
+	narrowed := make([]string, 0, len(goal.Advances)+1)
 	seen := make(map[string]bool, len(goal.Advances))
 	for _, activity := range goal.Advances {
-		if seen[activity] {
+		if seen[activity] || !offered[activity] {
 			continue
 		}
 		seen[activity] = true
@@ -200,10 +225,10 @@ func NarrowToGoal(curriculum []string, goal Goal) []string {
 	return narrowed
 }
 
-// operatorGoalName is the internal key for a goal the operator wrote down. It
+// OperatorGoalName is the internal key for a goal the operator wrote down. It
 // is not in the catalogue, so it can never be selected by accident, and it keeps
 // the free text in Description where the models can read it.
-const operatorGoalName = "operator"
+const OperatorGoalName = "operator"
 
 // pinOperatorGoal installs the configured objective as a goal the model cannot
 // replace.
@@ -218,7 +243,7 @@ func (r *Runner) pinOperatorGoal(now time.Time) {
 	}
 
 	goal := Goal{
-		Name:        operatorGoalName,
+		Name:        OperatorGoalName,
 		Description: text,
 		Pinned:      true,
 		Started:     now,
@@ -239,7 +264,7 @@ func (r *Runner) pinOperatorGoal(now time.Time) {
 	}
 }
 
-// operatorGoalInstruction is the line the planner is shown when the operator has
+// OperatorGoalInstruction is the line the planner is shown when the operator has
 // named a goal.
 //
 // It is an instruction rather than a line of context on purpose. The planner is
@@ -247,8 +272,8 @@ func (r *Runner) pinOperatorGoal(now time.Time) {
 // description in front of it, and it will happily write a plan to chop wood —
 // which is a reasonable plan for a bot with no objective, and the wrong one
 // entirely for a bot that was told to go kill a dragon.
-func (r *Runner) operatorGoalInstruction() string {
-	goal := r.currentGoal()
+func (r *Runner) OperatorGoalInstruction() string {
+	goal := r.CurrentGoal()
 	if !goal.Pinned {
 		return ""
 	}
@@ -257,22 +282,29 @@ func (r *Runner) operatorGoalInstruction() string {
 		"reach right now, plan the next thing that is."
 }
 
-// newGoal stamps a catalogue entry with a lifetime.
-func newGoal(goal Goal, now time.Time, lifetime time.Duration) Goal {
+// NewGoal stamps a catalogue entry with a lifetime.
+func NewGoal(goal Goal, now time.Time, lifetime time.Duration) Goal {
 	goal.Started = now
 	goal.Deadline = now.Add(lifetime)
 	goal.Progress = 0
 	return goal
 }
 
-// describeGoal renders the active goal for the state text Jev reads.
-func describeGoal(goal Goal) string {
+// DescribeGoal renders the active goal for the state text Jev reads.
+func DescribeGoal(goal Goal) string {
 	if goal.Name == "" {
 		return "no goal"
+	}
+	name := goal.Name
+	if goal.Description != "" {
+		name += ": " + goal.Description
+	}
+	if goal.Deadline.IsZero() {
+		return fmt.Sprintf("%s (progress %d, no deadline)", name, goal.Progress)
 	}
 	remaining := int(goal.Duration().Seconds() / 60)
 	if remaining < 1 {
 		remaining = 1
 	}
-	return fmt.Sprintf("%s (progress %d, %d min left)", goal.Name, goal.Progress, remaining)
+	return fmt.Sprintf("%s (progress %d, %d min left)", name, goal.Progress, remaining)
 }

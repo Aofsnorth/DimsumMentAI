@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"bedrock-ai/internal/bot/gathering"
 	"bedrock-ai/internal/bot/interact"
 	"bedrock-ai/internal/bot/movement/animation"
 	"bedrock-ai/internal/bot/storage"
@@ -15,7 +16,7 @@ import (
 	"github.com/sandertv/gophertunnel/minecraft/protocol/packet"
 )
 
-// clearObstructions makes room at a build site by breaking whatever is in the
+// ClearObstructions makes room at a build site by breaking whatever is in the
 // way, and reports whether it did.
 //
 // The default used to be "dig anything solid", which is how a bot ends up
@@ -31,7 +32,7 @@ import (
 // The trade is deliberate: refusing every unnamed block would make building
 // fail constantly, and the classifiers below already cover the blocks that
 // actually hold anything worth keeping.
-func (bp *BlockPlacer) clearObstructions(ctx context.Context, x, y, z int) bool {
+func (bp *BlockPlacer) ClearObstructions(ctx context.Context, x, y, z int) bool {
 	world := bp.bot.GetLocalWorldModel()
 	px, py, pz := safecast.To[int32](x), safecast.To[int32](y), safecast.To[int32](z)
 
@@ -70,34 +71,65 @@ func blockIsWorthKeeping(name string) bool {
 	return storage.IsContainerBlock(normalised) || interact.IsInteractiveBlockName(normalised)
 }
 
+// digBlock breaks one block the way a player does: the arm swings on a beat
+// until the block's own break time is up, and the head drifts while it works.
+//
+// It used to send a single swing, sleep a hardcoded 300ms, and predict the
+// destroy. That is wrong twice over. Visibly, one swing and a frozen head is
+// the least human thing a breaking body can do — the swing rhythm exists
+// precisely because a fixed interval restarts the viewer's arm cycle before it
+// finishes, and one swing for a two-second break is a bot that raised its arm
+// once and watched the block die. Mechanically, 300ms is the right answer for
+// exactly one block; for obsidian it predicts the destroy seconds before the
+// server agrees the block is gone, and an early PredictDestroy on a
+// server-authoritative host is rejected without a word. The block simply
+// survives.
 func (bp *BlockPlacer) digBlock(ctx context.Context, pos protocol.BlockPos) {
-	_ = bp.bot.WritePacket(animation.MineSwing(bp.bot.GetEntityRuntimeID()))
+	runtimeID := bp.bot.GetEntityRuntimeID()
+	centre := mgl32.Vec3{float32(pos.X()) + 0.5, float32(pos.Y()) + 0.5, float32(pos.Z()) + 0.5}
+
+	blockName, _ := bp.bot.GetBlockName(pos.X(), pos.Y(), pos.Z())
+	breakTime := gathering.BreakDuration(bp.bot, blockName)
+
 	_ = bp.bot.WritePacket(&packet.PlayerAction{
-		EntityRuntimeID: bp.bot.GetEntityRuntimeID(),
+		EntityRuntimeID: runtimeID,
 		ActionType:      protocol.PlayerActionStartBreak,
 		BlockPosition:   pos,
 		BlockFace:       1,
 	})
-	time.Sleep(300 * time.Millisecond)
+
+	for i, beat := range animation.Beats(breakTime, centre) {
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(beat.Wait):
+		}
+		if i == 0 {
+			// The first beat is the wind-up; the arm is still being raised.
+			continue
+		}
+		_ = bp.bot.WritePacket(animation.MineSwing(runtimeID))
+		bp.bot.LookAt(beat.Aim)
+	}
+
 	_ = bp.bot.WritePacket(&packet.PlayerAction{
-		EntityRuntimeID: bp.bot.GetEntityRuntimeID(),
+		EntityRuntimeID: runtimeID,
 		ActionType:      protocol.PlayerActionCrackBreak,
 		BlockPosition:   pos,
 		BlockFace:       1,
 	})
 	_ = bp.bot.WritePacket(&packet.PlayerAction{
-		EntityRuntimeID: bp.bot.GetEntityRuntimeID(),
+		EntityRuntimeID: runtimeID,
 		ActionType:      protocol.PlayerActionPredictDestroyBlock,
 		BlockPosition:   pos,
 		BlockFace:       1,
 	})
 	_ = bp.bot.WritePacket(&packet.PlayerAction{
-		EntityRuntimeID: bp.bot.GetEntityRuntimeID(),
+		EntityRuntimeID: runtimeID,
 		ActionType:      protocol.PlayerActionStopBreak,
 		BlockPosition:   pos,
 		BlockFace:       1,
 	})
-	time.Sleep(100 * time.Millisecond)
 }
 
 func (bp *BlockPlacer) lookAtBlock(pos protocol.BlockPos) {

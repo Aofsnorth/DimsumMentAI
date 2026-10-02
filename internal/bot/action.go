@@ -5,16 +5,18 @@ import (
 	"strings"
 	"time"
 
+	"bedrock-ai/internal/bot/gathering"
+
 	"github.com/go-gl/mathgl/mgl32"
 )
 
-// walkToReplanEpsilon is how far a walk_to target may drift before the route
+// WalkToReplanEpsilon is how far a walk_to target may drift before the route
 // is worth re-planning. A dropped item settles and creeps, and re-planning for
 // every centimetre of that creep re-runs A* several times a second for a
 // destination one block away.
-const walkToReplanEpsilon = 0.25
+const WalkToReplanEpsilon = 0.25
 
-// shouldReplanForWalkTo decides whether a WalkTo call needs a fresh route.
+// ShouldReplanForWalkTo decides whether a WalkTo call needs a fresh route.
 //
 // Walking somewhere is a continuous activity, not a series of commands: callers
 // re-assert the same destination while they wait (the looter polls its target,
@@ -24,7 +26,7 @@ const walkToReplanEpsilon = 0.25
 // identical route into the identical blocker forever and never escalated.
 //
 // It is pure so the policy is unit testable without a live bot.
-func shouldReplanForWalkTo(state string, hasPath bool, current, next mgl32.Vec3) bool {
+func ShouldReplanForWalkTo(state string, hasPath bool, current, next mgl32.Vec3) bool {
 	if state != "walk_to" {
 		return true
 	}
@@ -34,13 +36,13 @@ func shouldReplanForWalkTo(state string, hasPath bool, current, next mgl32.Vec3)
 	dx := float64(next.X() - current.X())
 	dy := float64(next.Y() - current.Y())
 	dz := float64(next.Z() - current.Z())
-	return dx*dx+dy*dy+dz*dz > walkToReplanEpsilon*walkToReplanEpsilon
+	return dx*dx+dy*dy+dz*dz > WalkToReplanEpsilon*WalkToReplanEpsilon
 }
 
 // WalkTo directs the bot to walk to a coordinate
 func (b *Bot) WalkTo(pos mgl32.Vec3) {
 	b.Mu.Lock()
-	replan := shouldReplanForWalkTo(b.MovementState, len(b.CurrentPath) > 0, b.TargetPos, pos)
+	replan := ShouldReplanForWalkTo(b.MovementState, len(b.CurrentPath) > 0, b.TargetPos, pos)
 	b.MovementState = "walk_to"
 	b.TargetPos = pos
 	b.TargetPlayerName = ""
@@ -123,6 +125,38 @@ func (b *Bot) Stop() {
 	b.LookTargetName = ""
 	b.LookTargetUntil = time.Time{}
 	b.Logger.Debug("Bot movement stopped")
+}
+
+// SnapshotJourney captures the movement intent so a detour can put it back.
+func (b *Bot) SnapshotJourney() gathering.Journey {
+	b.Mu.Lock()
+	defer b.Mu.Unlock()
+	return gathering.Journey{
+		State:        b.MovementState,
+		Target:       b.TargetPos,
+		TargetPlayer: b.TargetPlayerName,
+		LookTarget:   b.LookTargetName,
+		LookUntil:    b.LookTargetUntil,
+	}
+}
+
+// RestoreJourney puts back the movement intent a detour interrupted and starts
+// the path again when there is somewhere to go. Without this, a detour that
+// re-aims navigation — the item sweep walking to a drop — kills the journey it
+// interrupted, and the bot stands still where that journey died.
+func (b *Bot) RestoreJourney(j gathering.Journey) {
+	b.Mu.Lock()
+	b.MovementState = j.State
+	b.TargetPos = j.Target
+	b.TargetPlayerName = j.TargetPlayer
+	b.LookTargetName = j.LookTarget
+	b.LookTargetUntil = j.LookUntil
+	b.CurrentPath = nil
+	b.PathIndex = 0
+	b.Mu.Unlock()
+	if j.State == "walk_to" || j.State == "follow" {
+		b.RecalculatePath()
+	}
 }
 
 // TriggerEmote triggers a custom bot animation

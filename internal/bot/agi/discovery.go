@@ -23,14 +23,14 @@ import (
 	"sync"
 )
 
-// maxVocabulary caps how many names are remembered per kind.
+// MaxVocabulary caps how many names are remembered per kind.
 //
 // A long recording on a large world sees thousands of distinct blocks — mostly
 // variants nobody will ever act on. The cap keeps the state text small enough to
 // stay inside the model's budget, which matters more than completeness: a
 // vocabulary so long it crowds out the objective is a vocabulary that stops
 // being useful at exactly the moment the recording gets interesting.
-const maxVocabulary = 48
+const MaxVocabulary = 48
 
 // Vocabulary is what the bot has observed this session.
 type Vocabulary struct {
@@ -94,7 +94,7 @@ func (v *Vocabulary) note(into map[string]int, order *[]string, name string) {
 		into[term]++
 		return
 	}
-	if len(into) >= maxVocabulary {
+	if len(into) >= MaxVocabulary {
 		return
 	}
 	into[term] = 1
@@ -191,18 +191,18 @@ func (v *Vocabulary) Describe() string {
 // rather than a fresh world scan, because the scan has already happened and
 // doing it twice per tick is a waste the bot pays for on every single decision.
 func (v *Vocabulary) Merge(snap Snapshot) {
-	for _, name := range splitList(snap.NearBlocks) {
+	for _, name := range SplitList(snap.NearBlocks) {
 		v.NoteBlock(name)
 	}
-	for _, name := range splitList(snap.VisibleMob) {
+	for _, name := range SplitList(snap.VisibleMob) {
 		v.NoteBlock(name)
 	}
-	for _, name := range splitList(snap.Inventory) {
+	for _, name := range SplitList(snap.Inventory) {
 		v.NoteItem(name)
 	}
 }
 
-// splitList turns the comma-joined summary text into terms.
+// SplitList turns the comma-joined summary text into terms.
 //
 // A term that is not a bare name is dropped. This is not tidiness: the one
 // caller that decides whether the world is a single block counts DISTINCT terms,
@@ -210,7 +210,7 @@ func (v *Vocabulary) Merge(snap Snapshot) {
 // and convinces the bot it is standing on the only block in a one-block world —
 // in an ordinary field. The prose rendering of the scan is still handed to the
 // models; it just must not reach the code that reasons about block names.
-func splitList(text string) []string {
+func SplitList(text string) []string {
 	if strings.TrimSpace(text) == "" {
 		return nil
 	}
@@ -223,7 +223,7 @@ func splitList(text string) []string {
 		}
 		// A name is one word. Anything carrying prose, a count, a distance or a
 		// bearing is a rendered sentence, not a block.
-		if !isBareTerm(term) {
+		if !IsBareTerm(term) {
 			continue
 		}
 		out = append(out, term)
@@ -231,9 +231,9 @@ func splitList(text string) []string {
 	return out
 }
 
-// isBareTerm reports whether a term is a single block or item name, with no
+// IsBareTerm reports whether a term is a single block or item name, with no
 // rendered detail attached.
-func isBareTerm(term string) bool {
+func IsBareTerm(term string) bool {
 	if strings.ContainsAny(term, " \t()") {
 		return false
 	}

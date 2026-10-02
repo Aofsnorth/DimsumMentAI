@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-// buildDecisionPrompt asks the model what to do with itself, and — just as
+// BuildDecisionPrompt asks the model what to do with itself, and — just as
 // importantly — tells it that doing nothing is a valid answer.
 //
 // The restraint clauses are the whole design. A model handed an empty schedule
@@ -15,7 +15,7 @@ import (
 // it is not a person. Saying "you may do nothing" and "you do not need to
 // justify it" is what buys the stillness that makes the activity read as
 // intentional.
-func (r *Runner) buildDecisionPrompt(snap Snapshot) (systemPrompt, prompt string) {
+func (r *Runner) BuildDecisionPrompt(snap Snapshot) (systemPrompt, prompt string) {
 	b := r.b
 
 	// The bot-derived preamble is optional. Only the system prompt needs a live

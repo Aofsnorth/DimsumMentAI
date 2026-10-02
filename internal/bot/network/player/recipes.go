@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"math"
 	"strings"
+	"time"
 
 	"bedrock-ai/internal/bot"
 
@@ -12,7 +13,7 @@ import (
 	"github.com/sandertv/gophertunnel/minecraft/protocol/packet"
 )
 
-// isSelfEntry reports whether a PlayerList entry describes the bot itself.
+// IsSelfEntry reports whether a PlayerList entry describes the bot itself.
 //
 // It exists because the obvious check — "EntityUniqueID matches ours" — is
 // wrong in a way that hijacked the bot's identity. Servers routinely send
@@ -25,7 +26,7 @@ import (
 // The rules, in order:
 //   - a matching UUID is authoritative
 //   - a zero EntityUniqueID matches nothing, because it identifies nobody
-func isSelfEntry(b *bot.Bot, entry protocol.PlayerListEntry) bool {
+func IsSelfEntry(b *bot.Bot, entry protocol.PlayerListEntry) bool {
 	if entry.UUID == b.PlayerUUID {
 		return true
 	}
@@ -43,7 +44,7 @@ func handlePlayerList(b *bot.Bot, p *packet.PlayerList) {
 		switch entry.ActionType {
 		case protocol.PlayerListActionAdd:
 			b.PlayerUUIDs[entry.UUID] = entry.Username
-			if isSelfEntry(b, entry) {
+			if IsSelfEntry(b, entry) {
 				b.PlayerUUID = entry.UUID
 				if b.Name != entry.Username {
 					b.Logger.Info("updating bot name from server PlayerList",
@@ -130,8 +131,58 @@ func handleCraftingData(b *bot.Bot, p *packet.CraftingData) {
 			Height:      recipe.Height,
 		}
 	}
+	indexSmithingRecipes(b, p)
 	b.Mu.Unlock()
 	b.Logger.Debug("Crafting recipes cached", "count", len(b.Recipes))
+}
+
+// indexSmithingRecipes walks the smithing transform and trim recipes into the
+// same tables the crafting ones go into.
+//
+// Without this the smithing table is unreachable no matter what the bot carries:
+// handleCraftingData used to walk only the shapeless and shaped lists, so no
+// smithing recipe ever entered RecipesByNetID, and a planner looking for a
+// netherite upgrade was told the server advertised none — on every run, with
+// the right template and the right base item in the bag.
+//
+// A transform takes three inputs where a crafting recipe takes a grid, so the
+// template and the base are recorded as the first two ingredients and the
+// addition as the third. Both kinds are shapeless — the slot order carries the
+// meaning — so Width/Height stay zero.
+//
+// A trim recipe is indexed but deliberately not named. Its result is the base
+// item wearing a trim, and the protocol carries no output stack for it, so the
+// output item name is not knowable from the recipe. Registering a name anyway
+// would mean inventing one, and every lookup in the bot is by output name — a
+// fabricated entry here is a recipe that claims to make something it does not.
+func indexSmithingRecipes(b *bot.Bot, p *packet.CraftingData) {
+	for i := range p.SmithingTransformRecipes {
+		r := p.SmithingTransformRecipes[i]
+		if r.RecipeNetworkID == 0 {
+			// The protocol says this field must never be 0, and a zero would
+			// collide with the "no recipe" entry every lookup falls back to.
+			continue
+		}
+		outName := b.ItemNames[r.Result.NetworkID]
+		registerRecipeName(b, outName, r.RecipeNetworkID)
+		b.RecipesByNetID[r.RecipeNetworkID] = bot.RecipeInfo{
+			Ingredients: []protocol.ItemDescriptorCount{r.Template, r.Base, r.Addition},
+			Output:      r.Result,
+			Block:       r.Block,
+			Shapeless:   true,
+		}
+	}
+	for i := range p.SmithingTrimRecipes {
+		r := p.SmithingTrimRecipes[i]
+		if r.RecipeNetworkID == 0 {
+			continue
+		}
+		b.RecipesByNetID[r.RecipeNetworkID] = bot.RecipeInfo{
+			Ingredients: []protocol.ItemDescriptorCount{r.Template, r.Base, r.Addition},
+			Block:       r.Block,
+			Shapeless:   true,
+		}
+	}
 }
 
 // registerRecipeName indexes a recipe under its output item name. Names are
@@ -153,7 +204,7 @@ func registerRecipeName(b *bot.Bot, name string, recipeNetID uint32) {
 	}
 }
 
-// applyAttributeValues folds the attributes of an UpdateAttributes packet into
+// ApplyAttributeValues folds the attributes of an UpdateAttributes packet into
 // the bot's current health and hunger.
 //
 // It is a pure function of the packet and the previous values, so the attribute
@@ -161,7 +212,7 @@ func registerRecipeName(b *bot.Bot, name string, recipeNetID uint32) {
 // boolean reports whether the packet actually carried a hunger value: the
 // protocol only sends attributes that changed, so a health-only packet must
 // leave hunger where it was rather than resetting it to zero.
-func applyAttributeValues(attrs []protocol.Attribute, prevHealth, prevHunger int) (health, hunger int, hungerSeen bool) {
+func ApplyAttributeValues(attrs []protocol.Attribute, prevHealth, prevHunger int) (health, hunger int, hungerSeen bool) {
 	health, hunger = prevHealth, prevHunger
 	for _, attr := range attrs {
 		switch attr.Name {
@@ -182,9 +233,17 @@ func handleUpdateAttributes(b *bot.Bot, p *packet.UpdateAttributes) {
 		}
 		b.Mu.Lock()
 		prevHealth := b.Health
-		health, hunger, hungerSeen := applyAttributeValues(p.Attributes, b.Health, b.Hunger)
+		health, hunger, hungerSeen := ApplyAttributeValues(p.Attributes, b.Health, b.Hunger)
 		b.Health = health
 		b.Hunger = hunger
+
+		// XP is computed by the pure helper BEFORE the lock and written back
+		// AFTER it is released, below. SetExperienceLevel takes b.Mu itself, and
+		// sync.Mutex is not reentrant: calling it from inside this critical
+		// section made the packet loop wait on a lock it was already holding —
+		// every other goroutine queued behind it, and the bot froze solid right
+		// after spawn while the connection stayed up.
+		level, levelSeen := bot.ApplyExperienceAttribute(p.Attributes, 0, false)
 
 		if b.Health < prevHealth && b.Health > 0 {
 			feetX := int32(math.Floor(float64(b.Pos.X())))
@@ -207,7 +266,15 @@ func handleUpdateAttributes(b *bot.Bot, p *packet.UpdateAttributes) {
 			// repeatedly stops seeing the world entirely. The search reads the
 			// route under b.Mu and publishes it at the end, so running it
 			// concurrently is what it was written for.
-			if hasDestination {
+			//
+			// The timestamp is claimed BEFORE spawning the search, under the
+			// same lock, so the movement tick's own guard (steering.go) sees
+			// this repath and does not fire a second identical one ~30ms
+			// later — the duplicate "recalculating path" lines in the log.
+			// A stuck-recovery replan still goes through: it marks temp-solid
+			// blockers first, so its search genuinely differs from this one.
+			if hasDestination && time.Since(b.LastPathRecalcTime) > 500*time.Millisecond {
+				b.LastPathRecalcTime = time.Now()
 				go b.RecalculatePath()
 			}
 			b.Mu.Lock()
@@ -219,6 +286,11 @@ func handleUpdateAttributes(b *bot.Bot, p *packet.UpdateAttributes) {
 		// 20 it was constructed with, so auto-eat never fired on real hunger and
 		// the bot starved with food in its bag. SetHunger takes the manager's
 		// own lock, so it is called off b.Mu rather than nested inside it.
+		// SetExperienceLevel likewise owns its lock and is written here, outside
+		// the critical section above.
+		if levelSeen {
+			b.SetExperienceLevel(level)
+		}
 		if hungerSeen && b.SurvivalMgr != nil {
 			b.SurvivalMgr.SetHunger(hunger)
 		}

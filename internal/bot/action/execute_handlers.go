@@ -22,17 +22,17 @@ import (
 const visibleTargetDistance = 32
 
 func init() {
-	actionHandlers["pvp"] = handlePVP
+	ActionHandlers["pvp"] = handlePVP
 }
 
 // handleAttack engages the nearest visible mob. The combat manager runs the
 // fight on its own, so the step reports whether a target was actually engaged —
 // "nothing to attack" is a failure, not a quiet success.
 func handleAttack(b *bot.Bot, param, user string) {
-	target, ok := selectAttackTarget(b, param, user)
+	target, ok := SelectAttackTarget(b, param, user)
 	if !ok {
 		b.Logger.Warn("ExecuteAction: no visible non-item mob found to attack", "param", param)
-		reportStatus(b, user, event.ActionStatus{
+		ReportStatus(b, user, event.ActionStatus{
 			Action:  "attack",
 			Item:    param,
 			Success: false,
@@ -41,10 +41,10 @@ func handleAttack(b *bot.Bot, param, user string) {
 		return
 	}
 	b.CombatMgr.EngageTarget(target.ID)
-	reportStatus(b, user, event.ActionStatus{Action: "attack", Item: target.Name, Success: true})
+	ReportStatus(b, user, event.ActionStatus{Action: "attack", Item: target.Name, Success: true})
 }
 
-func selectAttackTarget(b *bot.Bot, param, user string) (*entity.Info, bool) {
+func SelectAttackTarget(b *bot.Bot, param, user string) (*entity.Info, bool) {
 	b.Mu.Lock()
 	origin := b.Pos
 	actors := copyActorsLocked(b.Actors)
@@ -83,7 +83,7 @@ func handlePVP(b *bot.Bot, param, user string) {
 	}
 	if target == "" || strings.EqualFold(target, b.Name) {
 		b.Logger.Warn("ExecuteAction: no PVP target found", "param", param)
-		reportStatus(b, user, event.ActionStatus{
+		ReportStatus(b, user, event.ActionStatus{
 			Action:  "pvp",
 			Success: false,
 			Error:   "butuh nama pemain untuk pvp",
@@ -92,7 +92,7 @@ func handlePVP(b *bot.Bot, param, user string) {
 	}
 	if !b.CombatMgr.EngagePlayer(target) {
 		b.Logger.Warn("ExecuteAction: PVP player target not found", "target", target)
-		reportStatus(b, user, event.ActionStatus{
+		ReportStatus(b, user, event.ActionStatus{
 			Action:  "pvp",
 			Item:    target,
 			Success: false,
@@ -100,7 +100,7 @@ func handlePVP(b *bot.Bot, param, user string) {
 		})
 		return
 	}
-	reportStatus(b, user, event.ActionStatus{Action: "pvp", Item: target, Success: true})
+	ReportStatus(b, user, event.ActionStatus{Action: "pvp", Item: target, Success: true})
 }
 
 func copyActorsLocked(actors map[uint64]*entity.Info) map[uint64]*entity.Info {
@@ -164,7 +164,7 @@ func runCraftAction(b *bot.Bot, param, user string, report bool) event.ActionSta
 		return status
 	}
 	parts := strings.Split(param, ",")
-	itemName := normalizeItemName(parts[0])
+	itemName := NormalizeItemName(parts[0])
 	count := 1
 	if len(parts) >= 2 {
 		_, _ = fmt.Sscanf(parts[1], "%d", &count)
@@ -178,14 +178,14 @@ func runCraftAction(b *bot.Bot, param, user string, report bool) event.ActionSta
 		b.Logger.Warn("CraftItem failed", "err", err, "item", itemName)
 		status.Error = err.Error()
 		if report {
-			reportStatus(b, user, status)
+			ReportStatus(b, user, status)
 		}
 		return status
 	}
 	status.Count = actual
 	status.Success = true
 	if report {
-		reportStatus(b, user, status)
+		ReportStatus(b, user, status)
 	}
 	return status
 }
@@ -215,13 +215,13 @@ func newCraftChainState() *craftChainState {
 	}
 }
 
-// ingredientFallbacks maps a generic/tag ingredient keyword to concrete
+// IngredientFallbacks maps a generic/tag ingredient keyword to concrete
 // craftable items, tried in order, so chain-crafting can satisfy e.g.
 // a "planks" requirement by making oak_planks from oak_log.
 //
 // Specific plank variants (warped_planks, crimson_planks) are normalised to
-// the "planks" key via normalizeIngredientKey so they resolve here too.
-var ingredientFallbacks = map[string][]string{
+// the "planks" key via NormalizeIngredientKey so they resolve here too.
+var IngredientFallbacks = map[string][]string{
 	"planks": {"oak_planks", "spruce_planks", "birch_planks", "jungle_planks", "acacia_planks", "dark_oak_planks", "mangrove_planks", "cherry_planks"},
 }
 
@@ -257,7 +257,7 @@ func craftChainWithState(ctx context.Context, b *bot.Bot, user, itemName string,
 	// that truly exceed the 2×2 personal grid; planks and sticks never use a
 	// crafting-table window.
 	outputPerCraft := int(recipe.Output.Count)
-	crafts := computeCrafts(count, outputPerCraft)
+	crafts := ComputeCrafts(count, outputPerCraft)
 	if err := ensureCraftIngredients(ctx, b, user, recipe, crafts, depth, state, allowGather); err != nil {
 		return 0, err
 	}
@@ -267,7 +267,7 @@ func craftChainWithState(ctx context.Context, b *bot.Bot, user, itemName string,
 		"crafts", crafts,
 		"depth", depth,
 	)
-	if recipeNeedsCraftingBench(recipe) {
+	if RecipeNeedsCraftingBench(recipe) {
 		mgr := b.InventoryMgr.Crafting()
 		pos, ok := mgr.EnsureCraftingTable(ctx)
 		if !ok {
@@ -354,7 +354,7 @@ func recipeSatisfactionScore(b *bot.Bot, recipe bot.RecipeInfo) int {
 			continue
 		}
 		allHave = false
-		if normalizeIngredientKey(name) == "planks" && (b.CountItemLike("planks") > 0 || b.CountItemLike("log") > 0) {
+		if NormalizeIngredientKey(name) == "planks" && (b.CountItemLike("planks") > 0 || b.CountItemLike("log") > 0) {
 			continue
 		}
 		allHaveOrPlank = false
@@ -438,7 +438,7 @@ func recipeIngredientRequirements(b *bot.Bot, recipe bot.RecipeInfo, crafts int)
 // ingredients (e.g. "planks") to a concrete craftable variant the bot can
 // actually make.
 func craftIngredient(ctx context.Context, b *bot.Bot, user, name string, need, depth int, state *craftChainState, allowGather bool) error {
-	candidates := append([]string(nil), resolveIngredientCandidates(name)...)
+	candidates := append([]string(nil), ResolveIngredientCandidates(name)...)
 	if len(candidates) > 1 {
 		sortCandidatesByAvailability(b, candidates)
 	}
@@ -469,7 +469,7 @@ func tryCraftIngredientCandidates(ctx context.Context, b *bot.Bot, user string, 
 }
 
 func hasCraftAlternative(b *bot.Bot, name string) bool {
-	for _, candidate := range resolveIngredientCandidates(name) {
+	for _, candidate := range ResolveIngredientCandidates(name) {
 		if _, ok := lookupRecipe(b, candidate); ok {
 			return true
 		}
@@ -516,7 +516,7 @@ func gatherMaterialSynchronously(ctx context.Context, b *bot.Bot, name string, m
 	if b.Gatherer.IsGathering() {
 		return fmt.Errorf("pengumpulan resource lain sedang berjalan")
 	}
-	if isWoodLike(name) {
+	if IsWoodLike(name) {
 		b.Gatherer.GatherWoodType(ctx, name, missing)
 	} else {
 		b.Gatherer.GatherBlock(ctx, name, missing)
@@ -539,11 +539,11 @@ func lookupRecipe(b *bot.Bot, name string) (uint32, bool) {
 	return id, ok
 }
 
-// normalizeIngredientKey lowercases and strips the minecraft: prefix so a tag
-// like "minecraft:planks" maps to the ingredientFallbacks key "planks".
+// NormalizeIngredientKey lowercases and strips the minecraft: prefix so a tag
+// like "minecraft:planks" maps to the IngredientFallbacks key "planks".
 // Specific plank variants (warped_planks, crimson_planks, etc.) are collapsed
 // to "planks" so the fallback list covers them.
-func normalizeIngredientKey(name string) string {
+func NormalizeIngredientKey(name string) string {
 	name = strings.ToLower(strings.TrimPrefix(strings.TrimSpace(name), "minecraft:"))
 	if strings.HasSuffix(name, "_planks") {
 		return "planks"
@@ -551,7 +551,7 @@ func normalizeIngredientKey(name string) string {
 	return name
 }
 
-// resolveIngredientCandidates returns the list of item names to try when
+// ResolveIngredientCandidates returns the list of item names to try when
 // satisfying an ingredient. For generic Bedrock ingredient names
 // (e.g. "planks", "minecraft:planks") it returns the wood-variant fallback
 // list so the crafter can satisfy "any planks" using whatever wood the bot
@@ -565,16 +565,16 @@ func normalizeIngredientKey(name string) string {
 // `minecraft:planks` form that Bedrock actually sends in CraftingData — so
 // chain-crafting sticks failed with "tidak punya bahan untuk minecraft:planks"
 // even when the bot had oak_log.
-func resolveIngredientCandidates(name string) []string {
+func ResolveIngredientCandidates(name string) []string {
 	n := strings.ToLower(strings.TrimSpace(name))
 	n = strings.TrimPrefix(n, "minecraft:")
 	if n == "planks" {
-		return ingredientFallbacks["planks"]
+		return IngredientFallbacks["planks"]
 	}
 	return []string{name}
 }
 
-func candidateMaterialAvailable(b *bot.Bot, candidate string) bool {
+func CandidateMaterialAvailable(b *bot.Bot, candidate string) bool {
 	candidate = strings.TrimPrefix(strings.ToLower(candidate), "minecraft:")
 	if !strings.HasSuffix(candidate, "_planks") {
 		return true
@@ -619,7 +619,7 @@ func sortCandidatesByAvailability(b *bot.Bot, candidates []string) {
 	}
 }
 
-// recipeNeedsCraftingBench determines whether a recipe truly requires a 3×3
+// RecipeNeedsCraftingBench determines whether a recipe truly requires a 3×3
 // crafting table. Many 2×2 recipes (oak_planks, sticks, crafting_table) can be
 // made in the player's personal 2×2 inventory grid even if the server tags them
 // with Block="crafting_table". We use the recipe shape/dimensions as the
@@ -629,7 +629,7 @@ func sortCandidatesByAvailability(b *bot.Bot, candidates []string) {
 // for AutoCraftRecipe regardless of grid size, and a crafting_table tag covers
 // BOTH the 3×3 table and the 2×2 inventory grid, so we never need to open a
 // table window for AutoCraft — the recipe network ID carries that association.
-func recipeNeedsCraftingBench(recipe bot.RecipeInfo) bool {
+func RecipeNeedsCraftingBench(recipe bot.RecipeInfo) bool {
 	if recipe.Block == "" {
 		return false
 	}
@@ -648,9 +648,9 @@ func recipeNeedsCraftingBench(recipe bot.RecipeInfo) bool {
 	return recipe.Width > 2 || recipe.Height > 2
 }
 
-// computeCrafts converts a desired number of output items into the number of
+// ComputeCrafts converts a desired number of output items into the number of
 // craft operations needed, given how many items the recipe produces per craft.
-func computeCrafts(desiredCount, outputPerCraft int) int {
+func ComputeCrafts(desiredCount, outputPerCraft int) int {
 	if desiredCount <= 0 {
 		return 1
 	}
@@ -670,7 +670,7 @@ func computeCrafts(desiredCount, outputPerCraft int) int {
 func handleTake(b *bot.Bot, param, user string) {
 	go func() {
 		if strings.TrimSpace(param) == "" {
-			reportStatus(b, user, event.ActionStatus{
+			ReportStatus(b, user, event.ActionStatus{
 				Action:  "take",
 				Success: false,
 				Error:   "butuh nama barang, contoh: take:oak_log,3",
@@ -678,7 +678,7 @@ func handleTake(b *bot.Bot, param, user string) {
 			return
 		}
 		parts := strings.Split(param, ",")
-		itemName := normalizeItemName(parts[0])
+		itemName := NormalizeItemName(parts[0])
 		count := int32(0)
 		if len(parts) >= 2 {
 			var parsed int
@@ -698,7 +698,7 @@ func handleTake(b *bot.Bot, param, user string) {
 func handleGive(b *bot.Bot, param, user string) {
 	go func() {
 		if strings.TrimSpace(param) == "" {
-			reportStatus(b, user, event.ActionStatus{
+			ReportStatus(b, user, event.ActionStatus{
 				Action:  "give",
 				Success: false,
 				Error:   "butuh nama barang, contoh: give:oak_log,3",
@@ -706,7 +706,7 @@ func handleGive(b *bot.Bot, param, user string) {
 			return
 		}
 		parts := strings.Split(param, ",")
-		itemName := normalizeItemName(parts[0])
+		itemName := NormalizeItemName(parts[0])
 		count := int32(0)
 		if len(parts) >= 2 {
 			var parsed int
@@ -723,7 +723,7 @@ func handleGive(b *bot.Bot, param, user string) {
 func handleDrop(b *bot.Bot, param, user string) {
 	go func() {
 		parts := strings.Split(strings.TrimSpace(param), ",")
-		itemName := normalizeItemName(parts[0])
+		itemName := NormalizeItemName(parts[0])
 		count := 0
 		if len(parts) >= 2 {
 			_, _ = fmt.Sscanf(parts[1], "%d", &count)
@@ -879,11 +879,11 @@ func handleDrop(b *bot.Bot, param, user string) {
 	}()
 }
 
-// isWoodLike reports whether an item name refers to a log/wood block that
+// IsWoodLike reports whether an item name refers to a log/wood block that
 // should be harvested via the tree-committed chopper rather than the
 // per-block scanner. Recognizes vanilla wood variants and Indonesian aliases
 // post-normalization.
-func isWoodLike(itemName string) bool {
+func IsWoodLike(itemName string) bool {
 	n := strings.ToLower(itemName)
 	if strings.Contains(n, "log") || strings.Contains(n, "wood") {
 		return true
@@ -926,7 +926,7 @@ var itemAliases = map[string]string{
 	"kucing":         "cat",
 }
 
-func normalizeItemName(name string) string {
+func NormalizeItemName(name string) string {
 	name = strings.ToLower(strings.TrimSpace(name))
 	name = strings.ReplaceAll(name, " ", "_")
 	name = strings.TrimPrefix(name, "minecraft:")
@@ -936,7 +936,7 @@ func normalizeItemName(name string) string {
 	return name
 }
 
-func normalizeCropType(param string) string {
+func NormalizeCropType(param string) string {
 	parts := strings.Split(param, ",")
 	if len(parts) == 0 || parts[0] == "" {
 		return ""

@@ -1,2 +1,3 @@
 [mcp_servers.tavily]
+bearer_token_env_var = "TAVILY_API_KEY"
 url = "https://mcp.tavily.com/mcp"

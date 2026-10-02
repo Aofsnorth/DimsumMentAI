@@ -31,14 +31,14 @@ import (
 // search can be wrong in a test instead of in a world.
 
 func init() {
-	actionHandlers["explorestronghold"] = handleExploreStronghold
-	actionHandlers["findstronghold"] = actionHandlers["explorestronghold"]
-	actionHandlers["stronghold"] = actionHandlers["explorestronghold"]
+	ActionHandlers["explorestronghold"] = handleExploreStronghold
+	ActionHandlers["findstronghold"] = ActionHandlers["explorestronghold"]
+	ActionHandlers["stronghold"] = ActionHandlers["explorestronghold"]
 }
 
 const (
-	// strongholdRingStep is the distance between waypoint rings, in blocks.
-	strongholdRingStep = 32
+	// StrongholdRingStep is the distance between waypoint rings, in blocks.
+	StrongholdRingStep = 32
 	// strongholdMaxRings bounds one sweep: rings 0..5 reach 160 blocks out.
 	strongholdMaxRings = 5
 	// strongholdScanRadius is how far each waypoint scans the loaded world
@@ -68,12 +68,12 @@ const (
 	strongholdFound
 )
 
-// strongholdHint is one sighting of a block that suggests a stronghold.
-type strongholdHint struct {
-	pos protocol.BlockPos
+// StrongholdHint is one sighting of a block that suggests a stronghold.
+type StrongholdHint struct {
+	Pos protocol.BlockPos
 	// strong marks blocks that only exist in the portal room itself
 	// (end portal frames, the portal) as opposed to corridor decoration.
-	strong bool
+	Strong bool
 }
 
 // strongholdCoreBlocks are the hints that end the search outright: they sit in
@@ -84,9 +84,9 @@ var strongholdCoreBlocks = map[string]bool{
 	"end_portal":       true,
 }
 
-// isStrongholdCore reports whether a block name is strong enough to end the
+// IsStrongholdCore reports whether a block name is strong enough to end the
 // search.
-func isStrongholdCore(name string) bool {
+func IsStrongholdCore(name string) bool {
 	return strongholdCoreBlocks[dimension.Normalise(name)]
 }
 
@@ -107,36 +107,36 @@ func runStrongholdSearch(b *bot.Bot, user string) {
 	centerZ := int32(math.Floor(float64(start.Z())))
 	walkY := int32(math.Floor(float64(start.Y())))
 
-	var hints []strongholdHint
+	var hints []StrongholdHint
 	for attempt := 0; attempt <= strongholdMaxConverges; attempt++ {
 		result, hint := searchStrongholdFrom(b, centerX, centerZ, walkY)
 		switch result {
 		case strongholdFound:
-			arrived := b.NavigateToBlock(hint.pos.X(), hint.pos.Y(), hint.pos.Z(), 1.5)
-			reportStatus(b, user, event.ActionStatus{
+			arrived := b.NavigateToBlock(hint.Pos.X(), hint.Pos.Y(), hint.Pos.Z(), 1.5)
+			ReportStatus(b, user, event.ActionStatus{
 				Action:  "explorestronghold",
-				Item:    fmt.Sprintf("stronghold ketemu di %d,%d,%d", hint.pos.X(), hint.pos.Y(), hint.pos.Z()),
+				Item:    fmt.Sprintf("stronghold ketemu di %d,%d,%d", hint.Pos.X(), hint.Pos.Y(), hint.Pos.Z()),
 				Success: arrived,
-				Error:   navError(arrived, hint.pos),
+				Error:   navError(arrived, hint.Pos),
 			})
 			return
 		case strongholdHinted:
 			hints = append(hints, hint)
-			best, _ := bestStrongholdHint(start, hints)
+			best, _ := BestStrongholdHint(start, hints)
 			b.Logger.Info("stronghold search: hint ditemukan, pusat pencarian digeser",
-				"hint", hint.pos, "converge", attempt+1)
-			centerX, centerZ = convergeOnHint(best)
+				"hint", hint.Pos, "converge", attempt+1)
+			centerX, centerZ = ConvergeOnHint(best)
 		case strongholdExhausted:
-			reportStatus(b, user, event.ActionStatus{
+			ReportStatus(b, user, event.ActionStatus{
 				Action:  "explorestronghold",
 				Success: false,
 				Error: fmt.Sprintf("nggak nemu petunjuk stronghold dalam radius %d blok",
-					strongholdMaxRings*strongholdRingStep),
+					strongholdMaxRings*StrongholdRingStep),
 			})
 			return
 		}
 	}
-	reportStatus(b, user, event.ActionStatus{
+	ReportStatus(b, user, event.ActionStatus{
 		Action:  "explorestronghold",
 		Success: false,
 		Error:   "ada petunjuk stronghold tapi portalnya nggak ketemu; budget pencarian habis",
@@ -147,9 +147,9 @@ func runStrongholdSearch(b *bot.Bot, user string) {
 // returns the first decisive thing seen: a portal-room block ends the sweep
 // immediately, a weaker hint ends it too (so the search converges instead of
 // finishing a ring it already has news from), and nothing at all is exhausted.
-func searchStrongholdFrom(b *bot.Bot, centerX, centerZ, walkY int32) (strongholdResult, strongholdHint) {
+func searchStrongholdFrom(b *bot.Bot, centerX, centerZ, walkY int32) (strongholdResult, StrongholdHint) {
 	for ring := 0; ring <= strongholdMaxRings; ring++ {
-		for _, off := range strongholdWaypoints(ring, strongholdRingStep) {
+		for _, off := range StrongholdWaypoints(ring, StrongholdRingStep) {
 			wpX := centerX + int32(off[0])
 			wpZ := centerZ + int32(off[1])
 			// WalkTo tolerance is generous on purpose: the waypoint is a
@@ -162,25 +162,25 @@ func searchStrongholdFrom(b *bot.Bot, centerX, centerZ, walkY int32) (stronghold
 			time.Sleep(strongholdSettlePause)
 
 			if hint, ok := scanStrongholdAt(b); ok {
-				if hint.strong {
+				if hint.Strong {
 					return strongholdFound, hint
 				}
 				return strongholdHinted, hint
 			}
 		}
 	}
-	return strongholdExhausted, strongholdHint{}
+	return strongholdExhausted, StrongholdHint{}
 }
 
 // scanStrongholdAt gathers stronghold evidence from where the bot stands. The
 // world cache is asked first because it returns a position the search can
 // converge on; the visible-block scan is the fallback for hints exposed in
 // caves, where the cache ring may miss what is literally in front of the bot.
-func scanStrongholdAt(b *bot.Bot) (strongholdHint, bool) {
-	pos, ok := findNearestBlock(b.GetCoords(), strongholdScanRadius, botBlockLookup(b), dimension.IsStrongholdHint)
+func scanStrongholdAt(b *bot.Bot) (StrongholdHint, bool) {
+	pos, ok := findNearestBlock(b.GetCoords(), strongholdScanRadius, BotBlockLookup(b), dimension.IsStrongholdHint)
 	if ok {
 		name, _ := b.GetBlockName(pos.X(), pos.Y(), pos.Z())
-		return strongholdHint{pos: pos, strong: isStrongholdCore(name)}, true
+		return StrongholdHint{Pos: pos, Strong: IsStrongholdCore(name)}, true
 	}
 	names := strings.Split(
 		perception.VisibleBlockNames(b, float32(strongholdScanRadius), strongholdVisibleLimit), ",")
@@ -192,23 +192,23 @@ func scanStrongholdAt(b *bot.Bot) (strongholdHint, bool) {
 		// in: recentering the search here is the only move the evidence
 		// supports.
 		c := b.GetCoords()
-		return strongholdHint{
-			pos: protocol.BlockPos{
+		return StrongholdHint{
+			Pos: protocol.BlockPos{
 				int32(math.Floor(float64(c.X()))),
 				int32(math.Floor(float64(c.Y()))),
 				int32(math.Floor(float64(c.Z()))),
 			},
-			strong: isStrongholdCore(name),
+			Strong: IsStrongholdCore(name),
 		}, true
 	}
-	return strongholdHint{}, false
+	return StrongholdHint{}, false
 }
 
-// strongholdWaypoints returns the XZ offsets of one search ring, clockwise
+// StrongholdWaypoints returns the XZ offsets of one search ring, clockwise
 // from the north-east corner with the edge midpoints interleaved, which keeps
 // consecutive waypoints a short walk apart instead of a diagonal sprint. Ring
 // 0 is the single in-place waypoint: scan where you stand before walking.
-func strongholdWaypoints(ring, step int) [][2]int {
+func StrongholdWaypoints(ring, step int) [][2]int {
 	if ring <= 0 || step <= 0 {
 		return [][2]int{{0, 0}}
 	}
@@ -219,29 +219,29 @@ func strongholdWaypoints(ring, step int) [][2]int {
 	}
 }
 
-// bestStrongholdHint picks the hint worth acting on: a strong sighting beats
+// BestStrongholdHint picks the hint worth acting on: a strong sighting beats
 // any number of weak ones, and within the same strength the nearest one wins.
 // Distance is horizontal only — the walk to a portal room is along the ground,
 // and its depth is not something the bot can aim at from the surface.
-func bestStrongholdHint(from mgl32.Vec3, hints []strongholdHint) (strongholdHint, bool) {
-	best := strongholdHint{}
+func BestStrongholdHint(from mgl32.Vec3, hints []StrongholdHint) (StrongholdHint, bool) {
+	best := StrongholdHint{}
 	bestDist := math.MaxFloat64
 	found := false
 	for _, h := range hints {
-		dx := float64(h.pos.X()) - float64(from.X())
-		dz := float64(h.pos.Z()) - float64(from.Z())
+		dx := float64(h.Pos.X()) - float64(from.X())
+		dz := float64(h.Pos.Z()) - float64(from.Z())
 		dist := math.Sqrt(dx*dx + dz*dz)
-		if !found || (h.strong && !best.strong) || (h.strong == best.strong && dist < bestDist) {
+		if !found || (h.Strong && !best.Strong) || (h.Strong == best.Strong && dist < bestDist) {
 			best, bestDist, found = h, dist, true
 		}
 	}
 	return best, found
 }
 
-// convergeOnHint returns the XZ centre to search from after a hint is seen:
+// ConvergeOnHint returns the XZ centre to search from after a hint is seen:
 // the hint's own cell. The walking altitude is deliberately not part of the
 // answer — the hint may sit at portal-room depth, and the way down is a
 // digging problem the walker cannot solve.
-func convergeOnHint(hint strongholdHint) (x, z int32) {
-	return hint.pos.X(), hint.pos.Z()
+func ConvergeOnHint(hint StrongholdHint) (x, z int32) {
+	return hint.Pos.X(), hint.Pos.Z()
 }

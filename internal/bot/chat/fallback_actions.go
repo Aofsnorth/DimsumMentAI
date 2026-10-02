@@ -11,6 +11,67 @@ import (
 
 var coordinateIntentRegex = regexp.MustCompile(`(?i)(?:koordinat|kordinat|coords?|coordinate|goto|jalan\s+ke|pergi\s+ke|ke)[^-+0-9]*([-+]?\d+(?:\.\d+)?)\s+([-+]?\d+(?:\.\d+)?)\s+([-+]?\d+(?:\.\d+)?)`)
 
+// comeIntentRegex matches "come to me" in the phrasings a player actually
+// types, rather than the four contiguous strings the old list enumerated.
+//
+// There are two shapes and both are needed. A verb carrying a destination —
+// "datang ke sini", "pergi ke tempat ku" — has the two parts in that order with
+// a little filler between them, because in Indonesian the verb and the
+// destination are separable words rather than one fixed phrase. And a
+// destination that stands alone — "kesini", "come here" — needs no verb at all,
+// because the destination is itself the request.
+//
+// Demanding a verb AND a destination rejects every standalone phrasing, because
+// "kesini" has no verb in front of it; and listing only standalone phrasings
+// rejects every one that has a verb, which is what the old four-string list did.
+// Both failures are silent and both read to a player as the bot ignoring them.
+var comeIntentRegex = regexp.MustCompile(
+	`(?i)(?:` +
+		// Verb, then filler, then the destination.
+		`\b(?:datang|mendatangi|memenuhi|menuju|pergi|ikut|come|follow)\b` +
+		`[\s\S]{0,24}?` +
+		`\b(?:sini|ke\s*sini|tempat\s*ku|tempatku|ke\s+aku|aku|gua|saya|here|me)\b` +
+		`(?:\s+(?:dong|ya|please|pls|tolong))?` +
+		`|` +
+		// A destination that is the whole request.
+		`\b(?:kesini|ke\s*sini|ke\s*tempat\s*ku|ke\s*tempatku|come\s*here|come\s*to\s*me|to\s*me|join\s*me|sini)\b` +
+		`(?:\s+(?:dong|ya|please|pls|tolong))?` +
+		`)`)
+
+// followIntentRegex matches "stay with me" as a standing order rather than a
+// one-off trip.
+//
+// It is separate from comeIntentRegex because the two are different requests:
+// "come" walks to where the player is now and stops, "follow" keeps walking
+// after them. A bot that answered "ikut aku" with a one-off walk would arrive,
+// stop, and then look broken when the player kept moving.
+var followIntentRegex = regexp.MustCompile(
+	`(?i)\b(?:ikut|follow|ikuti|iring|iringi|temani|bareng|beser)\b`)
+
+// stopFollowingIntentRegex matches a request to stop following, in the
+// phrasings a player uses rather than as a command nobody knows about.
+//
+// The opt-out has to be as easy to say as the opt-in. "Berhenti ikutin aku" was
+// typed at the bot and the bot kept following for four minutes, because the
+// only thing it heard was "!nofollow" — a command that exists in the source and
+// in no player's head. Both halves of the exchange have to be plain speech.
+var stopFollowingIntentRegex = regexp.MustCompile(
+	`(?i)\b(?:berhenti|stop)\w*\b[\s\S]{0,20}?\b\w*ikut\w*\b` +
+		`|\b(?:berhenti|stop)\w*\b[\s\S]{0,20}?\b(?:following|follow|iring\w*|mengekor)\b` +
+		`|\b(?:berhenti|stop)\w*\b[\s\S]{0,20}?\b\w*(?:temani|nemenin|bareng)\w*\b` +
+		`|\bjangan\b[\s\S]{0,20}?\b\w*(?:ikut|iring)\w*\b` +
+		`|\bno\s*follow\b`)
+
+// isStopFollowingIntent reports whether a message is the player asking the bot
+// to stop following them.
+func isStopFollowingIntent(msg string) bool {
+	lower := strings.ToLower(strings.TrimSpace(msg))
+	if strings.HasPrefix(lower, "!nofollow") {
+		return true
+	}
+	return stopFollowingIntentRegex.MatchString(lower)
+}
+
 func fallbackMovementActions(msg string) []action.Step {
 	msg = strings.TrimSpace(msg)
 	if msg == "" {
@@ -23,11 +84,32 @@ func fallbackMovementActions(msg string) []action.Step {
 		}}
 	}
 
+	// The "come here" intent, matched as phrases rather than as four exact
+	// substrings.
+	//
+	// The list used to be `kesini`, `ke sini`, `come here`, `datang ke sini`,
+	// and that is four ways of saying one thing out of the several dozen a
+	// player actually types. "ke tempat ku", "ikut aku", "sini dong" and
+	// "follow me" are the same request and none of them matched, so the bot
+	// answered them in chat and then stood there — which reads as the bot
+	// ignoring an explicit instruction, and is worse than not understanding it
+	// because it looked like it had heard.
+	//
+	// The verbs are matched separately from the particles that carry them,
+	// because in Indonesian the two are separable: "ikut" with "sini", "ke"
+	// with "tempatku", "datang" with "ke sini". Requiring one contiguous string
+	// per phrasing is what made the old list miss the common cases.
 	lower := strings.ToLower(msg)
-	if strings.Contains(lower, "kesini") ||
-		strings.Contains(lower, "ke sini") ||
-		strings.Contains(lower, "come here") ||
-		strings.Contains(lower, "datang ke sini") {
+
+	// Follow is tested first because it is the more specific of the two, and the
+	// patterns overlap: "ikut aku" is a follow request and it also matches the
+	// come pattern's "ikut … aku" verb-plus-destination shape. Testing come
+	// first would answer a standing order with a one-off walk — the bot would
+	// arrive, stop, and look broken the moment the player moved again.
+	if followIntentRegex.MatchString(lower) {
+		return []action.Step{{Label: "follow"}}
+	}
+	if comeIntentRegex.MatchString(lower) {
 		return []action.Step{{Label: "come"}}
 	}
 	return nil

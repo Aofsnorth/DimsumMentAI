@@ -25,13 +25,13 @@ import (
 	"bedrock-ai/internal/evidence"
 )
 
-// suspendAfter is how long a human's attention keeps the episode paused.
+// SuspendAfter is how long a human's attention keeps the episode paused.
 //
 // It is short on purpose. The person is there now; a minute later they are
 // still there or they are not, and the bot should not sit frozen waiting to
 // find out. Once the attention lapses the episode picks up exactly where it
 // stopped, with the time it was given still running.
-const suspendAfter = 90 * time.Second
+const SuspendAfter = 90 * time.Second
 
 // log returns the bot's logger, or a silent one.
 //
@@ -55,14 +55,14 @@ func (r *Runner) note(kind evidence.Kind, detail string, fields map[string]any) 
 	r.b.Evidence.Record(kind, detail, fields)
 }
 
-// oneBlockStyle answers how the brain should read the world, as a short style
+// OneBlockStyle answers how the brain should read the world, as a short style
 // line the models can be told about.
 //
 // It is a style rather than a verdict because that is what the consumers need:
 // the planner has to write a different plan, and the decision model has to
 // stop offering fishing. Neither of them needs to be told the detection is a
 // guess, and telling them so would only make them hedge.
-func (r *Runner) oneBlockStyle(nearBlocks string) string {
+func (r *Runner) OneBlockStyle(nearBlocks string) string {
 	reading := DetectOneBlock(nearBlocks)
 
 	// The second reading is what turns a hint into a conclusion. A world that
@@ -92,38 +92,38 @@ func (r *Runner) oneBlockStyle(nearBlocks string) string {
 	}
 }
 
-// isOneBlockWorld is the brain's own read, for the paths that do not go through
+// IsOneBlockWorld is the brain's own read, for the paths that do not go through
 // the chat layer's hook.
-func (r *Runner) isOneBlockWorld() bool {
+func (r *Runner) IsOneBlockWorld() bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.oneBlockConfirmed
 }
 
-// singleBlockBrief is the instruction a single-block world needs, or empty when
+// SingleBlockBrief is the instruction a single-block world needs, or empty when
 // this is an ordinary one.
-func (r *Runner) singleBlockBrief(under string) string {
-	if !r.isOneBlockWorld() {
+func (r *Runner) SingleBlockBrief(under string) string {
+	if !r.IsOneBlockWorld() {
 		return ""
 	}
 	return OneBlockPlan(under)
 }
 
-// naturalTick is the natural-mode branch of the brain loop.
+// NaturalTick is the natural-mode branch of the brain loop.
 //
 // It sits below the reflex layer like planning mode does — a bot that finishes
 // an episode by dying has not finished anything.
-func (r *Runner) naturalTick(ctx context.Context, snap Snapshot, judgement Judgement) {
+func (r *Runner) NaturalTick(ctx context.Context, snap Snapshot, judgement Judgement) {
 	r.log().Info("AGI: naturalTick",
 		slog.Bool("busy", snap.Busy),
 		slog.Bool("exploring", snap.Exploring),
-		slog.String("episode", r.currentEpisode().Objective),
+		slog.String("episode", r.CurrentEpisode().Objective),
 	)
 
 	// The watchdog goes first and always. A recording nobody is watching is
 	// exactly the case where a dead or wedged bot goes unnoticed for an hour,
 	// so this is the one thing in the mode that is not optional.
-	if fault, action := r.watch(snap); action != ActNone {
+	if fault, action := r.Watch(snap); action != ActNone {
 		r.actOnFault(fault, action, snap)
 		return
 	}
@@ -131,20 +131,20 @@ func (r *Runner) naturalTick(ctx context.Context, snap Snapshot, judgement Judge
 	// A human outranks the schedule. If somebody is talking to the bot, the bot
 	// is talking back, and the episode waits. This is the single rule that
 	// decides whether natural mode is a companion or a machine with a calendar.
-	if r.attendingToPlayer(nowish(snap)) {
-		r.playAlong(snap, judgement)
+	if r.AttendingToPlayer(nowish(snap)) {
+		r.PlayAlong(snap, judgement)
 		return
 	}
 
-	episode := r.currentEpisode()
+	episode := r.CurrentEpisode()
 	switch {
-	case episode.Objective == "" && r.shouldPlanNaturally(judgement):
+	case episode.Objective == "" && r.ShouldPlanNaturally(judgement):
 		r.planningTick(ctx, snap, judgement)
 
 	case episode.Objective == "":
 		// No brief yet. The bot is expected to be playing for hours before
 		// anybody hands it one, so this is the normal state and not a gap.
-		r.freePlay(snap, judgement)
+		r.FreePlay(snap, judgement)
 
 	case episode.Over(snap.Now):
 		r.endEpisode(episode, snap)
@@ -154,10 +154,10 @@ func (r *Runner) naturalTick(ctx context.Context, snap Snapshot, judgement Judge
 	}
 }
 
-// shouldPlanNaturally keeps one active plan in charge of the motor layer. A
+// ShouldPlanNaturally keeps one active plan in charge of the motor layer. A
 // configured objective needs a plan even when Jev is temporarily unavailable.
-func (r *Runner) shouldPlanNaturally(j Judgement) bool {
-	return r.currentPlan().Objective != "" || r.currentGoal().Pinned || WantsBigBrain(j, escalateThreshold)
+func (r *Runner) ShouldPlanNaturally(j Judgement) bool {
+	return r.CurrentPlan().Objective != "" || r.CurrentGoal().Pinned || WantsBigBrain(j, EscalateThreshold)
 }
 
 // BeginEpisode installs a brief and reports whether it was usable.
@@ -208,8 +208,8 @@ func (r *Runner) EndEpisode(reason string) {
 	})
 }
 
-// currentEpisode returns the active brief, or the zero Episode.
-func (r *Runner) currentEpisode() Episode {
+// CurrentEpisode returns the active brief, or the zero Episode.
+func (r *Runner) CurrentEpisode() Episode {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.episode
@@ -222,39 +222,60 @@ func (r *Runner) currentEpisode() Episode {
 // until the attention lapses.
 func (r *Runner) Suspend(who string) {
 	r.mu.Lock()
-	r.suspendedUntil = time.Now().Add(suspendAfter)
+	r.suspendedUntil = time.Now().Add(SuspendAfter)
 	r.suspendedBy = who
 	r.mu.Unlock()
+	if r.b != nil && r.b.Explorer != nil && r.b.Explorer.IsExploring() {
+		r.b.Explorer.Stop()
+	}
 }
 
-// attendingToPlayer reports whether a human currently has the bot.
-func (r *Runner) attendingToPlayer(now time.Time) bool {
+// AttendingToPlayer reports whether a human currently has the bot.
+func (r *Runner) AttendingToPlayer(now time.Time) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.suspendedBy != "" && now.Before(r.suspendedUntil)
 }
 
-// playAlong hands the tick to the ordinary companion behaviour.
+// BodyCommitted reports whether the bot's body already belongs to something.
 //
-// It is deliberately the same code the default brain uses, not a second
-// implementation. A bot that plays differently with a person present than it
-// does alone has two personalities, and the audience can tell which one is real.
-func (r *Runner) playAlong(snap Snapshot, judgement Judgement) {
-	if judgement.Known && judgement.Activity != "" {
-		r.doActivity(judgement.Activity)
-		return
-	}
-	r.maybeWander()
+// A player's "come here" is an action, not a suggestion: the action layer owns
+// the walk for as long as the walk takes, and that can outlast the ninety
+// seconds of attention that started it. The natural loop runs every second
+// regardless, so without this the loop renegotiates a command mid-stride — and
+// it does not even need to do anything dramatic to break it. Opening a rest
+// period is enough, because a resting bot calls StopMovement. On camera that is
+// a bot that walks a few blocks toward somebody, stops, and stands there.
+//
+// The two ways a body can be in use are a walk already in progress and an
+// exploration drift, which is itself a long walk. Neither is negotiable, and
+// neither is a reason to start anything new.
+func BodyCommitted(snap Snapshot) bool {
+	return snap.Busy || snap.Exploring
 }
 
-// freePlay is what the bot does with no brief and nobody talking to it.
+// PlayAlong leaves the motor to the player's chat action while attention is
+// suspended. Starting a Jev activity here competes with the reply being executed.
+func (r *Runner) PlayAlong(snap Snapshot, _ Judgement) {
+	if BodyCommitted(snap) {
+		return
+	}
+	r.mu.Lock()
+	who := r.suspendedBy
+	r.mu.Unlock()
+	if who != "" {
+		r.b.LookAtPlayer(who, 2*time.Second)
+	}
+}
+
+// FreePlay is what the bot does with no brief and nobody talking to it.
 //
 // It deliberately does not manufacture urgency. There is no objective to serve,
 // so the honest options are: look at what has been discovered, go and look at
 // something new, or stand still for a while. Inventing a goal here would produce
 // a bot that is permanently busy for no reason, which is the exact thing that
 // makes a long recording tiring to watch.
-func (r *Runner) freePlay(snap Snapshot, judgement Judgement) {
+func (r *Runner) FreePlay(snap Snapshot, judgement Judgement) {
 	// Diagnostic: log the decision inputs so a frozen bot is never a mystery.
 	// INFO level so it is visible without enabling debug.
 	r.log().Info("AGI: freePlay",
@@ -265,12 +286,19 @@ func (r *Runner) freePlay(snap Snapshot, judgement Judgement) {
 		slog.Int("chunks", r.b.WorldCache.ChunkCount()),
 	)
 
+	// The body already belongs to something, so this tick has no say in what the
+	// bot does next. The action layer is finishing a walk or a drift, and a
+	// second decision on top of that is a second opinion nobody asked for.
+	if BodyCommitted(snap) {
+		return
+	}
+
 	// A single-block world has exactly one thing to do, and it is not any of the
 	// things on the menu. Offering fishing in a world with no water, or
 	// gathering in a world with no wood, is how a bot spends ten minutes failing
 	// the same way.
-	if style := r.oneBlockStyle(snap.NearBlocks); style != "normal" {
-		if r.isOneBlockWorld() {
+	if style := r.OneBlockStyle(snap.NearBlocks); style != "normal" {
+		if r.IsOneBlockWorld() {
 			r.oneBlockStep(snap)
 			return
 		}
@@ -278,18 +306,25 @@ func (r *Runner) freePlay(snap Snapshot, judgement Judgement) {
 
 	// Something worth doing and nothing pressing: take it.
 	if judgement.Known && judgement.Activity != "" && judgement.Engaged {
+		r.applyLocomotion(judgement.Locomotion)
+		r.applyDrop(judgement.DropOK)
+		r.b.SetAppetite(judgement.Appetite)
+		r.rememberAffordance(judgement.Affordance)
+		r.applyGaze(judgement.Gaze)
 		r.doActivity(judgement.Activity)
 		return
 	}
 
 	// Nothing urgent. A bot that always does something is the failure this whole
 	// mode exists to avoid, so the resting branch is the common one and it is
-	// allowed to be common.
-	if r.shouldIdle(snap) {
-		r.idle(snap)
+	// allowed to be common. The test is "have I been still too long", not "am I
+	// resting", so rest stays reachable without a decision that has to be talked
+	// into happening.
+	if r.ShouldDrift(snap) {
+		r.maybeWander()
 		return
 	}
-	r.maybeWander()
+	r.Idle(snap)
 }
 
 // runEpisode works the brief, watching the clock the whole way.
@@ -313,7 +348,7 @@ func (r *Runner) runEpisode(ctx context.Context, episode Episode, snap Snapshot)
 // wrapUp ends an episode tidily rather than letting it run over.
 func (r *Runner) wrapUp(episode Episode, snap Snapshot) {
 	done, total := 0, 0
-	if plan := r.currentPlan(); plan.Objective != "" {
+	if plan := r.CurrentPlan(); plan.Objective != "" {
 		done, total = plan.progress()
 	}
 	r.log().Info("AGI: wrapping up",
@@ -333,7 +368,7 @@ func (r *Runner) wrapUp(episode Episode, snap Snapshot) {
 // endEpisode retires a brief whose time is up.
 func (r *Runner) endEpisode(episode Episode, snap Snapshot) {
 	done, total := 0, 0
-	if plan := r.currentPlan(); plan.Objective != "" {
+	if plan := r.CurrentPlan(); plan.Objective != "" {
 		done, total = plan.progress()
 	}
 	r.log().Info("AGI: episode over",
@@ -377,15 +412,15 @@ func (r *Runner) oneBlockStep(snap Snapshot) {
 	action.Execute(r.b, "automine", "", r.audience())
 }
 
-// modeIsNatural is the branch condition, named so Tick reads as prose.
-func (r *Runner) modeIsNatural() bool { return r.cfg.Mode == config.ModeNatural }
+// ModeIsNatural is the branch condition, named so Tick reads as prose.
+func (r *Runner) ModeIsNatural() bool { return r.cfg.Mode == config.ModeNatural }
 
-// watch runs one watchdog pass and reports what, if anything, to do about it.
+// Watch runs one watchdog pass and reports what, if anything, to do about it.
 //
 // The repeat counter lives here rather than at the call site because "the same
 // fault twice in a row" is only knowable by keeping the last one, and a caller
 // that forgot to would either thrash or never fire.
-func (r *Runner) watch(snap Snapshot) (Fault, Action) {
+func (r *Runner) Watch(snap Snapshot) (Fault, Action) {
 	now := nowish(snap)
 	health := r.observePosition(now, snap)
 	fault := Diagnose(health)
@@ -419,7 +454,26 @@ func (r *Runner) observePosition(now time.Time, snap Snapshot) Health {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
+	// Movement is measured against the real position, never against the
+	// formatted coordinate string.
+	//
+	// Snapshot.Coords is rendered with "%.0f" because it is written for a model
+	// to read: "X:51 Y:80 Z:194". It is whole blocks, so a bot walking inside
+	// one block produced an identical string, the watchdog read that as "has
+	// not moved", and after thirty seconds it declared a bot that was plainly
+	// walking to be stuck — then fired ActUnstick, which clears the world model
+	// and makes the bot less able to find its way. A live run showed 144 of
+	// those in four minutes while the log recorded sixteen separate repaths and
+	// a dozen distinct positions.
+	//
+	// The prompt still gets the rounded string. Only the judgement uses metres.
 	moved := r.lastPosition == "" || snap.Coords != r.lastPosition
+	if r.b != nil {
+		if pos := r.b.GetCoords(); r.lastPosition == "" || pos != r.lastVec {
+			moved = true
+			r.lastVec = pos
+		}
+	}
 	if moved {
 		r.lastMoved = now
 		r.lastPosition = snap.Coords
@@ -433,6 +487,7 @@ func (r *Runner) observePosition(now time.Time, snap Snapshot) Health {
 		PositionChanged: moved,
 		LastMoved:       r.lastMoved,
 		Now:             now,
+		WantsToMove:     snap.WantsToMove,
 		Exploring:       snap.Exploring,
 	}
 }
@@ -471,7 +526,7 @@ func actForFault(fault Fault, repeats int) Action {
 	case FaultDead:
 		return ActRespawn
 	case FaultStuck:
-		if repeats < stuckNeedsRepeats {
+		if repeats < StuckNeedsRepeats {
 			return ActNone
 		}
 		return ActUnstick
@@ -496,7 +551,7 @@ func (r *Runner) Disconnected(state bool) {
 // is precisely the question a recording cannot answer after the fact: at minute
 // ninety the bot was still, and was anything noticed.
 func (r *Runner) actOnFault(fault Fault, action Action, snap Snapshot) {
-	line := watchReport(fault, action, r.repeats())
+	line := WatchReport(fault, action, r.repeats())
 	r.log().Warn(line, slog.String("at", snap.Coords))
 	r.note(evidence.KindWatchdog, line, map[string]any{
 		"fault":  fault.String(),

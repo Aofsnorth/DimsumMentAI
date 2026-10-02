@@ -140,25 +140,53 @@ func (tc *TreeChopper) chopLogBlocks(ctx context.Context, logBlocks []protocol.B
 	// still stand, so a log skipped for line of sight in the first pass often
 	// becomes visible once the lower logs are gone. Never break blind to work
 	// around it — that is the through-the-trunk mining a player would never do.
+	//
+	// One rhythm for the whole trunk, not one per log. A tree is a continuous
+	// swing, and re-running the wind-up in front of every log put a 120-240ms
+	// gap at each log boundary — under the 260ms swing floor — so the arm visibly
+	// restarted mid-cycle over and over. The 20ms between logs is gone with it;
+	// the cadence now supplies that pause, and it supplies a real one.
+	rhythm := animation.NewChain(logAim(logBlocks, 0))
+
 	remaining := logBlocks
 	for pass := 0; pass < 2 && len(remaining) > 0; pass++ {
 		var deferred []protocol.BlockPos
-		for _, pos := range remaining {
+		for i, pos := range remaining {
 			select {
 			case <-ctx.Done():
 				return
 			default:
 			}
-			if !tc.chopLogBlock(ctx, pos) {
+			// A deferred log was never swung at, so the chain still points at the
+			// block it was last aimed at. A log that was swung at re-aims it.
+			if i > 0 {
+				rhythm.Reaim(blockCentre(pos))
+			}
+			if !tc.chopLogBlock(ctx, pos, rhythm) {
 				deferred = append(deferred, pos)
 			}
-			time.Sleep(20 * time.Millisecond)
 		}
 		if len(deferred) > 0 {
 			tc.logger.Debug("logs deferred after pass", "count", len(deferred), "pass", pass+1)
 		}
 		remaining = deferred
 	}
+}
+
+// logAim is the centre of a log block, used to seed a chain's aim.
+func logAim(logs []protocol.BlockPos, i int) mgl32.Vec3 {
+	if i >= len(logs) {
+		i = len(logs) - 1
+	}
+	if i < 0 {
+		return mgl32.Vec3{}
+	}
+	return blockCentre(logs[i])
+}
+
+// blockCentre is the middle of a block, which is what the head aims at.
+func blockCentre(pos protocol.BlockPos) mgl32.Vec3 {
+	return mgl32.Vec3{float32(pos.X()) + 0.5, float32(pos.Y()) + 0.5, float32(pos.Z()) + 0.5}
 }
 
 // breakReach is how far the eye may be from a log centre for the log to still
@@ -175,7 +203,7 @@ func withinBreakReach(botPos mgl32.Vec3, pos protocol.BlockPos) bool {
 	return eye.Sub(center).Len() <= breakReach
 }
 
-func (tc *TreeChopper) chopLogBlock(ctx context.Context, pos protocol.BlockPos) bool {
+func (tc *TreeChopper) chopLogBlock(ctx context.Context, pos protocol.BlockPos, rhythm *animation.Chain) bool {
 	bot := tc.rg.bot
 	botPos := bot.GetCoords()
 
@@ -189,7 +217,7 @@ func (tc *TreeChopper) chopLogBlock(ctx context.Context, pos protocol.BlockPos) 
 	// (top) for every log while aiming at a side, and never checked sight —
 	// so it mined through the trunk with no line of sight.
 	world := botMineWorld{bot: bot, model: bot.GetLocalWorldModel()}
-	step, visible := planMineStep(world, botPos, pos)
+	step, visible := PlanMineStep(world, botPos, pos)
 	if !visible {
 		tc.logger.Debug("log not visible from current spot, deferring", "pos", pos)
 		return false
@@ -204,7 +232,7 @@ func (tc *TreeChopper) chopLogBlock(ctx context.Context, pos protocol.BlockPos) 
 	}
 
 	tc.startBreakBlock(step)
-	tc.swingUntilBreak(ctx, step.Aim, sabdBreakDuration(serverAuthBreaking(bot), "oak_log", tc.equippedAxeName()))
+	tc.swingUntilBreak(ctx, rhythm, sabdBreakDuration(serverAuthBreaking(bot), "oak_log", tc.equippedAxeName()))
 	tc.finishBreakBlock(step)
 
 	bot.GetLocalWorldModel().SetSolid(pos.X(), pos.Y(), pos.Z(), false)
@@ -261,7 +289,7 @@ func (tc *TreeChopper) returnToReach(ctx context.Context, pos protocol.BlockPos)
 // startBreakBlock begins the server-auth break of the planned step, using the
 // face the plan chose (the old code always claimed face 1/top regardless of
 // which side the bot was actually aiming at).
-func (tc *TreeChopper) startBreakBlock(step mineStep) {
+func (tc *TreeChopper) startBreakBlock(step MineStep) {
 	_ = tc.rg.bot.WritePacket(&packet.PlayerAction{
 		EntityRuntimeID: tc.rg.bot.GetEntityRuntimeID(),
 		ActionType:      protocol.PlayerActionStartBreak,
@@ -274,35 +302,56 @@ func (tc *TreeChopper) startBreakBlock(step mineStep) {
 // scaffold and the obstacle unstick: see animation/rhythm.go for why the pacing
 // and the variation are what they are. The chopper was the first caller and
 // still is the reference for how a break should look.
-func chopWindUp() time.Duration {
+// ChopWindUp is the pause before the first swing of a break.
+func ChopWindUp() time.Duration {
 	return animation.WindUp()
 }
 
-func chopCadence(swing int) time.Duration {
+// ChopCadence is the wait before swing number `swing` of a break.
+func ChopCadence(swing int) time.Duration {
 	return animation.Cadence(swing)
 }
 
-func chopAim(center mgl32.Vec3) mgl32.Vec3 {
+// ChopAim is the block centre jittered so the swing never looks welded to a
+// single point.
+func ChopAim(center mgl32.Vec3) mgl32.Vec3 {
 	return animation.JitteredAim(center)
 }
 
-func (tc *TreeChopper) swingUntilBreak(ctx context.Context, targetCenter mgl32.Vec3, breakTime time.Duration) {
+// swingUntilBreak swings until the break time is up, on the chain's rhythm.
+//
+// The chain is shared by every log of a trunk, so the wind-up is served once and
+// the burst/recovery pattern runs continuously across the tree. The swing is sent
+// before the look, not after: the arm has to be on its way when the head turns,
+// and a head that starts moving only once the arm has landed reads as the swing
+// being fired at the wrong moment.
+func (tc *TreeChopper) swingUntilBreak(ctx context.Context, rhythm *animation.Chain, breakTime time.Duration) {
 	bot := tc.rg.bot
-	for i, beat := range animation.Beats(breakTime, targetCenter) {
-		if !sleepContext(ctx, beat.Wait) {
+	deadline := time.Now().Add(breakTime)
+
+	for {
+		wait, swing := rhythm.Next()
+		if !sleepContext(ctx, wait) {
 			return
 		}
-		if i == 0 {
-			// The first beat is the wind-up: the arm is still being raised, so
-			// no swing has been sent yet.
-			continue
+		if swing {
+			_ = bot.WritePacket(animation.MineSwing(bot.GetEntityRuntimeID()))
+			bot.LookAt(rhythm.Aim())
 		}
-		_ = bot.WritePacket(animation.MineSwing(bot.GetEntityRuntimeID()))
-		bot.LookAt(beat.Aim)
+		// The last swing is stretched to land on the break time, the way Beats
+		// does, so the arm is never left mid-cycle when the block goes.
+		if remaining := time.Until(deadline); remaining > 0 && remaining < animation.SwingMin {
+			if !sleepContext(ctx, remaining) {
+				return
+			}
+		}
+		if !time.Now().Before(deadline) {
+			return
+		}
 	}
 }
 
-func (tc *TreeChopper) finishBreakBlock(step mineStep) {
+func (tc *TreeChopper) finishBreakBlock(step MineStep) {
 	bot := tc.rg.bot
 	_ = bot.WritePacket(&packet.PlayerAction{
 		EntityRuntimeID: bot.GetEntityRuntimeID(),
@@ -324,7 +373,7 @@ func (tc *TreeChopper) finishBreakBlock(step mineStep) {
 // clearObstructions removes a non-log block sitting on top of the log being
 // chopped (moss, scaffolding, leaves the tower left behind). The obstruction
 // is planned through the same visibility check as the log itself.
-func (tc *TreeChopper) clearObstructions(ctx context.Context, step mineStep) {
+func (tc *TreeChopper) clearObstructions(ctx context.Context, step MineStep) {
 	bot := tc.rg.bot
 	world := bot.GetLocalWorldModel()
 
@@ -341,7 +390,7 @@ func (tc *TreeChopper) clearObstructions(ctx context.Context, step mineStep) {
 	// Same sight-line discipline as the log itself: pick an exposed face the
 	// bot can see. If the obstruction is not visible from here, the tower will
 	// pass through it on the way up anyway — do not mine blind.
-	obstructionStep, visible := planMineStep(botMineWorld{bot: bot, model: world}, bot.GetCoords(), checkPos)
+	obstructionStep, visible := PlanMineStep(botMineWorld{bot: bot, model: world}, bot.GetCoords(), checkPos)
 	if !visible {
 		return
 	}
@@ -365,7 +414,14 @@ func (tc *TreeChopper) clearObstructions(ctx context.Context, step mineStep) {
 	// old code threw one swing and then stood still for the whole break, which
 	// is the one pose that reads as a bot: a frozen arm over a block that
 	// takes three seconds to fall.
-	tc.swingUntilBreak(ctx, obstructionStep.Aim, sabdBreakDuration(serverAuthBreaking(bot), name, ""))
+	//
+	// It gets its own chain rather than the trunk's: the obstruction is a
+	// different block with a different break time, and a log that was already
+	// mid-burst should not have its burst carried over onto it. What it must not
+	// do is re-wind-up in the middle of a trunk chop, so the chain is created
+	// here and discarded with the obstruction.
+	obstruction := animation.NewChain(obstructionStep.Aim)
+	tc.swingUntilBreak(ctx, obstruction, sabdBreakDuration(serverAuthBreaking(bot), name, ""))
 	tc.finishBreakBlock(obstructionStep)
 
 	world.SetSolid(checkPos.X(), checkPos.Y(), checkPos.Z(), false)

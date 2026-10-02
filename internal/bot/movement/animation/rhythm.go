@@ -92,24 +92,108 @@ type Beat struct {
 // A swing is only emitted when there is room for a full pause after it. The
 // naive version trimmed the last beat to whatever time was left, which on a
 // 3-second break produced a final swing 86ms after the previous one: too fast
-// for the arm cycle, so the last thing a viewer sees is the vibration this
-// rhythm exists to avoid. A remainder too short to swing is given to the
-// previous beat instead, so the break still ends when it should.
+// for the arm cycle, so the last thing a viewer sees is the exact vibration this
+// rhythm exists to prevent.
+//
+// What is left over is handed to the last swing instead of being dropped.
+// Dropping it was worse than a runt swing: the shortfall is not a rounding error
+// but a whole unused pause, up to a full recovery. A 650ms break laid down 380ms
+// of swings and then stopped, so the last quarter of the break had a raised arm
+// and no strike — the block simply vanished between beats, and the swing read as
+// disconnected from the thing it was hitting. Stretching the last beat keeps
+// every pause at or above the swing floor, because it only ever adds time to one
+// that already cleared it.
+//
+// The exception is a break too short to carry a swing at all, where the last beat
+// is still the wind-up. Stretching that would turn a tool raise into a stall, and
+// the time cannot be spent on anything: there is no swing that fits. An instant
+// block is better served by no swing than by a strained one.
 func Beats(breakTime time.Duration, aim mgl32.Vec3) []Beat {
 	beats := []Beat{{Wait: WindUp(), Aim: aim}}
+
+	// One aim for the whole break, not one per swing. The jitter is there so the
+	// head is not welded to a single pixel, and re-rolling it on every swing does
+	// not do that: the look ease converges at 0.22 a tick and needs the better
+	// part of a second to settle, while a fresh random target arrived every three
+	// hundred milliseconds. The head chased a target it could never reach, in
+	// step with the arm, which reads as the swing itself being wrong because the
+	// body it hangs off is twitching through every strike. This repository has
+	// already ruled that shape a bug once, in the movement loop's pitch easing.
+	swingAim := JitteredAim(aim)
 
 	// Assume the wind-up took its floor: never overrun the break time.
 	elapsed := WindUpMin
 	for swing := 0; ; swing++ {
 		wait := Cadence(swing)
 		if elapsed+wait >= breakTime {
-			remainder := breakTime - elapsed
-			if remainder < SwingMin && len(beats) > 1 {
+			if remainder := breakTime - elapsed; remainder > 0 && len(beats) > 1 {
 				beats[len(beats)-1].Wait += remainder
 			}
 			return beats
 		}
-		beats = append(beats, Beat{Wait: wait, Aim: JitteredAim(aim)})
+		beats = append(beats, Beat{Wait: wait, Aim: swingAim})
 		elapsed += wait
 	}
+}
+
+// Chain is a break rhythm that keeps running across several blocks.
+//
+// Beats is the right shape for one block and the wrong shape for a tree. A trunk
+// is not a stack of independent breaks: a player fells it with one continuous
+// swing cycle and the arm never drops between logs. Laying a fresh Beats out per
+// log put a new wind-up in front of every one of them, and since the chopper only
+// waited 20ms between logs the gap between the last swing of one log and the
+// first swing of the next came out at 120-240ms — under SwingMin, so the viewer's
+// client restarted the arm cycle before the previous one finished. On a six-log
+// trunk that happened five times, and it is what a stuttering arm looks like.
+//
+// Carrying the rhythm across the logs is the fix. The wind-up is owed once, the
+// swing counter keeps counting so the burst-and-recovery pattern spans the whole
+// tree rather than restarting inside every log, and the gap at a log boundary is
+// an ordinary cadence pause.
+//
+// The aim is re-rolled on Reaim rather than per beat, for the same reason Beats
+// uses one aim per break: the look ease cannot follow a target that changes every
+// few hundred milliseconds, and the head is what the arm hangs off.
+type Chain struct {
+	centre  mgl32.Vec3
+	aim     mgl32.Vec3
+	swings  int
+	started bool
+}
+
+// NewChain starts a rhythm aimed at a block centre.
+func NewChain(centre mgl32.Vec3) *Chain {
+	return &Chain{centre: centre, aim: JitteredAim(centre)}
+}
+
+// Next reports how long to wait before the next action and whether a swing is due
+// when it elapses.
+//
+// The first call of a chain is the wind-up and sends no swing; every call after
+// that is a cadence pause and sends one.
+func (c *Chain) Next() (wait time.Duration, swing bool) {
+	if !c.started {
+		c.started = true
+		return WindUp(), false
+	}
+	wait = Cadence(c.swings)
+	c.swings++
+	return wait, true
+}
+
+// Started reports whether the wind-up has already been served.
+func (c *Chain) Started() bool { return c.started }
+
+// Swings reports how many swings the chain has sent.
+func (c *Chain) Swings() int { return c.swings }
+
+// Aim is where the head should be looking during the next swing.
+func (c *Chain) Aim() mgl32.Vec3 { return c.aim }
+
+// Reaim moves the chain onto a new block, keeping the swing count and the fact
+// that the wind-up is already spent.
+func (c *Chain) Reaim(centre mgl32.Vec3) {
+	c.centre = centre
+	c.aim = JitteredAim(centre)
 }

@@ -3,6 +3,7 @@ package bot
 import (
 	"context"
 	"fmt"
+	"math"
 	"time"
 
 	"bedrock-ai/internal/bot/placement"
@@ -18,7 +19,7 @@ func (b *Bot) PlaceBlock(ctx context.Context, request placement.Request) error {
 	b.placeMu.Lock()
 	defer b.placeMu.Unlock()
 
-	if err := validatePlacementRequest(request); err != nil {
+	if err := ValidatePlacementRequest(request); err != nil {
 		return err
 	}
 	if err := b.EquipItem(request.InventorySlot); err != nil {
@@ -57,7 +58,7 @@ func (b *Bot) PlaceBlock(ctx context.Context, request placement.Request) error {
 
 	updates, unsubscribe := b.subscribeBlockUpdates(request.Destination)
 	defer unsubscribe()
-	start, transaction, stop := buildPlacementPackets(
+	start, transaction, stop := BuildPlacementPackets(
 		b.GetEntityRuntimeID(),
 		request,
 		heldSlot,
@@ -106,7 +107,7 @@ func (b *Bot) PlaceBlock(ctx context.Context, request placement.Request) error {
 	}
 }
 
-func validatePlacementRequest(request placement.Request) error {
+func ValidatePlacementRequest(request placement.Request) error {
 	if request.Face < 0 || request.Face > 5 {
 		return fmt.Errorf("invalid block face %d", request.Face)
 	}
@@ -116,6 +117,12 @@ func validatePlacementRequest(request placement.Request) error {
 		}
 	}
 	return nil
+}
+
+// HeldItemInstance is the held slot plus the item the server attributes a
+// placement to, public for the scaffold package's narrow Bot interface.
+func (b *Bot) HeldItemInstance() (uint32, protocol.ItemInstance, bool) {
+	return b.heldItemInstance()
 }
 
 func (b *Bot) heldItemInstance() (uint32, protocol.ItemInstance, bool) {
@@ -129,7 +136,7 @@ func (b *Bot) heldItemInstance() (uint32, protocol.ItemInstance, bool) {
 	return slot, protocol.ItemInstance{StackNetworkID: b.StackNetworkIDs[slot], Stack: stack}, true
 }
 
-func buildPlacementPackets(entityRuntimeID uint64, request placement.Request, heldSlot uint32, heldItem protocol.ItemInstance, playerPosition mgl32.Vec3, supportNetworkID uint32) (*packet.PlayerAction, *packet.InventoryTransaction, *packet.PlayerAction) {
+func BuildPlacementPackets(entityRuntimeID uint64, request placement.Request, heldSlot uint32, heldItem protocol.ItemInstance, playerPosition mgl32.Vec3, supportNetworkID uint32) (*packet.PlayerAction, *packet.InventoryTransaction, *packet.PlayerAction) {
 	start := &packet.PlayerAction{
 		EntityRuntimeID: entityRuntimeID,
 		ActionType:      protocol.PlayerActionStartItemUseOn,
@@ -205,4 +212,62 @@ func sleepWithContext(ctx context.Context, duration time.Duration) bool {
 	case <-timer.C:
 		return true
 	}
+}
+
+// PlaceShield puts a block between the body and a threat, and reports whether
+// the server put it there.
+//
+// This is the composed answer to being ambushed: a bot reflexively runs from a
+// creeper, and a player puts a block down first and walks away behind it. The
+// difference is visible from outside — one of them was ready for the next one.
+//
+// It goes through PlaceBlock rather than writing a transaction, so it inherits
+// the confirmation: the return value is whether the world changed, not whether a
+// packet was sent. A bot that believed it had walled itself off when it had not
+// would stand in the blast, which is the specific outcome this exists to avoid.
+//
+// Failing to place is not an error. The caller is already fleeing, and running is
+// still the right answer; this is the better answer when it works, never the
+// only answer.
+func (b *Bot) PlaceShield(ctx context.Context, threat mgl32.Vec3) bool {
+	if b == nil {
+		return false
+	}
+
+	feet := b.GetCoords()
+	// Between the body and the threat: one block along the bearing, at feet
+	// height, so the body has something to duck behind rather than something to
+	// trip over.
+	dx, dz := threat.X()-feet.X(), threat.Z()-feet.Z()
+	d := float32(math.Sqrt(float64(dx*dx + dz*dz)))
+	if d < 1e-3 {
+		// Standing inside the threat: any direction is an improvement, so pick
+		// one rather than standing still.
+		d, dx, dz = 1, 1, 0
+	}
+
+	cell := protocol.BlockPos{
+		int32(math.Floor(float64(feet.X() + dx/d))),
+		int32(math.Floor(float64(feet.Y()))),
+		int32(math.Floor(float64(feet.Z() + dz/d))),
+	}
+	support := protocol.BlockPos{cell.X(), cell.Y() - 1, cell.Z()}
+
+	slot, _, ok := b.FindScaffoldItem()
+	if !ok {
+		return false
+	}
+
+	if err := b.PlaceBlock(ctx, placement.Request{
+		InventorySlot: slot,
+		Destination:   cell,
+		Support:       support,
+		Face:          BlockFaceTop,
+		ClickedOffset: mgl32.Vec3{BlockCenterOffset, 1, BlockCenterOffset},
+	}); err != nil {
+		b.Logger.Debug("shield placement failed, the caller is fleeing anyway",
+			"cell", cell, "error", err.Error())
+		return false
+	}
+	return true
 }

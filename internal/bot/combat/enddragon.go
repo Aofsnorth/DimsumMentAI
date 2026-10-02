@@ -3,7 +3,7 @@
 // The dragon is the one fight the generic engage loop cannot be pointed at. It
 // spends most of the fight out of reach, it flings the bot into the void for
 // standing still, and the fastest way to hurt it is to shoot something that is
-// not it. None of that is expressible in mobMovePlan, which is keyed on a mob
+// not it. None of that is expressible in MobMovePlan, which is keyed on a mob
 // name and answers with "strafe" or "charge" — charging a dragon is suicide and
 // strafing a dragon is a slower suicide.
 //
@@ -26,11 +26,11 @@ const (
 	// reach is short, but it is moving, so the bot starts leaving before it is
 	// technically in range.
 	dragonDiveDistance float32 = 6.0
-	// dragonRetreatDistance is where backing off from a dragon stops. It is
+	// DragonRetreatDistance is where backing off from a dragon stops. It is
 	// outside the dive distance by enough that a single tick of movement
 	// decides the fight rather than two, which is what stops a bot from
 	// oscillating in and out of the danger radius for the whole fight.
-	dragonRetreatDistance float32 = 12.0
+	DragonRetreatDistance float32 = 12.0
 	// dragonPerchHeight is how far above the bot the dragon can be and still be
 	// considered reachable. Perched, it settles a few blocks over the fountain;
 	// circling, it is thirty up and nothing anyone on the ground can touch.
@@ -39,29 +39,29 @@ const (
 	// uses, so a dragon that has come down to the fountain is hit rather than
 	// circled.
 	dragonMeleeDistance float32 = 3.5
-	// crystalRange is how far the bot will engage a crystal. It matches the 32
+	// CrystalRange is how far the bot will engage a crystal. It matches the 32
 	// blocks the generic loop gives up at: a pillar further out than that is
 	// not a fight, it is a walk.
-	crystalRange float32 = 32.0
-	// crystalBandMin and crystalBandMax are the distance band the bot holds
+	CrystalRange float32 = 32.0
+	// CrystalBandMin and CrystalBandMax are the distance band the bot holds
 	// while shooting a crystal. Inside the floor it would rather have the space
 	// back; past the ceiling the arrow spends so long in the air that the
 	// dragon arrives before it does.
-	crystalBandMin float32 = 6.0
-	crystalBandMax float32 = 16.0
-	// beamCorridorRadius and beamCorridorDrop describe the column under the
+	CrystalBandMin float32 = 6.0
+	CrystalBandMax float32 = 16.0
+	// BeamCorridorRadius and beamCorridorDrop describe the column under the
 	// dragon that its healing beam travels down. Radius is how far off the
 	// dragon's axis the bot has to be to be clear of it; drop is how high the
 	// dragon has to be for standing under it to mean anything at all, because
 	// a perched dragon is not overhead and has no beam to be caught in.
-	beamCorridorRadius float32 = 3.0
+	BeamCorridorRadius float32 = 3.0
 	beamCorridorDrop   float32 = 8.0
 	// beamEscapeDistance is where the escape from that column stops: well
 	// outside the corridor, but still a walk rather than a flight.
 	beamEscapeDistance float32 = 8.0
 	// crystalAimHeight is the middle of an End crystal, which is where the
 	// arrow has to go. It is not a two-block mob, so it does not get the 1.2
-	// block body centre bowAimPoint gives everything else.
+	// block body centre BowAimPoint gives everything else.
 	crystalAimHeight float32 = 1.0
 )
 
@@ -142,7 +142,7 @@ func PlanDragonFight(s DragonSituation) DragonAction {
 	}
 
 	if s.CrystalsRemaining > 0 {
-		if s.canShoot() && s.NearestCrystalDistance <= crystalRange {
+		if s.canShoot() && s.NearestCrystalDistance <= CrystalRange {
 			return DragonShootCrystal
 		}
 		if s.NearestCrystalDistance <= dragonMeleeDistance {
@@ -177,7 +177,7 @@ func (s DragonSituation) struggling() bool {
 
 // canShoot reports whether what the bot is holding can put an arrow into a
 // crystal. A crossbow fires whatever bolt it is already holding, so it counts
-// without arrows in the pack; a bow does not. This is planShot's rule, applied
+// without arrows in the pack; a bow does not. This is PlanShot's rule, applied
 // the same way here so the two cannot disagree about whether a shot is coming.
 func (s DragonSituation) canShoot() bool {
 	switch s.Weapon {
@@ -209,7 +209,7 @@ func IsDragonPerched(botPos, dragonPos mgl32.Vec3) bool {
 // would mean the bot never gets a hit in for the whole fight.
 func IsDragonDiving(botPos, dragonPos mgl32.Vec3) bool {
 	return dragonPos.Y()-botPos.Y() > dragonPerchHeight &&
-		horizontalDistance(botPos, dragonPos) <= dragonDiveDistance
+		HorizontalDistance(botPos, dragonPos) <= dragonDiveDistance
 }
 
 // InHealingBeam reports whether the bot is standing in the column the dragon
@@ -226,7 +226,7 @@ func InHealingBeam(botPos, dragonPos mgl32.Vec3, crystalsRemaining int) bool {
 	if dragonPos.Y()-botPos.Y() < beamCorridorDrop {
 		return false
 	}
-	return horizontalDistance(botPos, dragonPos) <= beamCorridorRadius
+	return HorizontalDistance(botPos, dragonPos) <= BeamCorridorRadius
 }
 
 // IsEndCrystal reports whether a name is an End crystal.
@@ -282,7 +282,7 @@ func PickCrystal(crystals []*entity.Info, botPos mgl32.Vec3, maxDistance float32
 		if c == nil {
 			continue
 		}
-		d := horizontalDistance(botPos, c.Position)
+		d := HorizontalDistance(botPos, c.Position)
 		if d > maxDistance {
 			continue
 		}
@@ -312,10 +312,10 @@ func DragonDestination(botPos, dragonPos, preferred mgl32.Vec3, crystalsRemainin
 // than the corridor is wide, keeping the bot's own height so the pathfinder is
 // walking and not falling.
 func beamEscapePoint(botPos, dragonPos mgl32.Vec3) mgl32.Vec3 {
-	return retreatPoint(botPos, dragonPos, beamEscapeDistance)
+	return RetreatPoint(botPos, dragonPos, beamEscapeDistance)
 }
 
-// dragonDodgePoint is retreat and strafe at once, built from the two primitives
+// DragonDodgePoint is retreat and strafe at once, built from the two primitives
 // the mob tactics already use: the full retreat distance, on a bearing a quarter
 // turn off the line the dragon is already on.
 //
@@ -323,21 +323,21 @@ func beamEscapePoint(botPos, dragonPos mgl32.Vec3) mgl32.Vec3 {
 // where the bot can never leave is a fight it loses on the clock. side picks
 // which way, and flipping it between ticks is what keeps the dodge from being
 // one predictable arc.
-func dragonDodgePoint(botPos, dragonPos mgl32.Vec3, side float32) mgl32.Vec3 {
+func DragonDodgePoint(botPos, dragonPos mgl32.Vec3, side float32) mgl32.Vec3 {
 	// The dragon is the anchor, so the distance here is measured from it: the
-	// bot ends up exactly dragonRetreatDistance out and a quarter turn off the
+	// bot ends up exactly DragonRetreatDistance out and a quarter turn off the
 	// line it started on.
-	return strafePoint(botPos, dragonPos, dragonRetreatDistance, side)
+	return StrafePoint(botPos, dragonPos, DragonRetreatDistance, side)
 }
 
-// crystalChoice is the weapon to hold against a crystal.
+// CrystalChoice is the weapon to hold against a crystal.
 //
 // It deliberately does not go through ChooseWeapon. That function tiers a sword
 // in once the target is inside eight blocks, which is right for a mob and wrong
 // here: a crystal dies to a single arrow, so the best answer to one four blocks
 // away is the shot already in the bow rather than walking up to the thing that
 // is healing the dragon.
-func crystalChoice(inventory map[uint32]string) WeaponChoice {
+func CrystalChoice(inventory map[uint32]string) WeaponChoice {
 	if slot := findBest(inventory, WeaponCrossbow); slot >= 0 {
 		return WeaponChoice{
 			Slot:   uint32(slot),
@@ -357,9 +357,9 @@ func crystalChoice(inventory map[uint32]string) WeaponChoice {
 	return WeaponChoice{Kind: WeaponNone, Reason: "nothing to shoot a crystal with"}
 }
 
-// crystalAimPoint is bowAimPoint for a crystal: the middle of the target rather
+// CrystalAimPoint is BowAimPoint for a crystal: the middle of the target rather
 // than a mob's chest, with the same gravity lift on top so the arrow arrives
 // where it was aimed.
-func crystalAimPoint(from, crystal mgl32.Vec3) mgl32.Vec3 {
+func CrystalAimPoint(from, crystal mgl32.Vec3) mgl32.Vec3 {
 	return liftAimPoint(from, crystal, crystalAimHeight)
 }

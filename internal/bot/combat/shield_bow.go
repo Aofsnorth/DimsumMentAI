@@ -104,7 +104,7 @@ func (cm *CombatManager) HasShield() bool {
 // carried at all, and whether any ammunition is in the inventory. Both lookups
 // were open-coded per weapon before; the draw sequence is shared, so they are
 // too.
-func (cm *CombatManager) rangedSlot(kind WeaponKind) (slot uint32, found, hasArrows bool) {
+func (cm *CombatManager) rangedSlot(kind WeaponKind) (slot uint32, found, HasArrows bool) {
 	inventory := cm.slotNames()
 
 	for _, name := range inventory {
@@ -114,15 +114,15 @@ func (cm *CombatManager) rangedSlot(kind WeaponKind) (slot uint32, found, hasArr
 		}
 		short = strings.ToLower(strings.TrimSpace(short))
 		if short == "arrow" || strings.HasSuffix(short, "_arrow") {
-			hasArrows = true
+			HasArrows = true
 			break
 		}
 	}
 
 	if best := findBest(inventory, kind); best >= 0 {
-		return uint32(best), true, hasArrows
+		return uint32(best), true, HasArrows
 	}
-	return 0, false, hasArrows
+	return 0, false, HasArrows
 }
 
 // shootOnce runs a whole draw-and-release for a weapon of a kind in one call.
@@ -131,12 +131,12 @@ func (cm *CombatManager) rangedSlot(kind WeaponKind) (slot uint32, found, hasArr
 // the tick, so the draw is waited out here rather than carried across ticks.
 // The combat loop uses the tick-driven path instead.
 func (cm *CombatManager) shootOnce(kind WeaponKind, targetID uint64) bool {
-	slot, found, hasArrows := cm.rangedSlot(kind)
+	slot, found, HasArrows := cm.rangedSlot(kind)
 	if !found {
 		cm.logger.Debug("shoot: no weapon of that kind in the inventory")
 		return false
 	}
-	if kind == WeaponBow && !hasArrows {
+	if kind == WeaponBow && !HasArrows {
 		cm.logger.Debug("shoot: no arrows, so the bow is just a stick")
 		return false
 	}
@@ -151,7 +151,7 @@ func (cm *CombatManager) shootOnce(kind WeaponKind, targetID uint64) bool {
 	}
 
 	choice := WeaponChoice{Slot: slot, Kind: kind, Name: cm.slotNames()[slot]}
-	cm.bot.LookAt(bowAimPoint(cm.bot.GetCoords(), target.Position))
+	cm.bot.LookAt(BowAimPoint(cm.bot.GetCoords(), target.Position))
 	time.Sleep(200 * time.Millisecond)
 
 	now := time.Now()
@@ -163,7 +163,7 @@ func (cm *CombatManager) shootOnce(kind WeaponKind, targetID uint64) bool {
 	}
 	time.Sleep(hold)
 
-	cm.fireShot(shot{kind: kind, slot: slot}, time.Now(), target)
+	cm.fireShot(Shot{Kind: kind, Slot: slot}, time.Now(), target)
 	return true
 }
 
@@ -183,7 +183,7 @@ func (cm *CombatManager) HasBow() bool {
 	names := cm.bot.GetItemNames()
 
 	hasBow := false
-	hasArrows := false
+	HasArrows := false
 	for _, item := range inv {
 		if item.Count <= 0 {
 			continue
@@ -193,10 +193,10 @@ func (cm *CombatManager) HasBow() bool {
 			hasBow = true
 		}
 		if strings.Contains(name, "arrow") {
-			hasArrows = true
+			HasArrows = true
 		}
 	}
-	return hasBow && hasArrows
+	return hasBow && HasArrows
 }
 
 // HasRangedWeapon checks for any ranged weapon (bow, crossbow, trident)

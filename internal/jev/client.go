@@ -29,8 +29,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -122,11 +124,132 @@ type Request struct {
 
 // Answer is the shape of one entry under "answers". Jev echoes the primitive
 // type, so the same struct covers all three; only the matching field is set.
+//
+// It decodes itself rather than trusting the wire to match the documentation,
+// because this struct is the one place in the integration decided by somebody
+// else's server. See UnmarshalJSON.
 type Answer struct {
 	Type   QuestionType  `json:"type"`
 	Noul   *float64      `json:"noul,omitempty"`
 	Choice *ChoiceAnswer `json:"choice,omitempty"`
 	Score  *ScoreAnswer  `json:"score,omitempty"`
+}
+
+// Answer decodes both wire shapes of a primitive.
+//
+// The documented form nests the payload — "choice": {"choice": "wander",
+// "confidence": 0.7, "probabilities": {...}} — and the gateway this bot runs
+// against flattens it: "choice": "wander", with confidence and the distribution
+// as siblings. A client that understands only one of them is not a client with a
+// fallback; it is a client that never gets to decide anything, because every
+// reply decodes into an error and the AGI layer degrades quietly on a Jev
+// failure. The symptom is not a crash. It is a bot that joins, idles and wanders
+// and never once thinks.
+//
+// So each primitive is accepted as either a bare scalar or a full object. The
+// scalar is the one that cannot be reconstructed from a nested object, and
+// confidence and the distribution are read from either level, so a deployment
+// that reshapes only the payload field still decodes.
+func (a *Answer) UnmarshalJSON(data []byte) error {
+	var wire struct {
+		Type          QuestionType       `json:"type"`
+		Noul          json.RawMessage    `json:"noul"`
+		Choice        json.RawMessage    `json:"choice"`
+		Score         json.RawMessage    `json:"score"`
+		Confidence    *float64           `json:"confidence"`
+		Probabilities map[string]float64 `json:"probabilities"`
+		Distribution  map[string]float64 `json:"distribution"`
+	}
+	if err := json.Unmarshal(data, &wire); err != nil {
+		return err
+	}
+
+	a.Type = wire.Type
+	a.Noul = decodeScalar(wire.Noul)
+	a.Choice = decodeChoice(wire.Choice, wire.Confidence, mergeDistributions(wire.Probabilities, wire.Distribution))
+	a.Score = decodeScore(wire.Score, wire.Confidence, mergeDistributions(wire.Probabilities, wire.Distribution))
+	return nil
+}
+
+// decodeScalar reads a bare JSON number, and also a number sent as a string.
+//
+// A model service that quotes its numbers is not doing anything unreasonable,
+// and rejecting a whole reply over the quoting would put the brain back to sleep.
+func decodeScalar(raw json.RawMessage) *float64 {
+	if len(raw) == 0 {
+		return nil
+	}
+	var f float64
+	if err := json.Unmarshal(raw, &f); err == nil {
+		return &f
+	}
+	var s string
+	if err := json.Unmarshal(raw, &s); err == nil {
+		if f, err := strconv.ParseFloat(strings.TrimSpace(s), 64); err == nil {
+			return &f
+		}
+	}
+	return nil
+}
+
+// decodeChoice accepts the winning option as a bare string or as an object.
+func decodeChoice(raw json.RawMessage, confidence *float64, probs map[string]float64) *ChoiceAnswer {
+	if len(raw) == 0 {
+		return nil
+	}
+	var name string
+	if err := json.Unmarshal(raw, &name); err == nil {
+		return &ChoiceAnswer{Choice: name, Confidence: confidence, Probabilities: probs}
+	}
+	var nested ChoiceAnswer
+	if err := json.Unmarshal(raw, &nested); err != nil {
+		return nil
+	}
+	// An object that decodes cleanly but names nothing is not an answer. Without
+	// this, a reshaped payload reads back as a confident "the model chose the
+	// empty option", and the caller goes on to execute an activity called "".
+	if nested.Choice == "" {
+		return nil
+	}
+	if nested.Confidence == nil {
+		nested.Confidence = confidence
+	}
+	if len(nested.Probabilities) == 0 {
+		nested.Probabilities = probs
+	}
+	return &nested
+}
+
+// decodeScore accepts a bare number or an object.
+func decodeScore(raw json.RawMessage, confidence *float64, probs map[string]float64) *ScoreAnswer {
+	if len(raw) == 0 {
+		return nil
+	}
+	var s float64
+	if err := json.Unmarshal(raw, &s); err == nil {
+		return &ScoreAnswer{Score: s, Confidence: confidence, Probabilities: probs}
+	}
+	var nested ScoreAnswer
+	if err := json.Unmarshal(raw, &nested); err != nil {
+		return nil
+	}
+	if nested.Confidence == nil {
+		nested.Confidence = confidence
+	}
+	if len(nested.Probabilities) == 0 {
+		nested.Probabilities = probs
+	}
+	return &nested
+}
+
+// mergeDistributions accepts the field under either name. The first client sent
+// "distribution", which decoded fine into an always-empty map and silently hid
+// every per-option probability; accepting both is cheaper than guessing again.
+func mergeDistributions(probs, distribution map[string]float64) map[string]float64 {
+	if len(probs) == 0 {
+		return distribution
+	}
+	return probs
 }
 
 // ChoiceAnswer carries the winning option and the full probability
@@ -157,6 +280,42 @@ type Response struct {
 	Model   string            `json:"model"`
 	Answers map[string]Answer `json:"answers"`
 	Usage   Usage             `json:"usage"`
+}
+
+// UnmarshalJSON decodes the answers one at a time so a single unreadable entry
+// does not discard the rest.
+//
+// Every question rides in one reply, which is the whole point of the parallel
+// pass: one round trip for the reflexes, the activity, the goal and the
+// escalation. Failing the whole reply because one field looked unfamiliar throws
+// away the other answers and stops the bot thinking for that tick, and since
+// this happens on a live connection there is nobody to notice except in the log.
+//
+// An entry that will not decode is left out, and an absent entry is already a
+// supported state: the accessors below report "not answered" rather than
+// guessing, and the caller treats a missing answer as unknown rather than as a
+// confident no.
+func (r *Response) UnmarshalJSON(data []byte) error {
+	var wire struct {
+		Model   string                     `json:"model"`
+		Answers map[string]json.RawMessage `json:"answers"`
+		Usage   Usage                      `json:"usage"`
+	}
+	if err := json.Unmarshal(data, &wire); err != nil {
+		return err
+	}
+
+	r.Model = wire.Model
+	r.Usage = wire.Usage
+	r.Answers = make(map[string]Answer, len(wire.Answers))
+	for name, raw := range wire.Answers {
+		var answer Answer
+		if err := json.Unmarshal(raw, &answer); err != nil {
+			continue
+		}
+		r.Answers[name] = answer
+	}
+	return nil
 }
 
 // Client talks to the Jev evaluate endpoint.
@@ -267,10 +426,30 @@ func (c *Client) Evaluate(ctx context.Context, state string, questions map[strin
 	}
 
 	var out Response
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return nil, fmt.Errorf("jev: decode response: %w", err)
+	// Read the body first so a decode failure can quote what the server actually
+	// sent. The field name in a json error is not enough to act on: the whole
+	// cost of a shape mismatch is that the log names a field and shows none of
+	// the values, so the reader has to guess what the server meant.
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("jev: read response: %w", err)
+	}
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return nil, fmt.Errorf("jev: decode response: %w; server sent: %s", err, snippet(raw))
 	}
 	return &out, nil
+}
+
+// snippet trims a response body down to something that fits in a log line.
+// The body is the other party's, and a log is not the place for an unbounded
+// copy of it.
+func snippet(body []byte) string {
+	const limit = 400
+	text := strings.TrimSpace(string(body))
+	if len(text) <= limit {
+		return text
+	}
+	return text[:limit] + "…"
 }
 
 // Noul reads a yes/no answer. The second return is false when the question is
@@ -300,4 +479,38 @@ func (r *Response) Choice(question string) (choice string, confidence float64, o
 		confidence = *answer.Choice.Confidence
 	}
 	return answer.Choice.Choice, confidence, true
+}
+
+// Score reads a position on the question's rubric.
+func (r *Response) Score(question string) (score float64, ok bool) {
+	if r == nil {
+		return 0, false
+	}
+	answer, found := r.Answers[question]
+	if !found || answer.Score == nil {
+		return 0, false
+	}
+	return answer.Score.Score, true
+}
+
+// Probabilities reads the per-option distribution behind a choice or a score.
+//
+// The distribution is the interesting half of the answer: the top pick alone
+// cannot tell a caller whether the model was sure or barely chose, and a policy
+// that wants to think harder when the model is torn needs to be able to see it.
+func (r *Response) Probabilities(question string) map[string]float64 {
+	if r == nil {
+		return nil
+	}
+	answer, found := r.Answers[question]
+	switch {
+	case !found:
+		return nil
+	case answer.Choice != nil:
+		return answer.Choice.Probabilities
+	case answer.Score != nil:
+		return answer.Score.Probabilities
+	default:
+		return nil
+	}
 }

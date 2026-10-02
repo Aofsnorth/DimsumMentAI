@@ -33,11 +33,11 @@ func (b *Bot) ServerAuthBlockBreaking() bool {
 	return b.serverAuthBlockBreaking
 }
 
-// routeBreakAction converts a legacy break PlayerAction into the
+// RouteBreakAction converts a legacy break PlayerAction into the
 // PlayerAuthInput block-action form. It reports whether the packet was
 // consumed; when false the caller must write the packet to the connection
 // as-is.
-func (b *Bot) routeBreakAction(pk *packet.PlayerAction) bool {
+func (b *Bot) RouteBreakAction(pk *packet.PlayerAction) bool {
 	switch pk.ActionType {
 	case protocol.PlayerActionStartBreak:
 		b.BeginServerAuthBreak(pk.BlockPosition, pk.BlockFace)

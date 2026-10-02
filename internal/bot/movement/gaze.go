@@ -7,6 +7,7 @@ import (
 	"math"
 
 	"bedrock-ai/internal/bot"
+	"bedrock-ai/internal/bot/pathfinder"
 
 	"github.com/go-gl/mathgl/mgl32"
 )
@@ -24,16 +25,16 @@ const (
 	// before the body reaches it, the way a human head does.
 	walkingGazeLookAhead float32 = 4.0
 
-	// walkingGazeMaxLeadYaw caps how far the look-ahead aim may diverge from the
+	// WalkingGazeMaxLeadYaw caps how far the look-ahead aim may diverge from the
 	// direction the body is actually travelling. Without it, a route that turns
 	// sharply just ahead would swing the view onto a wall the bot is not walking
 	// toward, which reads as a glitch rather than as anticipation.
-	walkingGazeMaxLeadYaw float32 = 30.0
+	WalkingGazeMaxLeadYaw float32 = 30.0
 
-	// walkingGazeMaxPitch bounds the walking pitch, so that a cliff or a tall
+	// WalkingGazeMaxPitch bounds the walking pitch, so that a cliff or a tall
 	// staircase inside the look-ahead window tilts the view like a player
 	// glancing at the terrain instead of whipping it to the horizon.
-	walkingGazeMaxPitch float32 = 32.0
+	WalkingGazeMaxPitch float32 = 32.0
 
 	// walkingGazeMinHorizontal is the shortest useful aim distance. Below it the
 	// angle is dominated by numerical noise from the bot's own position.
@@ -49,8 +50,14 @@ func (tc *TickContext) walkingGazePoint() (mgl32.Vec3, bool) {
 		return mgl32.Vec3{}, false
 	}
 
+	// Copy the nodes, don't alias the slice. Every writer in the module replaces
+	// CurrentPath wholesale rather than editing a node, so this is not a live
+	// race today — but the whole read below is unlocked, and one in-place edit
+	// to a node anywhere would make this a data race on a struct the steering
+	// layer reads at 20Hz.
 	tc.B.Mu.Lock()
-	path := tc.B.CurrentPath
+	path := make([]pathfinder.Node, len(tc.B.CurrentPath))
+	copy(path, tc.B.CurrentPath)
 	idx := tc.B.PathIndex
 	tc.B.Mu.Unlock()
 
@@ -92,13 +99,13 @@ func (tc *TickContext) walkingGazePoint() (mgl32.Vec3, bool) {
 	return cursor, true
 }
 
-// walkingGazeAngles converts the look-ahead point into yaw/pitch for the head.
+// WalkingGazeAngles converts the look-ahead point into yaw/pitch for the head.
 //
 // The pitch comes out of the route geometry rather than being pinned to level:
 // climbing a staircase lifts the aim and the head tips up, walking off a ledge
 // drops it and the head tips down. On flat ground the aim sits at eye height so
 // the level the existing walking gaze bias adds is the whole vertical motion.
-func (tc *TickContext) walkingGazeAngles() (yaw, pitch float32, ok bool) {
+func (tc *TickContext) WalkingGazeAngles() (yaw, pitch float32, ok bool) {
 	point, ok := tc.walkingGazePoint()
 	if !ok {
 		return 0, 0, false
@@ -116,18 +123,18 @@ func (tc *TickContext) walkingGazeAngles() (yaw, pitch float32, ok bool) {
 	yaw = normalizeYaw(float32(math.Atan2(float64(dz), float64(dx))*180/math.Pi) - 90)
 	pitch = clampFloat32(
 		float32(-math.Atan2(float64(dy), float64(horizontal))*180/math.Pi),
-		-walkingGazeMaxPitch, walkingGazeMaxPitch,
+		-WalkingGazeMaxPitch, WalkingGazeMaxPitch,
 	)
 	return clampLeadYaw(yaw, tc.TargetYaw), pitch, true
 }
 
 // clampLeadYaw limits how far the head aim may lead the direction of travel.
 func clampLeadYaw(yaw, moveYaw float32) float32 {
-	switch lead := angleDifference(yaw, moveYaw); {
-	case lead > walkingGazeMaxLeadYaw:
-		return normalizeYaw(moveYaw + walkingGazeMaxLeadYaw)
-	case lead < -walkingGazeMaxLeadYaw:
-		return normalizeYaw(moveYaw - walkingGazeMaxLeadYaw)
+	switch lead := AngleDifference(yaw, moveYaw); {
+	case lead > WalkingGazeMaxLeadYaw:
+		return normalizeYaw(moveYaw + WalkingGazeMaxLeadYaw)
+	case lead < -WalkingGazeMaxLeadYaw:
+		return normalizeYaw(moveYaw - WalkingGazeMaxLeadYaw)
 	default:
 		return yaw
 	}

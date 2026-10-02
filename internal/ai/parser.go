@@ -119,6 +119,16 @@ func Parse(reply string) ParsedReply {
 	// Clean up any extra whitespace or newlines
 	cleanReply = regexp.MustCompile(`\s+`).ReplaceAllString(cleanReply, " ")
 
+	// Drop completion claims made while the action they describe is still
+	// pending. Every reply a player can read comes through this function, so
+	// this is the only place a claim can be caught on its way to chat.
+	//
+	// An action tag in the same reply is a request the host has not carried
+	// out yet, which makes any "done/successfully/berhasil" in the same breath
+	// a statement about a future event. With no action pending the reply is
+	// information and past tense is correct, so the text is left alone.
+	cleanReply, _ = FilterCompletionClaims(cleanReply, len(actions) > 0)
+
 	return ParsedReply{
 		CleanReply:  cleanReply,
 		Actions:     actions,

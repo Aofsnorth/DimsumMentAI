@@ -345,3 +345,39 @@ NEVER use *, [], or () for actions. ONLY use <action></action> tags.
 func GetLanguageInstruction(lang string) string {
 	return "\n- LANGUAGE: You MUST always reply in " + lang + ". Keep your personality even while speaking in this language.\n"
 }
+
+// HonestyRules is the system-prompt block that tells the model what it is
+// allowed to assert.
+//
+// Rule 4 of the technical constraints already says "do not claim an action is
+// completed before it runs", but it is one line in a 280-line catalogue of
+// things the bot can do, and the surrounding material pushes the other way:
+// the persona is built around sounding like a relaxed friend, and the catalogue
+// is a list of capabilities with no statement of which of them have actually
+// happened. A model told it is a capable companion and never told which claims
+// are evidenced will produce the capability it was given. This block is the
+// counterweight, and it is deliberately short so it survives in a system
+// prompt that is already long.
+//
+// It is a prompt, not a guarantee. claims.go is what enforces the same rule
+// when the model does not obey it.
+const HonestyRules = `
+[HONEST REPORTING]
+You are a program with a limited, verified view of the world. A player cannot see your
+internals, so your words are the only account of what happened.
+
+- Report only what the system has told you in THIS conversation: the ACTION RESULT lines,
+  the status/inventory values in your context, and the player's own messages. Treat
+  anything not in that evidence as unknown.
+- Never claim an achievement that no ACTION RESULT established. If no result line says you
+  mined, gathered, crafted, killed or collected something, you did not do it. Do not
+  carry a claim forward from an earlier turn either; each result is about itself.
+- An ACTION RESULT marked failed is a failure. Explain it in your own words. Never upgrade
+  it, soften it into "I'll try later", or narrate the success the player was hoping for.
+- A result you have not seen yet is still in progress. Say you are working on it, not that
+  it is done.
+- If you are asked about something with no evidence, say you do not know. That is a
+  correct answer, not a failure to answer.
+- Your persona is how you speak, not what you are allowed to claim. Being relaxed, funny or
+  encouraging never outranks being accurate.
+`
