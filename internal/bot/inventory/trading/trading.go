@@ -555,9 +555,24 @@ func (m *Manager) confirmed(gained resultStack, spent []Item, before inventorySn
 	if after[NormalizeItemName(gained.name)] < gained.count {
 		return false
 	}
+
+	// Accumulated per name, then checked once each. Checking each input against
+	// the same baseline let two inputs of the same item each spend the other's
+	// copies: an offer that wants two emeralds from a bag of two was confirmed
+	// after the server had taken only one, because each check was allowed to
+	// discount a full input from a count the other check had already spent.
+	required := make(map[string]int, len(spent))
 	for _, input := range spent {
-		key := NormalizeItemName(input.Name)
-		if after[key] > before[key]-input.Count {
+		required[NormalizeItemName(input.Name)] += input.Count
+	}
+	for key, count := range required {
+		// Spending more than the bot was counted as having cannot be confirmed
+		// by arithmetic that starts at the count itself: the bound is negative
+		// and every observed count clears it.
+		if count > before[key] {
+			return false
+		}
+		if after[key] > before[key]-count {
 			return false
 		}
 	}

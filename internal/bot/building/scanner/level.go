@@ -7,6 +7,7 @@ import (
 
 	"bedrock-ai/internal/bot/building/schematic"
 	"bedrock-ai/internal/bot/gathering"
+	"bedrock-ai/internal/bot/interact"
 	"bedrock-ai/internal/bot/movement/animation"
 	"bedrock-ai/internal/event"
 	"bedrock-ai/internal/safecast"
@@ -177,6 +178,9 @@ func (s *AreaScanner) fillBlocksLoop(ctx context.Context, blocksToFill []protoco
 				dir  protocol.BlockPos
 				face int32
 			}{
+				// Wire encoding: 0 Down, 1 Up, 2 North (-Z), 3 South (+Z),
+				// 4 West (-X), 5 East (+X), naming the face of the support
+				// block that points at the cell being filled.
 				{protocol.BlockPos{0, -1, 0}, 1},
 				{protocol.BlockPos{1, 0, 0}, 4},
 				{protocol.BlockPos{-1, 0, 0}, 5},
@@ -195,13 +199,16 @@ func (s *AreaScanner) fillBlocksLoop(ctx context.Context, blocksToFill []protoco
 				if world.IsSolid(adjX, adjY, adjZ) {
 					tx := &packet.InventoryTransaction{
 						TransactionData: &protocol.UseItemTransactionData{
-							ActionType:      protocol.UseItemActionClickBlock,
-							BlockPosition:   protocol.BlockPos{adjX, adjY, adjZ},
-							BlockFace:       f.face,
-							HotBarSlot:      safecast.To[int32](s.bot.GetHeldItemSlot()),
-							HeldItem:        protocol.ItemInstance{Stack: itemStack},
-							Position:        s.bot.GetCoords(),
-							ClickedPosition: mgl32.Vec3{0.5, 0.5, 0.5},
+							ActionType:    protocol.UseItemActionClickBlock,
+							BlockPosition: protocol.BlockPos{adjX, adjY, adjZ},
+							BlockFace:     f.face,
+							HotBarSlot:    safecast.To[int32](s.bot.GetHeldItemSlot()),
+							HeldItem:      protocol.ItemInstance{Stack: itemStack},
+							Position:      s.bot.GetCoords(),
+							// On the clicked face, not the middle of the
+							// block. The centre of a block is inside it and
+							// on none of its faces.
+							ClickedPosition: interact.FaceClickedPosition(f.face),
 						},
 					}
 					_ = s.bot.WritePacket(tx)

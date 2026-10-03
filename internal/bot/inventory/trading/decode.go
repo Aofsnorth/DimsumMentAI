@@ -66,12 +66,30 @@ func DecodeOffers(serialised []byte) ([]Offer, error) {
 	}
 
 	offers := make([]Offer, 0, len(rows))
+	unreadable := 0
 	for index, row := range rows {
 		offer, ok := decodeOffer(index, row)
 		if !ok {
+			unreadable++
 			continue
 		}
 		offers = append(offers, offer)
+	}
+
+	// Rows that arrived and could not be read are an error, not an absence.
+	// An empty list says the villager is offering nothing, which is a claim
+	// about the game; a format change says this code no longer understands the
+	// wire, which is a claim about itself. Returning the second as the first is
+	// exactly the failure this file's own contract refuses: the bot reports a
+	// villager with nothing to buy rather than admitting it cannot read the
+	// list, and the difference is invisible until a trade is attempted.
+	//
+	// Some of the rows being unreadable is fine — that is the tolerance above.
+	// All of them means nothing was learned.
+	if unreadable > 0 && len(offers) == 0 {
+		return nil, fmt.Errorf("all %d offer rows were unreadable: the wire format "+
+			"has changed or this villager's offers are not the shape this reader knows",
+			unreadable)
 	}
 	return offers, nil
 }

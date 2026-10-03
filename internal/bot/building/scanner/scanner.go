@@ -5,6 +5,7 @@ import (
 	"math"
 	"strings"
 
+	"bedrock-ai/internal/blockcell"
 	"bedrock-ai/internal/bot/building/common"
 	"bedrock-ai/internal/bot/entity"
 	"bedrock-ai/internal/safecast"
@@ -134,13 +135,19 @@ func (s *AreaScanner) ScanNearbyStructures() []common.StructureInfo {
 	}
 
 	botPos := s.bot.GetCoords()
+	// Floor, not truncation. The two agree above the origin and disagree below
+	// it, and a structure one cell east of where the bot is standing still
+	// sorts — just in the wrong order against its true neighbour, which is how
+	// a nearby chest ends up eleventh on a list of ten.
+	botCellX := int(blockcell.Of(botPos.X()))
+	botCellZ := int(blockcell.Of(botPos.Z()))
 	var sorted []common.StructureInfo
 	sorted = append(sorted, s.placedStructures...)
 
 	for i := 0; i < len(sorted); i++ {
 		for j := i + 1; j < len(sorted); j++ {
-			di := math.Sqrt(float64((sorted[i].X-int(botPos.X()))*(sorted[i].X-int(botPos.X())) + (sorted[i].Z-int(botPos.Z()))*(sorted[i].Z-int(botPos.Z()))))
-			dj := math.Sqrt(float64((sorted[j].X-int(botPos.X()))*(sorted[j].X-int(botPos.X())) + (sorted[j].Z-int(botPos.Z()))*(sorted[j].Z-int(botPos.Z()))))
+			di := math.Sqrt(float64((sorted[i].X-botCellX)*(sorted[i].X-botCellX) + (sorted[i].Z-botCellZ)*(sorted[i].Z-botCellZ)))
+			dj := math.Sqrt(float64((sorted[j].X-botCellX)*(sorted[j].X-botCellX) + (sorted[j].Z-botCellZ)*(sorted[j].Z-botCellZ)))
 			if dj < di {
 				sorted[i], sorted[j] = sorted[j], sorted[i]
 			}

@@ -29,14 +29,42 @@ func BrewTimeout(bottles int) time.Duration {
 // BrewFuelItem is the one item a brewing stand accepts as fuel.
 func BrewFuelItem() string { return "blaze_powder" }
 
-// BrewIngredientItem normalises a recipe ingredient to the name the runtime
+// BrewIngredientItem normalises a recipe ingredient to the name the recipe
 // table uses, and returns empty for anything that is not a brew ingredient, so
 // a caller cannot send a gold ingot to a brewing stand and wait forever.
+//
+// The set of accepted ingredients is derived from brewRecipes rather than
+// listed again here. It used to be a hardcoded "nether_wart or nothing", which
+// made every other ingredient in the table unreachable: BrewPlan rejects an
+// empty ingredient before it ever consults the recipes, so the fifteen entries
+// under potion_awkward, and every gunpowder and dragon_breath upgrade, were
+// dead. A bot asked to brew a splash potion silently found nothing it could
+// plan. Deriving the set means a recipe added to the table is automatically
+// brewable, and an ingredient removed from it stops being accepted.
 func BrewIngredientItem(name string) string {
-	if NormalizeItemName(name) == "nether_wart" {
-		return "nether_wart"
+	normalised := NormalizeItemName(name)
+	if normalised == "" {
+		return ""
+	}
+	if brewIngredients[normalised] {
+		return normalised
 	}
 	return ""
+}
+
+// brewIngredients is the union of every ingredient key across brewRecipes.
+// It is built once at init rather than maintained by hand, because a table that
+// disagrees with its own index is the bug this function used to have.
+var brewIngredients = collectBrewIngredients()
+
+func collectBrewIngredients() map[string]bool {
+	ingredients := make(map[string]bool)
+	for _, recipes := range brewRecipes {
+		for ingredient := range recipes {
+			ingredients[NormalizeItemName(ingredient)] = true
+		}
+	}
+	return ingredients
 }
 
 // BrewStep is one pass of the stand: the ingredient that goes in, and the
@@ -148,7 +176,18 @@ func BrewPlan(base, ingredient, target string) (BrewRecipe, bool) {
 	if ing == "" {
 		return BrewRecipe{}, false
 	}
-	want := NormalizeItemName(target)
+	// The target has to be reduced to the recipe table's own vocabulary before
+	// it can be compared to a step result.
+	//
+	// The table spells a result as an effect name -- "healing", "splash_healing"
+	// -- while a caller asks for an item name, "potion_healing" or
+	// "splash_healing_potion". Comparing those directly never matches, and since
+	// the match is what ends the walk, every recipe missed and BrewPlan reported
+	// that nothing was brewable.
+	want := brewEffectOf(target)
+	if want == "" {
+		return BrewRecipe{}, false
+	}
 
 	recipe := BrewRecipe{
 		Base:    NormalizeItemName(base),
@@ -168,12 +207,35 @@ func BrewPlan(base, ingredient, target string) (BrewRecipe, bool) {
 			return BrewRecipe{}, false
 		}
 		recipe.Steps = append(recipe.Steps, BrewStep{Ingredient: ing, Result: result})
-		if NormalizeItemName(result) == want {
+		if result == want {
 			return recipe, true
 		}
 		current = "potion_" + result
 	}
 	return BrewRecipe{}, false
+}
+
+// brewEffectOf reduces a potion item name to the effect-form name the recipe
+// table uses: the form prefix plus the base effect, with no potion_ wrapper and
+// no _potion suffix.
+//
+// It has to exist because the two vocabularies disagree on more than the
+// wrapper. The table says "long_healing" where an item is called
+// "lingering_healing_potion", and it says "splash_healing" where an item is
+// called "splash_healing_potion" -- the same suffix, but only the second case
+// wraps. Normalising both ends into one space is what lets a caller name a
+// potion the way the server does and still match the table.
+func brewEffectOf(name string) string {
+	effect := NormalizeItemName(name)
+	if effect == "" {
+		return ""
+	}
+	effect = strings.TrimSuffix(effect, "_potion")
+	effect = strings.TrimPrefix(effect, "potion_")
+	// The table's name for the lingering form is the one the recipe uses,
+	// "long_", where the item is called "lingering_".
+	effect = strings.ReplaceAll(effect, "lingering_", "long_")
+	return effect
 }
 
 // BrewResult is what a brew actually produced, as read back from the server.

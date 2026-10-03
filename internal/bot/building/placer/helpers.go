@@ -193,16 +193,24 @@ func (bp *BlockPlacer) placeSpecialBlock(ctx context.Context, x, y, z int, name 
 
 func (bp *BlockPlacer) findSupportFace(x, y, z int) (protocol.BlockPos, int32) {
 	world := bp.bot.GetLocalWorldModel()
+	// The wire encoding is 0 Down, 1 Up, 2 North (-Z), 3 South (+Z), 4 West
+	// (-X), 5 East (+X), and the face named here is the face of the *support*
+	// block — the one being clicked — that points at the cell being filled.
+	//
+	// Note the frame: miner_plan.go's table looks similar and means the
+	// opposite thing, because a miner clicks the block it is breaking and a
+	// placer clicks the block it is standing on. Reading one as the other is
+	// how a support below gets clicked as if it were a support above.
 	faces := []struct {
 		offset protocol.BlockPos
 		face   int32
 	}{
-		{protocol.BlockPos{0, -1, 0}, 1},
-		{protocol.BlockPos{0, 1, 0}, 0},
-		{protocol.BlockPos{0, 0, -1}, 3},
-		{protocol.BlockPos{0, 0, 1}, 2},
-		{protocol.BlockPos{-1, 0, 0}, 5},
-		{protocol.BlockPos{1, 0, 0}, 4},
+		{protocol.BlockPos{0, -1, 0}, 1}, // support below -> its Up face
+		{protocol.BlockPos{0, 1, 0}, 0},  // support above -> its Down face
+		{protocol.BlockPos{0, 0, -1}, 3}, // support north of the cell -> its South face
+		{protocol.BlockPos{0, 0, 1}, 2},  // support south of the cell -> its North face
+		{protocol.BlockPos{-1, 0, 0}, 5}, // support west of the cell -> its East face
+		{protocol.BlockPos{1, 0, 0}, 4},  // support east of the cell -> its West face
 	}
 
 	for _, f := range faces {

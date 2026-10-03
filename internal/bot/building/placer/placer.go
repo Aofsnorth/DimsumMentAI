@@ -8,9 +8,9 @@ import (
 
 	"bedrock-ai/internal/bot/building/common"
 	"bedrock-ai/internal/bot/building/schematic"
+	"bedrock-ai/internal/bot/interact"
 	"bedrock-ai/internal/safecast"
 
-	"github.com/go-gl/mathgl/mgl32"
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
 	"github.com/sandertv/gophertunnel/minecraft/protocol/packet"
 )
@@ -127,14 +127,18 @@ func (bp *BlockPlacer) PlaceBlockAt(ctx context.Context, x, y, z int, blockName 
 			},
 		},
 		TransactionData: &protocol.UseItemTransactionData{
-			ActionType:      protocol.UseItemActionClickBlock,
-			TriggerType:     protocol.TriggerTypePlayerInput,
-			BlockPosition:   placeTarget,
-			BlockFace:       placeFace,
-			HotBarSlot:      safecast.To[int32](bp.bot.GetHeldItemSlot()),
-			HeldItem:        protocol.ItemInstance{Stack: itemStack},
-			Position:        bp.bot.GetCoords(),
-			ClickedPosition: mgl32.Vec3{0.5, 0.5, 0.5},
+			ActionType:    protocol.UseItemActionClickBlock,
+			TriggerType:   protocol.TriggerTypePlayerInput,
+			BlockPosition: placeTarget,
+			BlockFace:     placeFace,
+			HotBarSlot:    safecast.To[int32](bp.bot.GetHeldItemSlot()),
+			HeldItem:      protocol.ItemInstance{Stack: itemStack},
+			Position:      bp.bot.GetCoords(),
+			// On the clicked face, not the middle of the block. A block's
+			// centre is inside it and on none of its faces, which is what the
+			// two sibling placements in this package were already sending and
+			// what the server rejects.
+			ClickedPosition: interact.FaceClickedPosition(placeFace),
 		},
 	}
 	err := bp.bot.WritePacket(tx)
