@@ -2,6 +2,28 @@
 
 **Date:** 2026-09-29
 **Status:** Audit complete, planning only — no implementation yet.
+
+> ## ⚠️ THIS AUDIT IS STALE — DO NOT TRUST THE ❌ MARKERS
+>
+> Every ❌ in this document was verified against the code and found **wrong**.
+> The subsystems below were audited on 2026-09-29 and were implemented
+> afterwards. Treating them as missing wastes effort rebuilding what already
+> works. Verified 2026-10-03:
+>
+> | Document says ❌ | Actually implemented in |
+> |---|---|
+> | Furnace smelting broken | `inventory/furnace/furnace.go` — server-assigned window, `WaitContainerOpen`, `ItemStackRequest` |
+> | Bow / crossbow charge + release missing | `combat/shot.go` — 1100ms draw, 1250ms load, 1500ms interval |
+> | Brewing stand missing | `inventory/station/brewing.go` |
+> | Anvil repair / rename missing | `inventory/station/anvil.go` |
+> | Enchanting table missing | `inventory/station/enchanting.go` |
+> | Grindstone missing | `inventory/station/grindstone.go` |
+> | Villager trading missing | `inventory/trading/` — multi-key NBT decoder |
+> | Mob tactics (creeper flee, skeleton strafe, enderman) missing | `combat/tactics.go` + `affordance/risk.go`, disposition-aware |
+> | Sneak as sustained state 🟡 | `movement/packet.go` — `InputFlagSneaking` + edge flags |
+>
+> **Audit the code, not this file.** The status column here is a record of
+> what was true on one date, and that date has passed.
 **Method:** Static code audit (grep + file reads) across all `internal/bot/*` packages,
 `internal/ai`, `internal/config`, `cmd/`, `web/`, plus MinePal official sources
 (minepal.net lobbies/updates/pal-voice/imagine/pocket pages, GitHub `0es/MinePal`

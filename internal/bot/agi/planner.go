@@ -357,7 +357,7 @@ func StepAction(step PlanStep) (label, param string, ok bool) {
 func (r *Runner) planningTick(ctx context.Context, snap Snapshot, judgement Judgement) {
 	plan := r.CurrentPlan()
 	if plan.Objective != "" && plan.PlanExpired(snap.Now) {
-		r.b.Logger.Info("AGI: plan expired",
+		r.log().Info("AGI: plan expired",
 			"plan", plan.ID,
 			"objective", plan.Objective,
 		)
@@ -405,7 +405,11 @@ func (r *Runner) planningTick(ctx context.Context, snap Snapshot, judgement Judg
 	if step.State == StepPending {
 		r.StartStep(index)
 	}
-	r.dispatchStep(ctx, step, index)
+	// The plan the step was read from, not the one in play at dispatch time.
+	// They are the same on every tick that reaches here, and they differ on the
+	// tick after a replan lands, which is precisely when the index would
+	// silently stop meaning the step it was taken for.
+	r.dispatchStep(ctx, step, index, plan.ID)
 }
 
 // PlanHasFailedStep reports whether the planner has something to answer for.
@@ -443,12 +447,12 @@ func (r *Runner) requestPlan(ctx context.Context, snap Snapshot, judgement Judge
 		// planner revise rather than restart.
 		reply, err := r.b.AiClient.AskPlanner(PlannerSystemPrompt(r.cfg.PlanMaxSteps), r.PlannerMessageFor(snap))
 		if err != nil {
-			r.b.Logger.Warn("AGI: planner unavailable", "error", err.Error())
+			r.log().Warn("AGI: planner unavailable", "error", err.Error())
 			return
 		}
 		plan, ok := ParsePlanReply(reply, r.cfg.PlanMaxSteps)
 		if !ok {
-			r.b.Logger.Warn("AGI: planner reply was not a usable plan", "reply", truncate(reply, 240))
+			r.log().Warn("AGI: planner reply was not a usable plan", "reply", truncate(reply, 240))
 			return
 		}
 		r.installPlan(plan, snap.Now, judgement)
@@ -489,19 +493,26 @@ func (r *Runner) installPlan(plan Plan, now time.Time, judgement Judgement) {
 			}
 		}
 	}
-	if len(plan.Steps) > 0 {
+	// Started, not overwritten. Assigning here unconditionally undid the
+	// carry-over above on the very next line: a new plan whose first step is
+	// the old plan's first step that had already been done was marked done and
+	// then flipped straight back to active, so the bot re-did the first step
+	// of every plan it had already completed that step in — which is the exact
+	// re-running the carry-over exists to prevent, and the reason a bot that
+	// keeps rediscovering the same first step reads as stuck.
+	if len(plan.Steps) > 0 && plan.Steps[0].State != StepDone {
 		plan.Steps[0].State = StepActive
 	}
 	r.plan = plan
 	r.mu.Unlock()
 
 	done, total := plan.progress()
-	r.b.Logger.Info("AGI: plan ready",
+	r.log().Info("AGI: plan ready",
 		"plan", plan.ID,
 		"objective", plan.Objective,
 		"carried_over", fmt.Sprintf("%d/%d", done, total),
 	)
-	r.b.Evidence.Record(evidence.KindPlanReady, plan.Objective, map[string]any{
+	r.note(evidence.KindPlanReady, plan.Objective, map[string]any{
 		"plan":         plan.ID,
 		"steps":        len(plan.Steps),
 		"carried_over": done,
@@ -534,7 +545,15 @@ func (r *Runner) announce(snap Snapshot, judgement Judgement, msg string) {
 // seconds, and a brain that waited for it would not be running a loop, it would
 // be running one long action. The busy flag is what guarantees at most one step
 // is in flight at a time.
-func (r *Runner) dispatchStep(ctx context.Context, step PlanStep, index int) {
+//
+// planID travels with the step because the index alone no longer identifies it.
+// A step dispatched here can still be running when a replan installs a
+// completely different plan — that is what a replan *is*, and the action takes
+// up to ninety seconds while the replan cooldown is ten minutes. When the
+// action finished, an index resolved against the new plan marked an unrelated
+// step of that plan done, and when no pending step remained it reported the
+// whole plan complete for steps that had never run.
+func (r *Runner) dispatchStep(ctx context.Context, step PlanStep, index int, planID string) {
 	if !r.beginStepWork() {
 		return
 	}
@@ -542,10 +561,12 @@ func (r *Runner) dispatchStep(ctx context.Context, step PlanStep, index int) {
 	label, param, ok := StepAction(step)
 	if !ok {
 		r.endStepWork()
-		r.FailStep(index, "no action exists for this step as written")
+		if r.stillCurrentPlan(planID) {
+			r.FailStep(index, "no action exists for this step as written")
+		}
 		return
 	}
-	r.b.Logger.Info("AGI: step starting",
+	r.log().Info("AGI: step starting",
 		"kind", step.Kind,
 		"action", label,
 		"param", param,
@@ -558,7 +579,7 @@ func (r *Runner) dispatchStep(ctx context.Context, step PlanStep, index int) {
 		if label == "" {
 			// Rest and wait are satisfied by standing still. That is the
 			// instruction, not a shortcut around it.
-			r.finishStep(index, step, "stood still")
+			r.finishStep(index, step, planID, "stood still")
 			return
 		}
 
@@ -568,33 +589,79 @@ func (r *Runner) dispatchStep(ctx context.Context, step PlanStep, index int) {
 			if reason == "" {
 				reason = label + " did not succeed"
 			}
-			r.failStepWork(index, step, reason)
+			r.failStepWork(index, step, planID, reason)
 			return
 		}
 		if step.Kind == StepGoTo && step.Target.Set && !r.arrivedAt(step.Target) {
 			// The action reported success but the bot is still where it started.
 			// Taking the report at face value here would let a plan march
 			// through destinations the bot never reached.
-			r.failStepWork(index, step, "did not arrive at the target")
+			r.failStepWork(index, step, planID, "did not arrive at the target")
 			return
 		}
-		r.finishStep(index, step, "")
+		r.finishStep(index, step, planID, "")
 	}()
 }
 
+// stillCurrentPlan reports whether planID is still the plan in play.
+//
+// A step that outlives its plan has no place to record its outcome: its index
+// points at a different step of a different plan, and writing there corrupts
+// work that was never attempted. The outcome is dropped instead, and the
+// evidence records why — a silently discarded result is indistinguishable from
+// a step that was never run.
+func (r *Runner) stillCurrentPlan(planID string) bool {
+	if planID == "" {
+		return true
+	}
+	return r.CurrentPlan().ID == planID
+}
+
+// discardSupersededStep records that a step finished against a plan that has
+// since been replaced. Nothing about the new plan is touched.
+//
+// It reports through log() and note() rather than reaching for the bot
+// directly. This path runs from a step goroutine, and a runner is allowed to
+// have no bot — the package goes to real trouble elsewhere to survive exactly
+// that, and a notification that panics is worse than one that is missing.
+func (r *Runner) discardSupersededStep(step PlanStep, index int, planID, outcome string) {
+	r.log().Info("AGI: step outcome discarded, plan was replaced while it ran",
+		"step_plan", planID,
+		"current_plan", r.CurrentPlan().ID,
+		"kind", step.Kind,
+		"index", index,
+		"outcome", outcome,
+	)
+	r.note(evidence.KindStepDone, step.Description, map[string]any{
+		"plan":      planID,
+		"kind":      step.Kind,
+		"index":     index,
+		"outcome":   outcome,
+		"discarded": true,
+		"reason":    "plan replaced while the step was running",
+	})
+}
+
 // finishStep marks a step done and reports the result.
-func (r *Runner) finishStep(index int, step PlanStep, note string) {
-	planID := r.CurrentPlan().ID
+func (r *Runner) finishStep(index int, step PlanStep, planID, note string) {
+	// Checked before anything is written, not after. See dispatchStep: an
+	// outcome that arrives against a replaced plan has no valid index to write
+	// to, and the plan it would land on belongs to work that never started.
+	if !r.stillCurrentPlan(planID) {
+		r.discardSupersededStep(step, index, planID, note)
+		return
+	}
+	cur := r.CurrentPlan()
 	next, planDone := r.CompleteStep(index)
 	if planDone {
-		r.b.Logger.Info("AGI: plan complete", "kind", step.Kind, "note", note)
-		r.b.Evidence.Record(evidence.KindPlanComplete, planID, map[string]any{
+		r.log().Info("AGI: plan complete", "kind", step.Kind, "note", note)
+		r.note(evidence.KindPlanComplete, cur.ID, map[string]any{
 			"final_step": step.Kind,
 		})
 		return
 	}
 	done, total := r.CurrentPlan().progress()
-	r.b.Logger.Info("AGI: step done",
+	r.log().Info("AGI: step done",
 		"kind", step.Kind,
 		"progress", fmt.Sprintf("%d/%d", done, total),
 		"next", next,
@@ -603,8 +670,8 @@ func (r *Runner) finishStep(index int, step PlanStep, note string) {
 	// The step's description is the planner's own words for what it wanted, so
 	// it is the only thing in the evidence that says what the bot was *trying*
 	// to do rather than what it mechanically did.
-	r.b.Evidence.Record(evidence.KindStepDone, step.Description, map[string]any{
-		"plan":     planID,
+	r.note(evidence.KindStepDone, step.Description, map[string]any{
+		"plan":     cur.ID,
 		"kind":     step.Kind,
 		"index":    index,
 		"progress": fmt.Sprintf("%d/%d", done, total),
@@ -618,17 +685,22 @@ func (r *Runner) finishStep(index int, step PlanStep, note string) {
 // The single retry is for the ordinary case — a mob in the way, a click that
 // landed on nothing. Past that the step is not flaky, it is wrong, and only the
 // planner can say what to do about that.
-func (r *Runner) failStepWork(index int, step PlanStep, reason string) {
+func (r *Runner) failStepWork(index int, step PlanStep, planID, reason string) {
+	if !r.stillCurrentPlan(planID) {
+		r.discardSupersededStep(step, index, planID, "failed: "+reason)
+		return
+	}
+	cur := r.CurrentPlan()
 	r.FailStep(index, reason)
 	if step.Attempts+1 < stepMaxAttempts {
 		r.AbandonFailedStep(index)
-		r.b.Logger.Info("AGI: step failed, retrying",
+		r.log().Info("AGI: step failed, retrying",
 			"kind", step.Kind,
 			"reason", reason,
 			"attempt", step.Attempts+1,
 		)
-		r.b.Evidence.Record(evidence.KindStepRetry, step.Description, map[string]any{
-			"plan":    r.CurrentPlan().ID,
+		r.note(evidence.KindStepRetry, step.Description, map[string]any{
+			"plan":    cur.ID,
 			"kind":    step.Kind,
 			"index":   index,
 			"reason":  reason,
@@ -636,7 +708,7 @@ func (r *Runner) failStepWork(index int, step PlanStep, reason string) {
 		})
 		return
 	}
-	r.b.Logger.Warn("AGI: step failed, asking the planner to revise",
+	r.log().Warn("AGI: step failed, asking the planner to revise",
 		"kind", step.Kind,
 		"reason", reason,
 		"attempts", step.Attempts,
@@ -644,7 +716,7 @@ func (r *Runner) failStepWork(index int, step PlanStep, reason string) {
 	// Recorded at the point the planner is asked again, because "how many times
 	// did this fail before anyone noticed" is the question this whole file
 	// exists to answer and it is unanswerable from a console log.
-	r.b.Evidence.Record(evidence.KindStepFailed, step.Description, map[string]any{
+	r.note(evidence.KindStepFailed, step.Description, map[string]any{
 		"plan":     r.CurrentPlan().ID,
 		"kind":     step.Kind,
 		"index":    index,

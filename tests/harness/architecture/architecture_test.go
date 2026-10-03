@@ -3,6 +3,7 @@ package architecture_test
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"bedrock-ai/internal/harness"
@@ -240,5 +241,93 @@ func TestSensor_EmptyDir(t *testing.T) {
 	}
 	if len(findings) != 0 {
 		t.Errorf("empty dir should produce no findings, got %d", len(findings))
+	}
+}
+
+// TestSensor_FindsViolationsUnderARelativeRoot is the regression for a sensor
+// that could not fail.
+//
+// The marker it searched for had a leading slash, and the default root is ".".
+// filepath.WalkDir over a relative root yields "internal/config/config.go" —
+// which contains "internal/" and never "/internal/". Every file therefore
+// resolved to no package, checkFile returned early for all of them, and
+// `make harness` reported the dependency rules enforced while inspecting
+// nothing.
+//
+// Every existing test in this file built its fixture under t.TempDir(), which
+// returns an absolute path. An absolute path contains the leading slash the
+// relative case lacks, so the suite was green against a sensor that did
+// nothing. A test has to run the sensor the way production runs it.
+func TestSensor_FindsViolationsUnderARelativeRoot(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	writeGoFile(t, root, "internal/event/bus.go", `package event
+
+import (
+	_ "bedrock-ai/internal/bot"
+)
+`)
+
+	// Walk the fixture the way the CLI does: by changing into it, so the paths
+	// the sensor sees are relative and have no leading separator.
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	if err := os.Chdir(root); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(wd) })
+
+	s := architecture.New("bedrock-ai", architecture.WithRootDir("."))
+	findings, err := s.Run()
+	if err != nil {
+		t.Fatalf("Check: %v", err)
+	}
+
+	var sawViolation bool
+	for _, f := range findings {
+		if strings.Contains(f.Message, "forbidden") {
+			sawViolation = true
+		}
+	}
+	if !sawViolation {
+		t.Errorf("no architecture findings from a real violation under a relative "+
+			"root; the sensor inspected nothing and reported success. findings=%d", len(findings))
+	}
+}
+
+// TestSensor_PassesARealRootWithoutViolations is the other direction, so the
+// fix cannot pass by flagging everything.
+func TestSensor_PassesARealRootWithoutViolations(t *testing.T) {
+
+	root := t.TempDir()
+	writeGoFile(t, root, "internal/event/bus.go", `package event
+
+import (
+	"reflect"
+	"sync"
+)
+`)
+
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	if err := os.Chdir(root); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(wd) })
+
+	s := architecture.New("bedrock-ai", architecture.WithRootDir("."))
+	findings, err := s.Run()
+	if err != nil {
+		t.Fatalf("Check: %v", err)
+	}
+	for _, f := range findings {
+		if strings.Contains(f.Message, "forbidden") {
+			t.Errorf("a clean file produced an architecture finding: %s", f.Message)
+		}
 	}
 }

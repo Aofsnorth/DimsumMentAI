@@ -271,10 +271,35 @@ func (s *Sensor) checkFile(path string) ([]harness.Finding, error) {
 
 // packagePrefix returns the internal/ package path prefix for a file, or ""
 // if the file is not under internal/.
+//
+// The path is resolved against the sensor's root before the marker is looked
+// for, because the marker has a leading slash and a relative root does not
+// produce one. With the default root of ".", filepath.WalkDir yields
+// "internal/config/config.go" — which contains "internal/" but never
+// "/internal/" — so a straight substring search matched nothing, every file
+// resolved to "", checkFile returned early for all of them, and the sensor
+// reported a clean run having inspected nothing.
+//
+// That is the worst shape a sensor can have: it cannot fail, so a dependency
+// rule that this project documents as enforced has never been enforced. The
+// existing test did not catch it because t.TempDir() returns an absolute path,
+// which happens to contain the leading slash the relative case lacks.
 func (s *Sensor) packagePrefix(filePath string) string {
 	clean := filepath.ToSlash(filePath)
-	internalMarker := "/internal/"
-	idx := strings.Index(clean, internalMarker)
+
+	// Relative to the root when the root is a directory, so a relative root and
+	// an absolute one produce the same answer.
+	if s.rootDir != "" {
+		if rel, err := filepath.Rel(s.rootDir, filePath); err == nil {
+			if !strings.HasPrefix(rel, "..") {
+				clean = filepath.ToSlash(rel)
+			}
+		}
+	}
+
+	// Anchored so the directory being searched for is a whole path segment, not
+	// a substring of a longer name like "internal-legacy/".
+	idx := strings.Index(clean, "internal/")
 	if idx < 0 {
 		return ""
 	}

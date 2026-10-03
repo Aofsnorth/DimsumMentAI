@@ -159,8 +159,8 @@ cover-html: ## Generate HTML coverage report
 .PHONY: arch
 arch: ## Run architecture fitness sensor (module boundary checks)
 	@echo "$(CLR_INFO)→ architecture fitness$(CLR_RESET)"
-	@$(GO) test $(GOFLAGS) -run TestArchitecture ./internal/harness/architecture/... -v 2>/dev/null || \
-		$(GO) test $(GOFLAGS) ./internal/harness/architecture/...
+	@$(GO) test $(GOFLAGS) ./tests/harness/architecture/...
+	@$(GO) run ./cmd/harness -sensor architecture.fitness
 
 .PHONY: harness-sensors
 harness-sensors: ## Run the unified harness CLI (all sensors & guides)

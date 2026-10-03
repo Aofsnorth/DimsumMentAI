@@ -177,3 +177,28 @@ func (r *Runner) SetExecuteForTest(capture *[]DispatchedVerb) func() {
 // DoActivityForTest runs the real activity path, so a test can observe what the
 // runner dispatched rather than what its helpers would have produced.
 func (r *Runner) DoActivityForTest(activity string) { r.doActivity(activity) }
+
+// InstallPlanForTest runs the real installPlan, so a test can observe the
+// carry-over rules without reaching the planner goroutine that normally calls it.
+//
+// The carry-over is invisible from outside: SetPlan assigns a plan verbatim, so
+// a test written against SetPlan cannot tell the difference between a carry-over
+// that works and one that is applied and then immediately overwritten.
+func (r *Runner) InstallPlanForTest(plan Plan, now time.Time) {
+	r.installPlan(plan, now, Judgement{})
+}
+
+// FinishStepForTest runs the real finishStep against the given plan identity, so
+// a test can hand it a step that belongs to a plan which has since been replaced.
+func (r *Runner) FinishStepForTest(index int, step PlanStep, planID, note string) {
+	r.finishStep(index, step, planID, note)
+}
+
+// FailStepWorkForTest runs the real failure path against a plan identity.
+func (r *Runner) FailStepWorkForTest(index int, step PlanStep, planID, reason string) {
+	r.failStepWork(index, step, planID, reason)
+}
+
+// ProgressForTest reports how much of the current plan is done, so a test can
+// check the carry-over through the same count the planner logs.
+func (p Plan) ProgressForTest() (done, total int) { return p.progress() }
