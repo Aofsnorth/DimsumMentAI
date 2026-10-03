@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"bedrock-ai/internal/blockcell"
 	"bedrock-ai/internal/bot"
 	"bedrock-ai/internal/bot/movement"
 	"bedrock-ai/internal/bot/pathfinder"
@@ -361,9 +362,7 @@ func (s *Server) handleDebugBreak(w http.ResponseWriter, r *http.Request) {
 	s.b.Mu.Unlock()
 
 	if isGrounded {
-		feetsX := int32(s.b.Pos.X())
-		feetsY := int32(s.b.Pos.Y())
-		feetsZ := int32(s.b.Pos.Z())
+		feetsX, feetsY, feetsZ := blockcell.XYZ(s.b.Pos.X(), s.b.Pos.Y(), s.b.Pos.Z())
 		s.b.Mu.Lock()
 		s.b.WorldModel.SetBodyClearance(feetsX, feetsY, feetsZ)
 		s.b.WorldModel.SetBodyClearance(feetsX, feetsY+1, feetsZ)
