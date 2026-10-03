@@ -335,6 +335,16 @@ func BuildActivityQuestion(curriculum []string) map[string]json.RawMessage {
 		criteria[ActivityRest] = activityDescriptions[ActivityRest]
 	}
 
+	// A one-option menu is not a question, and the endpoint refuses it. See
+	// minChoiceCriteria — but the case is reachable here specifically, because the
+	// curriculum arrives already narrowed by the active goal. A `gather_wood`
+	// goal advances only mining and gathering; narrow it in a world offering
+	// neither and what is left is the forced "rest" above, alone. That single
+	// entry is the whole menu.
+	if len(criteria) < minChoiceCriteria {
+		return nil
+	}
+
 	return map[string]json.RawMessage{
 		QActivity: mustMarshal(ChoiceQuestion{
 			Type:         TypeChoice,
@@ -364,6 +374,31 @@ var activityDescriptions = map[string]string{
 	ActivityTendAnimals: "feed or look after the animals nearby",
 	ActivityCraft:       "craft something it has the ingredients for right now",
 }
+
+// minChoiceCriteria is the smallest number of options a choice question may
+// carry. One is not a floor the endpoint enforces out of caution — it rejects it,
+// verified against the live endpoint: a two-option choice is accepted, a
+// one-option choice returns
+//
+//	400 Invalid decision request. Send only model, state, and bounded typed
+//	questions; chat, streaming, tools, and generation controls are not supported.
+//
+// which reads like a complaint about the wrong field. Nothing about the body is
+// wrong. The count is the problem, and the bound is a floor rather than a
+// ceiling: twenty options pass fine.
+//
+// What makes this expensive is the blast radius. The 400 takes down the entire
+// request, not just the offending question, so one menu that narrowed down to a
+// single entry silently blinds the bot — it stops being asked danger, hunger,
+// whether it is worth speaking, what to do next — while every other question
+// rides along in the rejected batch. That is exactly what happened: the bot
+// finished a gather, went idle, built a one-option activity menu, and from then
+// on fell back to local rules for the rest of the session without recovering,
+// because nothing it did afterwards could change the shape of the menu.
+//
+// Callers range over the returned map, so returning nil skips the question and
+// costs nothing.
+const minChoiceCriteria = 2
 
 func mustMarshal(v any) json.RawMessage {
 	b, err := json.Marshal(v)
@@ -411,6 +446,12 @@ func BuildAffordanceQuestion(available map[string]string) map[string]json.RawMes
 	if len(available) == 0 {
 		// An empty choice is a question no model can answer, and an unanswerable
 		// question reads as a bug rather than as "there was nothing to do".
+		return nil
+	}
+	// One possible action is not a decision either. The caller asks whenever
+	// anything is available, so a world that offers exactly one thing lands here
+	// with a single entry — and a single-entry choice is rejected outright.
+	if len(available) < minChoiceCriteria {
 		return nil
 	}
 	return map[string]json.RawMessage{

@@ -331,3 +331,118 @@ func TestReopeningAppendsRatherThanTruncating(t *testing.T) {
 		t.Errorf("details = %q, %q", recs[0].Detail, recs[1].Detail)
 	}
 }
+
+// TestAFailedRotationIsVisibleRatherThanSilent is the regression for a failure
+// mode nothing in the public API can produce on purpose.
+//
+// Rotation closes the log file and then renames it. If the rename fails — which
+// on Windows is what happens whenever an indexer or an antivirus scanner has
+// the file open again in that window — the code used to return, leaving the
+// logger pointing at a closed handle with its size counter still over the cap.
+// Every later record then took the same path, failed the same way, and was lost
+// for the rest of the session, while Summary went on reporting a healthy
+// logger. A run whose evidence silently stopped existing is the one outcome
+// this log exists to make impossible.
+func TestAFailedRotationIsVisibleRatherThanSilent(t *testing.T) {
+	t.Parallel()
+
+	l, err := evidence.NewRotationDoomedForTest(4)
+	if err != nil {
+		t.Fatalf("building the doomed-rotation fixture: %v", err)
+	}
+	defer evidence.CleanupForTest(l)
+
+	if !l.Enabled() {
+		t.Fatal("fixture is wrong: a logger whose rotation has not been attempted " +
+			"should still report itself enabled")
+	}
+
+	// Several records, so the test can tell "the first one broke it" from "one
+	// was lost and the rest were fine". The old code lost all of them.
+	for i := 0; i < 5; i++ {
+		l.Record(evidence.KindPlanReady, "rotation bait", nil)
+	}
+
+	// The writer drains asynchronously. Wait for the rotation to actually be
+	// attempted rather than guessing at a sleep.
+	deadline := time.Now().Add(5 * time.Second)
+	for l.Enabled() && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	if l.Enabled() {
+		t.Error("the logger still reports itself enabled after a rotation failed; " +
+			"Summary will tell an operator the evidence is being written when it is not")
+	}
+	if got := l.Dropped(); got == 0 {
+		t.Error("a rotation failure dropped records but Dropped() reports none; " +
+			"the hole in the evidence is invisible to the only thing that reports holes")
+	}
+	if s := l.Summary(); !strings.Contains(s, "unavailable") {
+		t.Errorf("Summary = %q, want it to say the logger is unavailable", s)
+	}
+}
+
+// TestDroppedIsNotAlsoCountedAsWritten keeps the two counters disjoint.
+//
+// written was incremented before the write was attempted, so a run that lost
+// records to a full disk or a failed rotation reported them as both written and
+// dropped — forty lost records reading as eighty records of activity.
+func TestDroppedIsNotAlsoCountedAsWritten(t *testing.T) {
+	t.Parallel()
+
+	l, err := evidence.NewRotationDoomedForTest(8)
+	if err != nil {
+		t.Fatalf("building the doomed-rotation fixture: %v", err)
+	}
+	defer evidence.CleanupForTest(l)
+
+	const records = 6
+	for i := 0; i < records; i++ {
+		l.Record(evidence.KindPlanReady, "lost", nil)
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) && l.Dropped() == 0 {
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	if got, want := l.Dropped(), uint64(records); got != want {
+		t.Errorf("Dropped() = %d, want %d: every record sent to a logger whose "+
+			"rotation failed is lost, and all of them have to be counted", got, want)
+	}
+	if s := l.Summary(); strings.Contains(s, "written") {
+		t.Errorf("Summary = %q, want it to report unavailable rather than a "+
+			"written count for records that never reached a file", s)
+	}
+}
+
+// TestRecordingIntoADisabledLoggerIsCounted covers the other hole in the
+// counters. A logger that has gone dark drops records on the way in without
+// counting them, so a session that lost its evidence at rotation time reported
+// a clean run.
+func TestRecordingIntoADisabledLoggerIsCounted(t *testing.T) {
+	t.Parallel()
+
+	// Open on a path that cannot exist: the parent is a file, not a directory.
+	dir := t.TempDir()
+	blocker := filepath.Join(dir, "blocker")
+	if err := os.WriteFile(blocker, []byte("x"), 0o644); err != nil {
+		t.Fatalf("writing blocker: %v", err)
+	}
+
+	l := evidence.Open(filepath.Join(blocker, "events.jsonl"))
+	if l.Enabled() {
+		t.Fatal("fixture is wrong: a logger over an unopenable path must be disabled")
+	}
+
+	l.Record(evidence.KindPlanReady, "into the void", nil)
+
+	if got := l.Dropped(); got != 1 {
+		t.Errorf("Dropped() = %d, want 1: a record sent to a disabled logger is "+
+			"lost, and losing it silently is how a broken session still reports clean", got)
+	}
+	if s := l.Summary(); !strings.Contains(s, "unavailable") {
+		t.Errorf("Summary = %q, want it to say unavailable", s)
+	}
+}

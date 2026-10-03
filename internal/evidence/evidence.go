@@ -114,11 +114,17 @@ type Logger struct {
 	// log, because it invites conclusions the evidence cannot support.
 	dropped atomic.Uint64
 	written atomic.Uint64
+	seq     atomic.Uint64
 
-	mu      sync.Mutex
-	file    *os.File
-	bytes   int64
-	enabled bool
+	mu    sync.Mutex
+	file  *os.File
+	bytes int64
+	// enabled is atomic because it is read from every goroutine that records
+	// anything and written from two others — Open, and rollIfNeeded when a
+	// rotation fails. A plain bool read outside the lock is a data race with
+	// the writer goroutine, and the writer goroutine is the one that disables
+	// the logger, so the race lands exactly when the logger is shutting down.
+	enabled atomic.Bool
 
 	closed chan struct{}
 	once   sync.Once
@@ -137,19 +143,19 @@ func Open(path string) *Logger {
 	}
 
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		l.enabled = false
+		l.enabled.Store(false)
 		return l
 	}
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
-		l.enabled = false
+		l.enabled.Store(false)
 		return l
 	}
 	if info, statErr := f.Stat(); statErr == nil {
 		l.bytes = info.Size()
 	}
 	l.file = f
-	l.enabled = true
+	l.enabled.Store(true)
 
 	l.wg.Add(1)
 	go l.run()
@@ -162,7 +168,7 @@ func Open(path string) *Logger {
 // ask first, and a caller reading a log can tell the difference between "no
 // events" and "logging was off".
 func (l *Logger) Enabled() bool {
-	return l != nil && l.enabled
+	return l != nil && l.enabled.Load()
 }
 
 // Record hands an event to the writer.
@@ -171,7 +177,15 @@ func (l *Logger) Enabled() bool {
 // because the alternative — making the game loop wait on a file write — trades
 // a small hole in the evidence for a bot that stands still at the wrong moment.
 func (l *Logger) Record(kind Kind, detail string, fields map[string]any) {
-	if l == nil || !l.enabled {
+	if l == nil {
+		return
+	}
+	// Counted rather than silently skipped. A disabled logger and a logger with
+	// a full buffer both lose records, and both are reasons the evidence has a
+	// hole in it. Only the second was ever counted, so a session whose
+	// evidence died quietly reported a clean run.
+	if !l.enabled.Load() {
+		l.dropped.Add(1)
 		return
 	}
 	rec := Record{
@@ -212,7 +226,7 @@ func (l *Logger) Close() error {
 		if l.file != nil {
 			err = l.file.Close()
 			l.file = nil
-			l.enabled = false
+			l.enabled.Store(false)
 		}
 	})
 	return err
@@ -250,8 +264,11 @@ func (l *Logger) run() {
 func (l *Logger) write(rec Record) {
 	// The sequence is assigned at write time, not at call time, so it reflects
 	// the order the records actually reached the file rather than the order
-	// several goroutines happened to race into the channel.
-	rec.Seq = l.written.Add(1)
+	// several goroutines happened to race into the channel. It is a separate
+	// counter from written because a record that fails to write still consumed
+	// a sequence number: the number has to stay monotonic across the gap, or
+	// two records either side of a failed write would claim the same order.
+	rec.Seq = l.seq.Add(1)
 
 	data, err := json.Marshal(rec)
 	if err != nil {
@@ -272,24 +289,60 @@ func (l *Logger) write(rec Record) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if l.file == nil {
+		l.dropped.Add(1)
 		return
 	}
 	l.rollIfNeeded(int64(len(data)))
+	if l.file == nil {
+		// rollIfNeeded failed and took the logger down. The record is lost, and
+		// the count is how that loss becomes visible in Summary.
+		l.dropped.Add(1)
+		return
+	}
 	n, err := l.file.Write(data)
 	l.bytes += int64(n)
 	if err != nil {
 		l.dropped.Add(1)
+		return
 	}
+	// Counted only after the write succeeded. Counting first meant a run that
+	// lost forty records to a full disk reported forty written as well, which
+	// reads as eighty.
+	l.written.Add(1)
+}
+
+// disableLocked takes the logger down for good and records why. The caller
+// holds the lock.
+func (l *Logger) disableLocked() {
+	if l.file != nil {
+		_ = l.file.Close()
+		l.file = nil
+	}
+	l.bytes = 0
+	l.enabled.Store(false)
 }
 
 // rollIfNeeded rotates the file once it grows past the cap. The caller holds
 // the lock.
+//
+// Every failure path here ends with the logger switched off rather than with a
+// bare return. Rotation closes the current file before renaming it, so a
+// failure after that point leaves l.file pointing at a closed handle with
+// l.bytes still over the cap — and every subsequent write then takes the same
+// path, fails the same way, and is lost for the rest of the session. It is a
+// failure mode that looks like working right up until someone goes looking for
+// the log that was never written. Going dark is the honest outcome: Summary
+// then reports the logger unavailable, which is what it is.
 func (l *Logger) rollIfNeeded(incoming int64) {
+	if l.file == nil {
+		return
+	}
 	if l.bytes+incoming <= maxFileBytes {
 		return
 	}
 	name := l.file.Name()
 	if err := l.file.Close(); err != nil {
+		l.disableLocked()
 		return
 	}
 	rolled := name + ".1"
@@ -297,12 +350,12 @@ func (l *Logger) rollIfNeeded(incoming int64) {
 	// Rename rather than truncate: the session that went wrong is usually not
 	// the one you are watching when you finally notice.
 	if err := os.Rename(name, rolled); err != nil {
+		l.disableLocked()
 		return
 	}
 	f, err := os.OpenFile(name, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
-		l.file = nil
-		l.enabled = false
+		l.disableLocked()
 		return
 	}
 	l.file = f
@@ -318,7 +371,7 @@ func (l *Logger) Summary() string {
 	if l == nil {
 		return "evidence: off"
 	}
-	if !l.enabled {
+	if !l.enabled.Load() {
 		return "evidence: unavailable"
 	}
 	return fmt.Sprintf("evidence: %d written, %d dropped", l.written.Load(), l.dropped.Load())

@@ -8,6 +8,7 @@ package safecast
 
 import (
 	"math"
+	"reflect"
 )
 
 // Integer is a constraint that matches all built-in integer types.
@@ -26,59 +27,60 @@ type normalised struct {
 // to the range that T can represent. Negative source values are clamped to
 // zero when the target type is unsigned, and values larger than the target
 // maximum are clamped to the target maximum.
+//
+// The target is dispatched on reflect.Kind rather than on the dynamic type. The
+// Integer constraint admits named types — it is written with tildes — so
+// `To[int32](MyInt32(7))` is a call this package is required to handle. A
+// type switch matches the exact dynamic type, so it saw `main.MyInt32`, matched
+// no case, and returned the zero value: seven became zero. Every named source
+// was silently converted to 0, and every out-of-range named source skipped the
+// clamping that is the entire reason this package exists. Kind is what both a
+// built-in type and a named type over it report, so it is the question that
+// distinguishes "a 32-bit integer" from "the 32-bit integer type called
+// int32".
 func To[T, S Integer](v S) T {
 	n := normalise(v)
-	switch any(*new(T)).(type) {
-	case int:
+	switch reflect.TypeOf(*new(T)).Kind() {
+	case reflect.Int:
 		return T(toInt(n))
-	case int8:
+	case reflect.Int8:
 		return T(toInt8(n))
-	case int16:
+	case reflect.Int16:
 		return T(toInt16(n))
-	case int32:
+	case reflect.Int32:
 		return T(toInt32(n))
-	case int64:
+	case reflect.Int64:
 		return T(toInt64(n))
-	case uint:
+	case reflect.Uint:
 		return T(toUint(n))
-	case uint8:
+	case reflect.Uint8:
 		return T(toUint8(n))
-	case uint16:
+	case reflect.Uint16:
 		return T(toUint16(n))
-	case uint32:
+	case reflect.Uint32:
 		return T(toUint32(n))
-	case uint64:
+	case reflect.Uint64:
 		return T(toUint64(n))
-	case uintptr:
+	case reflect.Uintptr:
 		return T(toUintptr(n))
 	}
+	// Unreachable while T satisfies Integer, which the constraint enforces. The
+	// fallback is the raw conversion, so if the constraint ever widens, the
+	// result is unchecked rather than silently zero.
 	return T(v)
 }
 
+// normalise widens any integer to a form the clamping helpers can work on.
+//
+// It dispatches on reflect.Kind for the same reason To does. A type switch on
+// the dynamic type sees `main.MyInt32` rather than `int32`, matches nothing, and
+// returns the zero normalised value — which To then reports as a legitimate 0.
 func normalise[S Integer](v S) normalised {
-	switch x := any(v).(type) {
-	case int:
-		return normalised{i: int64(x), signed: true}
-	case int8:
-		return normalised{i: int64(x), signed: true}
-	case int16:
-		return normalised{i: int64(x), signed: true}
-	case int32:
-		return normalised{i: int64(x), signed: true}
-	case int64:
-		return normalised{i: x, signed: true}
-	case uint:
-		return normalised{u: uint64(x)}
-	case uint8:
-		return normalised{u: uint64(x)}
-	case uint16:
-		return normalised{u: uint64(x)}
-	case uint32:
-		return normalised{u: uint64(x)}
-	case uint64:
-		return normalised{u: x}
-	case uintptr:
-		return normalised{u: uint64(x)}
+	switch x := reflect.ValueOf(v); x.Kind() {
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		return normalised{i: x.Int(), signed: true}
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
+		return normalised{u: x.Uint()}
 	}
 	return normalised{}
 }

@@ -35,5 +35,8 @@ data\bot_state.json
 
 archive/
 
+# Harness observation runs (per-session cost/result records)
+.memory/
+
 # Bot runtime state (last position per session, changes every run)
 data/bot_state.json
