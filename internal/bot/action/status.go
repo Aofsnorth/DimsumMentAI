@@ -108,18 +108,20 @@ func ReportInventoryDelta(b *bot.Bot, user, label, item string, before, wanted i
 	if wanted <= 0 {
 		if gained == 0 {
 			ReportStatus(b, user, event.ActionStatus{
-				Action:  label,
-				Item:    name,
-				Success: false,
-				Error:   fmt.Sprintf("tidak dapat %s", name),
+				Action:   label,
+				Item:     name,
+				Success:  false,
+				Terminal: true,
+				Error:    fmt.Sprintf("tidak dapat %s", name),
 			})
 			return
 		}
 		ReportStatus(b, user, event.ActionStatus{
-			Action:  label,
-			Item:    name,
-			Count:   gained,
-			Success: true,
+			Action:   label,
+			Item:     name,
+			Count:    gained,
+			Success:  true,
+			Terminal: true,
 		})
 		return
 	}
@@ -127,27 +129,30 @@ func ReportInventoryDelta(b *bot.Bot, user, label, item string, before, wanted i
 	switch {
 	case after >= wanted:
 		ReportStatus(b, user, event.ActionStatus{
-			Action:  label,
-			Item:    name,
-			Count:   gained,
-			Success: true,
+			Action:   label,
+			Item:     name,
+			Count:    gained,
+			Success:  true,
+			Terminal: true,
 		})
 	case gained > 0:
 		// Real progress, short of the goal. Still a failure to the plan, but a
 		// partial one, and the count says what was actually achieved.
 		ReportStatus(b, user, event.ActionStatus{
-			Action:  label,
-			Item:    name,
-			Count:   gained,
-			Success: false,
-			Error:   fmt.Sprintf("hanya dapat %d dari %d %s", gained, wanted, name),
+			Action:   label,
+			Item:     name,
+			Count:    gained,
+			Success:  false,
+			Terminal: true,
+			Error:    fmt.Sprintf("hanya dapat %d dari %d %s", gained, wanted, name),
 		})
 	default:
 		ReportStatus(b, user, event.ActionStatus{
-			Action:  label,
-			Item:    name,
-			Success: false,
-			Error:   fmt.Sprintf("tidak dapat %s", name),
+			Action:   label,
+			Item:     name,
+			Success:  false,
+			Terminal: true,
+			Error:    fmt.Sprintf("tidak dapat %s", name),
 		})
 	}
 }

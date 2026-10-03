@@ -103,3 +103,73 @@ func TestDistinctiveResultsStillTalk(t *testing.T) {
 		}
 	}
 }
+
+// A bot that finishes the job and says nothing is the same failure from the
+// player's side as a bot that never finished it.
+//
+// The live run: a player asked for wood, the bot felled nine trees and reported
+// "Wood gathering finished collected=10 target=10", and then went quiet. Nothing
+// wrong with the work. The silence was the table above doing exactly what it
+// said — "chop" and "gather" are both routine, so the closing line was routine
+// too, and the one message the player was actually waiting for was suppressed
+// along with the per-tree noise.
+//
+// Terminal is what separates the two. The per-tree reports stay silent; the one
+// that closes the job does not.
+func TestTerminalReportsTalkEvenWhenTheActionIsRoutine(t *testing.T) {
+	t.Parallel()
+
+	terminal := []event.ActionStatus{
+		{Action: "gather", Item: "oak_log", Count: 10, Success: true, Terminal: true},
+		{Action: "chop", Item: "log", Count: 5, Success: true, Terminal: true},
+		{Action: "mine", Item: "cobblestone", Count: 64, Success: true, Terminal: true},
+		{Action: "automine", Item: "iron_ore", Count: 12, Success: true, Terminal: true},
+		{Action: "fish", Item: "cod", Count: 3, Success: true, Terminal: true},
+	}
+
+	for _, status := range terminal {
+		if !bot.ShouldNarrateStatus(status) {
+			t.Errorf("ShouldNarrateStatus(%s, terminal) = false, want true: this is the line that "+
+				"closes the job the player asked for", status.Action)
+		}
+	}
+}
+
+// TestTerminalIsTheOnlyDifference is the guard on the guard. If Terminal made
+// everything talk, the per-tree silence above would be undone and the bot goes
+// back to announcing every log. Same action, same item, same count — only the
+// flag differs, and it has to be the whole difference.
+func TestTerminalIsTheOnlyDifference(t *testing.T) {
+	t.Parallel()
+
+	progress := event.ActionStatus{Action: "chop", Item: "log", Count: 5, Success: true}
+	closing := progress
+	closing.Terminal = true
+
+	if bot.ShouldNarrateStatus(progress) {
+		t.Error("routine progress talked; the whole point of Terminal is that this stays silent")
+	}
+	if !bot.ShouldNarrateStatus(closing) {
+		t.Error("the closing line was silenced; that is the bug this flag exists to fix")
+	}
+}
+
+// TestATerminalPartialFailureStillReportsWhatWasShort stops the flag from
+// becoming an excuse. "Only got 3 of 10" is a result the player needs, and it
+// arrives as a terminal report that failed.
+func TestATerminalPartialFailureStillReportsWhatWasShort(t *testing.T) {
+	t.Parallel()
+
+	status := event.ActionStatus{
+		Action:   "gather",
+		Item:     "oak_log",
+		Count:    3,
+		Success:  false,
+		Terminal: true,
+		Error:    "hanya dapat 3 dari 10 oak_log",
+	}
+
+	if !bot.ShouldNarrateStatus(status) {
+		t.Error("a terminal partial failure was silenced; the shortfall is the thing to report")
+	}
+}

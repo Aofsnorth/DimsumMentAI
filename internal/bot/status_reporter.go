@@ -56,9 +56,16 @@ var quietSuccessActions = map[string]bool{
 //
 // A failure is always narrated: something did not work, and the player is the
 // one who has to decide what to do about it. A success is narrated unless it is
-// routine work, where the absence of a message is the natural signal.
+// routine work, where the absence of a message is the natural signal — with one
+// exception. A terminal report is the line that closes a job somebody asked
+// for, and it is narrated even when the action itself is quiet: "selesai, kayu
+// udah 10" is what the player is waiting for, and the silence that stood in for
+// it is what made the bot finish the work and say nothing.
 func ShouldNarrateStatus(status event.ActionStatus) bool {
 	if !status.Success || status.Error != "" {
+		return true
+	}
+	if status.Terminal {
 		return true
 	}
 	return !quietSuccessActions[status.Action]
@@ -67,8 +74,12 @@ func ShouldNarrateStatus(status event.ActionStatus) bool {
 // statusSignature is what makes two status reports "the same report". The count
 // is deliberately left out: a bot stuck retrying one node emits the same action,
 // item and error over and over, and the count never changes while it is stuck.
+// Terminal is included because it is the one thing that separates the closing
+// line of a job from the identical routine progress that preceded it — without
+// it, a run that felled several trees narrated the first report and swallowed
+// the one the player was actually waiting for.
 func statusSignature(status event.ActionStatus) string {
-	return status.Action + "\x00" + status.Item + "\x00" + status.Error
+	return status.Action + "\x00" + status.Item + "\x00" + status.Error + fmt.Sprintf("\x00%t", status.Terminal)
 }
 
 // shouldSpeakStatus reports whether a report is different enough from the recent
@@ -283,6 +294,13 @@ func reportActionStatusAsync(b *Bot, user string, status event.ActionStatus) {
 	}
 }
 
+// BuildStatusPrompt renders an action result for the model that writes the
+// reply. It carries the server's verdict, never a conclusion of its own.
+//
+// The terminal wording matters as much as the facts. Without it the model reads
+// the last line of a ten-tree run as one more routine update and answers in the
+// same flat register, so the sentence that closes the job sounds exactly like the
+// progress it was finally allowed to say.
 func BuildStatusPrompt(status event.ActionStatus) string {
 	item := FormatItemName(status.Item)
 	nonce := time.Now().UnixNano()
@@ -290,10 +308,16 @@ func BuildStatusPrompt(status event.ActionStatus) string {
 		if status.Error == "" {
 			status.Error = "hasil belum terkonfirmasi"
 		}
-		return fmt.Sprintf("ACTION RESULT #%d: %s failed. Item: %s, count: %d, reason: %s. Generate a natural status reply.", nonce, status.Action, item, status.Count, status.Error)
+		return fmt.Sprintf("ACTION RESULT #%d: %s failed. Item: %s, count: %d, reason: %s. This is the final report for the job. Generate a natural status reply.", nonce, status.Action, item, status.Count, status.Error)
 	}
 	if status.Action == "explore" || status.Action == "exploredir" {
 		return fmt.Sprintf("ACTION RESULT #%d: Exploration ended; %d navigation waypoints reached. No item discovery or collection is established by this result. Say briefly that you have looked around; do not announce a loot count or repeat internal mode names.", nonce, status.Count)
+	}
+	if status.Terminal {
+		if status.Count > 0 {
+			return fmt.Sprintf("ACTION RESULT #%d: %s finished. Item: %s, total collected: %d. The job is now complete. Generate a natural status reply that tells the player it is done and what they ended up with; do not phrase it as if more work is coming.", nonce, status.Action, item, status.Count)
+		}
+		return fmt.Sprintf("ACTION RESULT #%d: %s finished without gathering anything: Item: %s, collected: 0. The inventory already met the goal, so there was nothing left to collect — this is a success, not a failure, and not a shortage. Tell the player their stock was already sufficient and that nothing needed collecting. Do NOT say anything failed, and do NOT claim to have collected any.", nonce, status.Action, item)
 	}
 	if status.Count > 0 {
 		return fmt.Sprintf("ACTION RESULT #%d: %s succeeded. Item: %s, count: %d. Generate a natural status reply.", nonce, status.Action, item, status.Count)

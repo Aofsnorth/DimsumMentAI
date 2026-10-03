@@ -106,10 +106,32 @@ func gatherHandler(defaultItem string) ActionHandler {
 			itemName = NormalizeItemName(parts[0])
 		}
 		count := bot.DefaultEmoteCount
+		additional := false
 		if len(parts) > 1 {
-			_, _ = fmt.Sscanf(parts[1], "%d", &count)
+			raw := strings.TrimSpace(parts[1])
+			// "+N" means N MORE than the bot already carries, not N in total.
+			//
+			// A bare count is a total, and that is what the gatherer wants: it
+			// checks the inventory before walking anywhere, so "10" while already
+			// holding 39 correctly does nothing. But "cariin aku 6 oak log lagi"
+			// is not a request to end up with 6 — the player has 6 and wants 6
+			// more, and reading it as a total is how the bot ended a session
+			// saying "already have enough, nothing gathered" on a job it had
+			// just promised to do. The tag had no way to say the difference until
+			// now, so the model could not have expressed it either.
+			if trimmed, ok := strings.CutPrefix(raw, "+"); ok {
+				additional = true
+				raw = strings.TrimSpace(trimmed)
+			}
+			_, _ = fmt.Sscanf(raw, "%d", &count)
 		}
 		before := CountInventoryItems(b.GetInventorySlots(), b.GetItemNames(), itemName)
+		// The gatherer is handed a total, so the addition happens here where the
+		// current count is actually known. ReportInventoryDelta below gets the
+		// same number, so the two agree on what was asked for.
+		if additional {
+			count += before
+		}
 		go func() {
 			if IsWoodLike(itemName) {
 				b.Gatherer.GatherWoodType(context.Background(), itemName, count)
@@ -598,6 +620,13 @@ var ActionHandlers = map[string]ActionHandler{
 	"runaway":       movementHandler("runaway"),
 	"chase":         movementHandler("chase"),
 	"followrandom":  movementHandler("followrandom"),
+
+	// Jump
+	"jump": func(b *bot.Bot, param, user string) {
+		b.RequestJump()
+		b.TriggerEmoteFor("jump", 20)
+		ReportStatus(b, user, event.ActionStatus{Action: "jump", Success: true})
+	},
 
 	// Emote patterns
 	"jumpforever":   emoteHandler("jumpforever"),

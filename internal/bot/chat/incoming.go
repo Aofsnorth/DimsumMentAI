@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"time"
 
 	"bedrock-ai/internal/bot"
+	"bedrock-ai/internal/bot/chat/reaction"
 	"bedrock-ai/internal/bot/entity"
 	"bedrock-ai/internal/bot/perception"
 	"bedrock-ai/internal/event"
@@ -89,6 +91,28 @@ func HandleIncomingChat(ctx context.Context, b *bot.Bot, evt event.ChatEvent) {
 	}
 
 	b.Logger.Info("chat processing: querying AI", slog.String("from", evt.SourceName))
+
+	// Read-and-decide time, before the model is even asked.
+	//
+	// The placement matters. A person reads a message and decides it is worth
+	// answering before they start composing, and the model call below stands in
+	// for composing. Putting the delay in front means the total reply time is
+	// "a person noticed" plus "a person wrote", which is how it actually
+	// decomposes. Putting it afterwards would leave the model latency in front
+	// where it is still perfectly correlated with message complexity, which is
+	// the machine-readable part of the timing that gives the bot away.
+	//
+	// Commands have already returned above, so this never delays an episode
+	// command, and the throttle has already rejected duplicates, so a message
+	// that arrives twice does not get to be slow twice.
+	if wait := reaction.Delay(msg); wait > 0 {
+		select {
+		case <-time.After(wait):
+		case <-ctx.Done():
+			b.Logger.Info("chat: giving up on the reply delay, bot is shutting down")
+			return
+		}
+	}
 
 	systemPrompt := buildChatContext(b, evt.SourceName, msg, botName)
 	reply, err := b.AiClient.Ask(evt.SourceName, systemPrompt, msg)

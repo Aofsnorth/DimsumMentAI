@@ -119,22 +119,93 @@ func fallbackMovementActions(msg string) []action.Step {
 // without actually emitting the <action> tag. When we see one of these in the
 // reply AND the user message has clear action intent, we synthesize the
 // action ourselves.
+//
+// The trailing spaces these entries used to carry were an attempt at whole-word
+// matching and were not enough: "ya " is a substring of "saya ", so the refusal
+// "Saya tak bisa" matched, and the action this synthesises is a mine run — so the
+// bot cheerfully started the exact job the model had just declined. A refusal
+// and an agreement differ only by a prefix, and substring matching cannot tell
+// them apart. See isAffirmativeReply.
+// gatherEverythingCount is what "all of it" resolves to. Not a limit: the
+// gatherer stops when the world runs out of candidates, so a count past any
+// plausible stack means the player gets everything there is.
+const gatherEverythingCount = 4096
+
 var affirmativeWords = []string{
-	"siap", "oke", "ok", "okay", "iya", "ya ", "yes", "sip ", "sip,", "sip.",
-	"bentar", "sebentar", "bntar", "baik", "lanjut", "mau ", "akan ",
-	"i'll", "got it",
+	"siap", "oke", "ok", "okay", "iya", "ya", "yes", "sip", "bentar",
+	"sebentar", "bntar", "baik", "lanjut", "mau", "akan", "i'll", "got it",
 }
 
 // isAffirmativeReply reports whether the LLM's reply text contains a word
 // indicating it committed to performing an action.
+//
+// Matched on word boundaries, not by substring. Punctuation counts as a
+// boundary, so "ya!" and "iya," are agreements; "saya", "dayat" and "biaya"
+// are not.
 func isAffirmativeReply(reply string) bool {
-	r := strings.ToLower(reply)
+	lower := strings.ToLower(reply)
 	for _, w := range affirmativeWords {
-		if strings.Contains(r, w) {
+		for from := 0; from < len(lower); {
+			i := strings.Index(lower[from:], w)
+			if i < 0 {
+				break
+			}
+			start := from + i
+			end := start + len(w)
+			from = end
+			if start > 0 && !isWordBoundary(lower[start-1]) {
+				continue
+			}
+			if end < len(lower) && !isWordBoundary(lower[end]) {
+				continue
+			}
+			if precededByNegator(lower, start) {
+				continue
+			}
 			return true
 		}
 	}
 	return false
+}
+
+// negators are the words that turn a marker into its opposite. "Belum siap" is
+// "not ready" and contains "siap" on its own; "tidak akan" contains "akan". A
+// refusal that happens to contain a marker word is the case this matcher exists
+// to get right, so a marker immediately preceded by one of these does not count.
+var negators = []string{"belum", "tidak", "nggak", "ndak", "gak", "bukan", "jangan"}
+
+// precededByNegator reports whether the word at start is negated.
+//
+// Only the word immediately before is considered. Negation attaches to the
+// clause it precedes, and a marker several words into a sentence is not what
+// "belum siap" means — "saya belum bisa, tapi oke ya" still commits.
+func precededByNegator(lower string, start int) bool {
+	// The prefix ends at the marker, so it ends with whatever separated the two
+	// words — a space in every natural sentence. Trimmed before comparing, or
+	// the suffix test looks for " belum" in "saya belum " and never finds it.
+	prefix := strings.TrimRight(lower[:start], " ")
+	for _, neg := range negators {
+		// The negator must be a whole word: it is the whole prefix, or it ends a
+		// space-delimited word. Anything else is a longer word that merely
+		// happens to end in the same letters.
+		if prefix == neg || strings.HasSuffix(prefix, " "+neg) {
+			return true
+		}
+	}
+	return false
+}
+
+// isWordBoundary reports whether b can sit next to a matched word without being
+// part of it. ASCII letters, digits and underscore continue a word; everything
+// else ends it — including every byte of a multi-byte rune, so a leading
+// non-ASCII letter cannot fake a boundary.
+func isWordBoundary(b byte) bool {
+	switch {
+	case b >= 'a' && b <= 'z', b >= 'A' && b <= 'Z', b >= '0' && b <= '9', b == '_':
+		return false
+	default:
+		return true
+	}
 }
 
 // itemAliases maps a substring found in user messages to the canonical
@@ -193,7 +264,7 @@ func inferActionIntent(msg, reply string) []action.Step {
 		label = "drop"
 	case containsAny(lower, "pegang", "genggam", "equip", "hold", "pakai", "pake ", "tahan"):
 		label = "equip"
-	case containsAny(lower, "cari", "kumpulin", "kumpulkan", "ambilin", "carikan", "gather"):
+	case containsAny(lower, "cari", "kumpulin", "kumpulkan", "ambilin", "carikan", "gather", "bawa", "tambah", "butuh", "butuhin", "kurang"):
 		label = "gather"
 	case containsAny(lower, "tambang", "mining", "mine ", "gali"):
 		label = "mine"
@@ -217,10 +288,27 @@ func inferActionIntent(msg, reply string) []action.Step {
 	}
 
 	count := 1
+	additional := false
 	if containsAny(lower, "semua", "semuanya", "all") {
-		count = 0
-	} else if m := countRegex.FindString(lower); m != "" {
-		_, _ = fmt.Sscanf(m, "%d", &count)
+		// "Take all of them" is not a request for zero. Zero was the encoding
+		// here, and zero is not neutral downstream: the gatherer reads a count of
+		// zero or less as "one block" and proceeds, so "ambil semua batu yang ada"
+		// felled exactly one block and reported success.
+		//
+		// The gatherer loops until the count is reached or the world runs out of
+		// candidates, so a count past any plausible stack means what the player
+		// asked for: everything there is.
+		count = gatherEverythingCount
+	} else {
+		// "lagi", "tambah", "more" — the player already has some and wants more
+		// on top. Without this the count is read as a total, and a bot holding 6
+		// asked for "6 lagi" reports that it already has enough and stops.
+		if containsAny(lower, "lagi", "lebih", "tambah", "tambahan", "additional", "more") {
+			additional = true
+		}
+		if m := countRegex.FindString(lower); m != "" {
+			_, _ = fmt.Sscanf(m, "%d", &count)
+		}
 	}
 
 	param := item
@@ -229,6 +317,9 @@ func inferActionIntent(msg, reply string) []action.Step {
 		// These handlers take a bare item name (no count).
 	default:
 		param = fmt.Sprintf("%s,%d", item, count)
+		if additional {
+			param = fmt.Sprintf("%s,+%d", item, count)
+		}
 	}
 
 	return []action.Step{{Label: label, Param: param}}

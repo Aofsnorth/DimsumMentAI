@@ -18,3 +18,17 @@ func MovementActionsForTest(msg string) []action.Step {
 func IsStopFollowingIntentForTest(msg string) bool {
 	return isStopFollowingIntent(msg)
 }
+
+// IsAffirmativeReplyForTest exposes the reply matcher that decides whether a
+// chatty LLM committed to an action without emitting an <action> tag.
+//
+// It is the difference between "the model agreed" and "the substring 'ya '
+// appears somewhere", which is not the same question. A refusal has to lose.
+func IsAffirmativeReplyForTest(reply string) bool { return isAffirmativeReply(reply) }
+
+// InferActionIntentForTest exposes the synthesised-action path end to end, so a
+// test can assert on the parameter it produces rather than only on whether a
+// step came back.
+func InferActionIntentForTest(msg, reply string) []action.Step {
+	return inferActionIntent(msg, reply)
+}
