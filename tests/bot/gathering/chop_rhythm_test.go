@@ -72,29 +72,20 @@ func TestMaxGatherAttemptsIsBounded(t *testing.T) {
 }
 
 // TestChopCadenceVariesLikeAHand covers the "natural" side of the fix: a fixed
-// 100 ms tick between swings is the clearest tell of a bot. The rhythm must
-// vary, stay inside its bounds, and still pause longer between bursts than
-// inside them. The bounds themselves are pinned in the animation package, which
-// now owns the rhythm; what this guards is that the chopper still uses it
-// rather than drifting back to a local metronome.
+// tick between swings is the clearest tell of a bot. The rhythm must vary and
+// stay inside its bounds. The bounds themselves are pinned in the animation
+// package, which now owns the rhythm; what this guards is that the chopper still
+// uses it rather than drifting back to a local metronome.
 func TestChopCadenceVariesLikeAHand(t *testing.T) {
 	t.Parallel()
 
 	seen := map[time.Duration]int{}
 	for swing := 0; swing < 24; swing++ {
-		wait := gathering.ChopCadence(swing)
-		if wait < animation.SwingMin || wait > animation.RecoveryMax {
-			t.Fatalf("swing %d: cadence %v outside [%v, %v]", swing, wait, animation.SwingMin, animation.RecoveryMax)
+		wait := gathering.ChopCadence()
+		if wait < animation.SwingMin || wait > animation.SwingMax {
+			t.Fatalf("swing %d: cadence %v outside [%v, %v]", swing, wait, animation.SwingMin, animation.SwingMax)
 		}
 		seen[wait]++
-
-		isRecoverySlot := swing%animation.BurstLength == animation.BurstLength-1
-		if isRecoverySlot && wait < animation.RecoveryMin {
-			t.Fatalf("swing %d: recovery slot cadence %v shorter than the recovery floor %v", swing, wait, animation.RecoveryMin)
-		}
-		if !isRecoverySlot && wait > animation.RecoveryMax {
-			t.Fatalf("swing %d: burst cadence %v longer than the burst ceiling", swing, wait)
-		}
 	}
 
 	if len(seen) < 4 {

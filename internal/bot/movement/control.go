@@ -267,6 +267,16 @@ func (tc *TickContext) ApplyEasedLook(WantsToMove bool, yawMax, pitchMax float32
 		ampPitch = 0.10
 	}
 	tc.LookDriftYaw, tc.LookDriftPitch = OrganicLookDrift(tc.Tick, ampYaw, ampPitch)
+
+	// Walking head bob, phase-locked to travel. Added to the drift offsets and
+	// not to the eased state, for the same reason: folding it in here would
+	// make the bob push the head off target, the ease pull it back at 0.22 per
+	// tick, and the leftover error read as a permanent tremor.
+	tc.Stride.Advance(tc.MoveDelta.X(), tc.MoveDelta.Z())
+	if bobPitch, bobYaw, walking := tc.Stride.Bob(!tc.IsGrounded); walking {
+		tc.LookDriftPitch += bobPitch
+		tc.LookDriftYaw += bobYaw
+	}
 	if walkingScanEnabled {
 		tc.HeadYaw, tc.Pitch = boundWalkingGaze(gazeYaw, gazePitch, tc.HeadYaw, tc.Pitch)
 	}
@@ -312,7 +322,7 @@ func WalkingHeadTarget(tick uint64, targetYaw, targetPitch float32, enabled bool
 	}
 
 	yawOffset, pitchOffset := walkingGazeOffsets(tick)
-	return normalizeYaw(targetYaw + yawOffset), clampFloat32(targetPitch+pitchOffset, -90, 90)
+	return normalizeYaw(targetYaw + yawOffset), ClampPitch(targetPitch + pitchOffset)
 }
 
 func walkingGazeOffsets(tick uint64) (float32, float32) {
@@ -330,8 +340,8 @@ func walkingGazeOffsets(tick uint64) (float32, float32) {
 
 func boundWalkingGaze(targetYaw, targetPitch, headYaw, pitch float32) (float32, float32) {
 	yawOffset := clampFloat32(AngleDifference(headYaw, targetYaw), -WalkingGazeMaxYawOffset, WalkingGazeMaxYawOffset)
-	minPitch := clampFloat32(targetPitch-WalkingGazeMaxPitchOffset, -90, 90)
-	maxPitch := clampFloat32(targetPitch+WalkingGazeMaxPitchOffset, -90, 90)
+	minPitch := ClampPitch(targetPitch - WalkingGazeMaxPitchOffset)
+	maxPitch := ClampPitch(targetPitch + WalkingGazeMaxPitchOffset)
 	return normalizeYaw(targetYaw + yawOffset), clampFloat32(pitch, minPitch, maxPitch)
 }
 
@@ -754,6 +764,40 @@ func clampFloat32(v, min, max float32) float32 {
 		return max
 	}
 	return v
+}
+
+// Pitch stops just short of straight up and straight down.
+//
+// The protocol allows a pitch anywhere in [-90, 90], but a packet carrying
+// exactly -90.0 or exactly +90.0 is a value a human client cannot produce. The
+// two extremes are where the pitch derivative vanishes, so the eased angle
+// asymptotes toward them and, once it has rounded to float32, sits exactly on
+// the boundary for as long as the bot keeps looking that way. Mining a block
+// directly underfoot does exactly that, which is why this showed up as a hard
+// boundary rather than a rare rounding artefact.
+//
+// The margin is deliberately small. A human's neck does not actually reach
+// 90 degrees -- measured flexion is around 70 -- so a tighter cap would be more
+// faithful still, but looking straight down is a legitimate action the bot has
+// to perform for mining and for the ground clearance work, and capping at 70
+// would put the crosshair off the block it is aiming at. Holding half a tenth
+// of a degree of daylight instead keeps every one of those actions aimed
+// correctly while never emitting the impossible value.
+const (
+	// PitchBoundary is the protocol's limit.
+	PitchBoundary = 90.0
+	// PitchMargin is how far inside it a packet is allowed to sit.
+	PitchMargin = 0.05
+)
+
+// ClampPitch bounds a pitch to the range a real client reports.
+//
+// Unlike a plain clampFloat32(v, -90, 90) it never returns the boundary value
+// itself, which is the whole point: an out-of-range request comes back just
+// inside the limit rather than exactly on it.
+func ClampPitch(pitch float32) float32 {
+	limit := float32(PitchBoundary - PitchMargin)
+	return clampFloat32(pitch, -limit, limit)
 }
 
 func AngleDifference(target, current float32) float32 {

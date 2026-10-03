@@ -127,6 +127,7 @@ func (tc *TickContext) applyEmote() (emoteJump, emoteSneak bool) {
 
 	if tc.B.EmoteTicks == 0 {
 		tc.B.EmoteState = ""
+		tc.B.EmoteJumpSpent = false
 	}
 
 	// Orientation is persisted once per tick in SendInputLoop after the look
@@ -159,8 +160,13 @@ func (tc *TickContext) handleEmoteLookAround(isPathfindingState bool) {
 		return
 	}
 	if tc.B.EmoteTicks%5 == 0 {
-		tc.Yaw = InterpolateAngle(tc.Yaw, tc.Yaw+float32((tc.Tick%50)-25), 25)
-		tc.Pitch = InterpolatePitch(tc.Pitch, tc.Pitch+float32((tc.Tick%30)-15), 15)
+		// Cast to int before subtracting. Tick is a uint64, so Tick%50-25
+		// underwound to roughly 1.8e19 for every tick whose remainder was
+		// below 25, and InterpolateAngle clamped that to its maximum step. The
+		// sweep was meant to travel from -24 to +25 and back; it only ever
+		// turned one way, and stopped reversing the moment it should have.
+		tc.Yaw = InterpolateAngle(tc.Yaw, tc.Yaw+float32(int(tc.Tick%50)-25), 25)
+		tc.Pitch = InterpolatePitch(tc.Pitch, tc.Pitch+float32(int(tc.Tick%30)-15), 15)
 	}
 }
 
@@ -195,14 +201,42 @@ func (tc *TickContext) buildInputData(emoteJump, emoteSneak bool) protocol.Input
 	// for Venity's anticheat silently closing the socket ~30s after spawn. Set it
 	// unconditionally, every tick, to match the real client baseline.
 	inputData.Set(packet.InputFlagBlockBreakingDelayEnabled)
-	if tc.IsGrounded {
+	// The bot's move vector is camera-space by construction: prepareMoveVector
+	// projects the world-space travel direction onto the basis built from the
+	// look angle, so x is strafe and y is forward relative to where the body is
+	// facing, exactly like a WASD client.
+	//
+	// InputFlagCameraRelativeMovementEnabled (bit 63) would declare that
+	// explicitly. DO NOT set it unconditionally. Bit 63 postdates this bot's
+	// interoperability target: on a server whose protocol predates it the flag
+	// reads back as an out-of-range enum and the server answers with a
+	// PacketViolationWarning ("enum value is deprecated ... readNoHeader failed!
+	// packetId: 144") and drops the connection roughly 170ms after spawn --
+	// before the world is usable. That is exactly what happened when this was
+	// set, and it cost a full disconnect/reconnect loop on every attempt.
+	//
+	// Bit 57 (BlockBreakingDelayEnabled) above is unaffected and still goes out
+	// every tick: older servers understand it, this one does too. The
+	// difference is the whole lesson -- flag availability is a protocol-version
+	// question, not a correctness one.
+	//
+	// If you ever need the declaration, gate it behind config keyed to a server
+	// you have actually verified accepts it. Do not re-add it as "obviously
+	// right", because it is not.
+	if groundedForPacket(tc) {
 		// VerticalCollision = standing on the floor; correct every grounded tick.
 		inputData.Set(packet.InputFlagVerticalCollision)
 	}
 	if tc.shouldSetHorizontalCollision() {
 		inputData.Set(packet.InputFlagHorizontalCollision)
 	}
-	if tc.ShouldJump || emoteJump {
+	// The emote is visual only: the renderer springs whether or not the physics
+	// agrees. The server counts input without a ground tick behind it as an
+	// unsupported jump, patches the prediction gap on the next correction, and
+	// the body visibly hops a second time on the landing the client renders.
+	// One physical hop per emote, with a bounded lifetime, so a waved emote
+	// flag can never hold the input key down and stack predictions on the sky.
+	if tc.ShouldJump || physicalJumpForThisTick(tc, emoteJump) {
 		inputData.Set(packet.InputFlagJumping)
 	}
 	if tc.shouldSetSneak(emoteSneak) {
@@ -211,6 +245,9 @@ func (tc *TickContext) buildInputData(emoteJump, emoteSneak bool) protocol.Input
 	tc.applyMovementInputFlags(inputData)
 	tc.applySwimInputFlags(&inputData)
 	tc.applySprintFlag(&inputData)
+	// Last, and deliberately after every writer: the edges are derived from the
+	// assembled level flags so they can never contradict what is on the wire.
+	tc.Gait.ApplyGaitEdges(&inputData)
 	return inputData
 }
 
@@ -280,6 +317,44 @@ func (tc *TickContext) planSwim() {
 	}
 	tc.SwimIntent = intent
 	tc.SwimPlanned = true
+}
+
+// groundedForPacket answers the question the wire asks: did the body have the
+// ground under it last tick. The live TickContext field is written by the
+// physics phase that runs later in this same tick, so a waved emote flag can
+// momentarily claim the body is grounded while the previous tick already had
+// it airborne; the packet would then send Jumping + VerticalCollision on a
+// falling body. The server reads that combination as an unsupported jump,
+// patches the prediction gap on its next correction, and the client renders a
+// second hop on the landing. This is the "lompat di udara naik terus lagi".
+func groundedForPacket(tc *TickContext) bool {
+	if tc == nil || tc.B == nil {
+		return false
+	}
+	tc.B.Mu.Lock()
+	defer tc.B.Mu.Unlock()
+	return tc.B.IsGrounded
+}
+
+// physicalJumpForThisTick turns an emote wave into at most one physical hop
+// with a bounded lifetime. A "jump" emote wave is 80 ticks of flag-high;
+// without a lifetime the physics would re-buy the impulse on every landing
+// inside the window, which is how the emote's held key became climbing the
+// air whenever the body touched down mid-emote.
+func physicalJumpForThisTick(tc *TickContext, emoteJump bool) bool {
+	if !emoteJump || tc == nil || tc.B == nil {
+		return false
+	}
+	tc.B.Mu.Lock()
+	defer tc.B.Mu.Unlock()
+	if !tc.B.IsGrounded {
+		return false
+	}
+	if tc.B.EmoteJumpSpent {
+		return false
+	}
+	tc.B.EmoteJumpSpent = true
+	return true
 }
 
 // takeRequestedJump turns a latched jump request into this tick's jump.
@@ -387,9 +462,19 @@ func (tc *TickContext) sendPlayerAuthInput(inputData protocol.InputFlags, itemIn
 }
 
 func (tc *TickContext) BuildPlayerAuthInputPacket(inputData protocol.InputFlags, itemInteractionData *protocol.UseItemTransactionData, itemStackRequest *protocol.ItemStackRequest, blockActions []protocol.PlayerBlockAction) *packet.PlayerAuthInput {
+	// Both pitch fields are clamped at the last possible moment, here, rather
+	// than only where the gaze target was computed. Every writer upstream --
+	// the eased pitch, the walking gaze offsets, the look emote sweeps, the
+	// organic drift -- is a separate route to the same packet, and a value that
+	// has been eased toward straight down for a while arrives already rounded
+	// to the boundary. Clamping once, at the wire, is the only place that cannot
+	// be forgotten by a later writer.
+	pitch := ClampPitch(tc.Pitch)
+	interactPitch := ClampPitch(tc.Pitch + tc.LookDriftPitch)
+
 	pk := &packet.PlayerAuthInput{
 		Position: tc.CurrPos.Add(mgl32.Vec3{0, 1.62, 0}),
-		Pitch:    tc.Pitch,
+		Pitch:    pitch,
 		Yaw:      tc.Yaw,
 		// HeadYaw is decoupled from body Yaw so the head leads the torso
 		// during turns — the way a real player's view arrives before their
@@ -399,7 +484,7 @@ func (tc *TickContext) BuildPlayerAuthInputPacket(inputData protocol.InputFlags,
 		// InteractYaw/InteractPitch represent the crosshair / aim direction and
 		// carry the cosmetic drift. The drift lives here rather than in
 		// HeadYaw/Pitch so it can never feed back into the eased gaze.
-		InteractPitch:      tc.Pitch + tc.LookDriftPitch,
+		InteractPitch:      interactPitch,
 		InteractYaw:        normalizeYaw(tc.HeadYaw + tc.LookDriftYaw),
 		MoveVector:         tc.MoveVec,
 		InputData:          inputData,

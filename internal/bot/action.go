@@ -172,7 +172,11 @@ func (b *Bot) TriggerEmoteFor(name string, ticks int) {
 	defer b.Mu.Unlock()
 	b.EmoteState = name
 	b.EmoteTicks = ticks
+	b.EmoteJumpSpent = false
 	b.Logger.Debug("Emote triggered", "name", name)
+	if name == "jump" {
+		b.jumpRequestedAt = time.Now()
+	}
 }
 
 // FormatItemName converts a raw Minecraft item/block ID (e.g.

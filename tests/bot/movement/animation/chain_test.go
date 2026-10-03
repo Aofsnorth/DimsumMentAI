@@ -111,38 +111,32 @@ func TestOneDeadBeatPerTrunkRatherThanOnePerLog(t *testing.T) {
 	}
 }
 
-// TestTheBurstPatternSpansTheTree rather than restarting inside every log.
+// TestTheRhythmSpansTheTree rather than restarting inside every log.
 //
-// A chain carries its swing count, so the recovery pause lands every third swing
-// across the whole trunk. A rhythm that reset its count per log would put a
-// recovery inside every short break and never produce one at all on a log that
-// only fits two swings.
-func TestTheBurstPatternSpansTheTree(t *testing.T) {
+// Every step after the wind-up is an ordinary cadence pause, so a trunk reads as
+// one continuous swing cycle from the first log to the last. A rhythm that
+// re-derived itself per log would re-serve the wind-up (a dead beat, see
+// TestTheWindUpIsOwedOnceForAWholeTree) and reset its count.
+func TestTheRhythmSpansTheTree(t *testing.T) {
 	t.Parallel()
 
 	c := animation.NewChain(mgl32.Vec3{1.5, 64.5, 1.5})
 	_, _ = c.Next() // wind-up
 
-	var recoveries, swings int
+	var swings int
 	for i := 0; i < 18; i++ {
 		wait, swing := c.Next()
 		if !swing {
 			t.Fatalf("step %d did not swing", i)
 		}
-		swings++
-		if wait > animation.RecoveryMin {
-			recoveries++
+		if wait < animation.SwingMin || wait > animation.SwingMax {
+			t.Fatalf("step %d pauses %v, outside the swing range [%v, %v]", i, wait, animation.SwingMin, animation.SwingMax)
 		}
+		swings++
 	}
 
 	if swings != 18 {
 		t.Fatalf("counted %d swings, want 18", swings)
-	}
-	// BurstLength is 3, so 18 swings carry 6 recovery pauses. The exact count is
-	// less important than it not being zero: a rhythm that reset per log would
-	// never reach the third swing inside a single log's break.
-	if recoveries == 0 {
-		t.Error("18 swings produced no recovery pause at all; the burst pattern is not carrying across the tree")
 	}
 	if c.Swings() != 18 {
 		t.Errorf("the chain counted %d swings, want 18", c.Swings())
@@ -166,7 +160,7 @@ func TestReaimKeepsTheRhythmButMovesTheHead(t *testing.T) {
 	c.Reaim(mgl32.Vec3{1.5, 67.5, 1.5})
 
 	if c.Swings() != 1 {
-		t.Errorf("re-aiming changed the swing count to %d, want 1; the burst pattern restarted mid-tree", c.Swings())
+		t.Errorf("re-aiming changed the swing count to %d, want 1; the rhythm restarted mid-tree", c.Swings())
 	}
 	if !c.Started() {
 		t.Error("re-aiming forgot that the wind-up was already served")
@@ -197,8 +191,8 @@ func TestTheSwingSpacingStillClearsTheAnimationFloor(t *testing.T) {
 		if w < animation.SwingMin {
 			t.Errorf("swing step %d waits %v, under the %v floor", i, w, animation.SwingMin)
 		}
-		if w > animation.RecoveryMax {
-			t.Errorf("swing step %d waits %v, over the %v recovery ceiling", i, w, animation.RecoveryMax)
+		if w > animation.SwingMax {
+			t.Errorf("swing step %d waits %v, over the %v ceiling; the arm parks mid-break", i, w, animation.SwingMax)
 		}
 	}
 }

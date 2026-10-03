@@ -53,27 +53,35 @@ func SmoothSpeedMultiplier(tick uint64, amp float32, phase float64) float32 {
 }
 
 // InterpolateAngle smoothly moves current angle towards target by at most maxStep, handling 360 wrap-around
+//
+// The wrap is folded in closed form rather than by looping. A float32 near
+// 1.8e19 has an ULP of roughly a billion, so `diff -= 360` is adding less than
+// the representation can hold: the value does not change and the loop never
+// terminates. That is not hypothetical — a uint64 tick counter whose remainder
+// was subtracted from without a signed cast produced exactly such a value and
+// hung the movement goroutine outright. Nothing that reaches this function may
+// be able to decide how long it takes to answer, so the arithmetic that used to
+// be a loop is now a single reduction.
 func InterpolateAngle(current, target, maxStep float32) float32 {
-	diff := target - current
-	for diff < -180 {
+	// Fold to the shortest signed rotation first, so a target thousands of
+	// degrees away is the same as one 40 degrees away rather than a different
+	// magnitude that then has to be walked back 360 degrees at a time.
+	diff := math.Mod(float64(target-current), 360)
+	if diff > 180 {
+		diff -= 360
+	} else if diff < -180 {
 		diff += 360
 	}
-	for diff > 180 {
-		diff -= 360
+	if diff > float64(maxStep) {
+		diff = float64(maxStep)
+	} else if diff < -float64(maxStep) {
+		diff = -float64(maxStep)
 	}
-	if diff > maxStep {
-		diff = maxStep
-	} else if diff < -maxStep {
-		diff = -maxStep
-	}
-	res := current + diff
-	for res < 0 {
+	res := math.Mod(float64(current+float32(diff)), 360)
+	if res < 0 {
 		res += 360
 	}
-	for res >= 360 {
-		res -= 360
-	}
-	return res
+	return float32(res)
 }
 
 // InterpolatePitch smoothly moves current pitch towards target by at most maxStep

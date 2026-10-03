@@ -17,6 +17,19 @@ type Looter struct {
 	logger *slog.Logger
 }
 
+const (
+	// dropTolerance is how close the sweep walks to a drop. Bedrock only pulls an
+	// item within roughly a block, so anything looser and the bot stops just
+	// outside range and reports an item it never touched.
+	dropTolerance = 0.6
+
+	// DropPickupReach is the radius within which a standing bot collects a drop
+	// without walking further. It is what separates "already there, let the poll
+	// confirm" from "unreachable, give up on this one" when there is nowhere left
+	// to walk.
+	DropPickupReach = 1.5
+)
+
 func NewLooter(rg *ResourceGatherer, logger *slog.Logger) *Looter {
 	return &Looter{
 		rg:     rg,
@@ -95,9 +108,9 @@ func (l *Looter) collectDrop(ctx context.Context, collected *int, deadline time.
 	// block; a loose tolerance left the bot just out of pickup range and it
 	// counted "reached" without ever collecting the item.
 	//
-	// Tighten arrival tolerance to ~0.6 blocks so the bot closes into pickup
-	// range before the steering loop declares "arrived" and idles.
-	l.rg.bot.SetTargetTolerance(0.6)
+	// Tighten arrival tolerance so the bot closes into pickup range before the
+	// steering loop declares "arrived" and idles.
+	l.rg.bot.SetTargetTolerance(dropTolerance)
 	defer l.rg.bot.SetTargetTolerance(2.0)
 
 	// Poll toward the item: re-aim and re-issue navigation only while the
@@ -127,8 +140,47 @@ func (l *Looter) collectDrop(ctx context.Context, collected *int, deadline time.
 			attempted[closestItem.ID] = true
 			return false
 		}
-		l.rg.bot.LookAt(cur.Position)
-		l.rg.bot.NavigateTo(cur.Position)
+
+		// Navigate to the drop's BLOCK resolved to a standable tile, not to the
+		// item's raw position.
+		//
+		// A raw walk-to asked for a tile nobody can stand on. The item's Y is the
+		// block's interior rather than a feet level, and a drop that settles a
+		// block below the body — under a felled trunk, or at the bottom of the
+		// one-block pit the bot digs when it mines down — has no standable tile at
+		// that height at all. A* then routes as close as it can and logs "gave up
+		// short", the poll below re-issues the same impossible destination every
+		// 250ms, and the body works the rim of the pit going nowhere. That is the
+		// tremor, the failed pickup, and the wall of short-path warnings.
+		//
+		// NavigateToBlock already knows how to fix the target: it snaps to the
+		// nearest standable tile and reports false when the only candidate is the
+		// bot's own tile.
+		pos := cur.Position
+		lx := int32(math.Floor(float64(pos.X())))
+		ly := int32(math.Floor(float64(pos.Y())))
+		lz := int32(math.Floor(float64(pos.Z())))
+
+		if !l.rg.bot.NavigateToBlock(lx, ly, lz, dropTolerance) {
+			// Nowhere left to walk. The bot is either already standing on the drop
+			// — in which case the next poll confirms the pickup — or the drop is
+			// out of reach from anywhere it can stand. Keep polling in the first
+			// case, because walking nowhere on a timer is the spin this whole
+			// change exists to remove.
+			l.rg.bot.StopMovement()
+			if l.distance(l.rg.bot.GetCoords(), pos) > DropPickupReach {
+				l.logger.Debug("drop is out of pickup range of any reachable tile, skipping",
+					"id", closestItem.ID, "pos", pos)
+				attempted[closestItem.ID] = true
+				return false
+			}
+			if !sleepContext(ctx, 250*time.Millisecond) {
+				return true
+			}
+			continue
+		}
+
+		l.rg.bot.LookAt(pos)
 		if !sleepContext(ctx, 250*time.Millisecond) {
 			return true
 		}

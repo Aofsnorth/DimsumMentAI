@@ -85,6 +85,19 @@ type TickContext struct {
 	Swim        *SwimController
 	SwimIntent  SwimIntent
 	SwimPlanned bool
+
+	// Gait carries the sprint/sneak/jump edges across ticks. It is a
+	// pointer because an edge is only meaningful against the previous tick,
+	// and the previous tick needs somewhere to live other than a TickContext
+	// that is rebuilt 20 times a second. Nil is tolerated and means "no
+	// transition history", which is the correct answer for a context assembled
+	// by a test rather than by the movement loop.
+	Gait *GaitState
+
+	// Stride is the travel accumulator behind the walking head bob. Like Gait
+	// it must outlive a single tick, because the bob's phase is derived from
+	// distance and has to stay continuous through a stop.
+	Stride *StridePhase
 }
 
 // notMovingReportInterval is how long the bot may want to move without moving
@@ -159,6 +172,11 @@ func SendInputLoop(ctx context.Context, b *bot.Bot, gd minecraft.GameData) {
 	// times a second, re-sending StartSwimming forever and never letting the
 	// breath clock run down.
 	swim := NewSwimController(b, b.Logger)
+	// Same lifetime reasoning as the swim controller: the sprint/sneak/jump
+	// edges are comparisons against the previous tick, so they need a state
+	// that outlives a single TickContext.
+	gait := NewGaitState()
+	stride := &StridePhase{}
 	startStallWatchdog(b, ctx)
 
 	var lastPredictedY float32 = initPos.Y()
@@ -187,10 +205,19 @@ func SendInputLoop(ctx context.Context, b *bot.Bot, gd minecraft.GameData) {
 				LastPredictedY: lastPredictedY,
 				PrevPos:        prevPos,
 				Swim:           swim,
+				Gait:           gait,
+				Stride:         stride,
 			}
 
 			b.Mu.Lock()
 			tc.CurrPos = b.Pos
+			// Seeded here rather than left at the zero value. ApplyVerticalVelocity
+			// derives the predicted height from it on every branch, and the struct
+			// literal above cannot be relied on to remember a field that only
+			// becomes meaningful once the current position is known. A branch that
+			// forgets to assign it now costs one tick of stutter; before this it
+			// cost a predicted position at Y=0 and a discarded path.
+			tc.NextY = b.Pos.Y()
 			tc.MState = b.MovementState
 			tc.TPlayer = b.TargetPlayerName
 			tc.TPos = b.TargetPos

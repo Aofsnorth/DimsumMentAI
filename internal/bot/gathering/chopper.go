@@ -60,7 +60,12 @@ func (tc *TreeChopper) GatherWood(ctx context.Context, targetCount int, preferre
 	if already >= targetCount {
 		tc.logger.Info("Wood gathering skipped, already have enough",
 			"have", already, "target", targetCount)
-		tc.reportGatherResult(targetCount, targetCount, 0)
+		// Nothing was felled, so nothing may be reported as collected. This used
+		// to call reportGatherResult(targetCount, targetCount, 0) and claim a
+		// full haul of logs the bot never touched — a success the tally invented
+		// to make itself agree with the target. Whatever this report is used for,
+		// it has to survive being read by something that checks it.
+		tc.reportGatherResult(already, targetCount, 0)
 		return
 	}
 	targetCount -= already

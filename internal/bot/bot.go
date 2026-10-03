@@ -320,6 +320,13 @@ type Bot struct {
 	LookTargetUntil   time.Time
 	IsOnLadder        bool // shared ladder state between movement and network systems
 	IsGrounded        bool
+	// emoteJumpSpent bounds an emote "jump" to one physical hop: the first
+	// grounded tick inside the emote's 80-tick window buys the impulse and the
+	// rest of the window is visual only. Without it the physics re-buys the
+	// impulse on every landing inside the window, which reads on the wire as
+	// a held jump key and climbs the air. Exported for the movement packet
+	// writer and its tests; treat it as movement-internal.
+	EmoteJumpSpent bool
 	// jumpRequestedAt latches a request to leave the ground, for the movement
 	// loop to collect. See jump.go — the jump emote is not a jump, and the
 	// scaffolder cannot make one without the loop's help.

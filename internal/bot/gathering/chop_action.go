@@ -27,7 +27,7 @@ func (tc *TreeChopper) chopTree(ctx context.Context, basePos protocol.BlockPos, 
 		targetCount = 1
 	}
 
-	logBlocks := tc.collectLogBlocks(basePos, targetCount)
+	logBlocks := tc.collectLogBlocks(basePos)
 	tc.logger.Debug("Collected log blocks via BFS", "count", len(logBlocks))
 
 	logBlocks = sortLogBlocks(logBlocks)
@@ -60,13 +60,24 @@ func (tc *TreeChopper) chopTree(ctx context.Context, basePos protocol.BlockPos, 
 	return got
 }
 
-func (tc *TreeChopper) collectLogBlocks(basePos protocol.BlockPos, targetCount int) []protocol.BlockPos {
+// collectLogBlocks returns every log in the trunk rooted at basePos.
+//
+// It deliberately does NOT stop once it has found enough logs for the target. It
+// used to, and felling a tree then meant cutting off the first N logs of a
+// twenty-log trunk and walking away — the bot moved on to the next tree with the
+// one it was standing next to still half standing. A player watching that is
+// watching a bot that has not finished the job it just announced.
+//
+// The target belongs to the caller, not here. This function's whole question is
+// "what is in this tree", and the answer does not depend on how much wood was
+// asked for.
+func (tc *TreeChopper) collectLogBlocks(basePos protocol.BlockPos) []protocol.BlockPos {
 	bot := tc.rg.bot
 	queue := []protocol.BlockPos{basePos}
 	visited := map[string]bool{fmt.Sprintf("%d,%d,%d", basePos.X(), basePos.Y(), basePos.Z()): true}
-	logBlocks := make([]protocol.BlockPos, 0, targetCount)
+	var logBlocks []protocol.BlockPos
 
-	for len(queue) > 0 && len(logBlocks) < targetCount {
+	for len(queue) > 0 {
 		curr := queue[0]
 		queue = queue[1:]
 
@@ -209,7 +220,6 @@ func (tc *TreeChopper) chopLogBlock(ctx context.Context, pos protocol.BlockPos, 
 
 	if !withinBreakReach(botPos, pos) {
 		tc.repositionForLog(ctx, pos)
-		botPos = bot.GetCoords()
 	}
 
 	// Plan the break the way the miner does: an exposed face the bot can
@@ -217,13 +227,23 @@ func (tc *TreeChopper) chopLogBlock(ctx context.Context, pos protocol.BlockPos, 
 	// (top) for every log while aiming at a side, and never checked sight —
 	// so it mined through the trunk with no line of sight.
 	world := botMineWorld{bot: bot, model: bot.GetLocalWorldModel()}
-	step, visible := PlanMineStep(world, botPos, pos)
+
+	// Clearance comes BEFORE the plan, not after it.
+	//
+	// A log with something solid in all six of its faces has no approach at all,
+	// and this ordering used to lose exactly that case: clearObstructions only ran
+	// once a step had already been planned, so a log walled in by the very block
+	// that needed clearing went straight to `return false`, got deferred, and
+	// after two passes the tree was abandoned with its lower half still standing.
+	// Knock the block out of the way, then swing at the log — which is the order
+	// a player works in.
+	tc.clearObstructions(ctx, pos)
+
+	step, visible := PlanMineStep(world, bot.GetCoords(), pos)
 	if !visible {
 		tc.logger.Debug("log not visible from current spot, deferring", "pos", pos)
 		return false
 	}
-
-	tc.clearObstructions(ctx, step)
 
 	tc.logger.Debug("Chopping log block", "pos", pos, "face", step.Face)
 	bot.LookAt(step.Aim)
@@ -307,9 +327,9 @@ func ChopWindUp() time.Duration {
 	return animation.WindUp()
 }
 
-// ChopCadence is the wait before swing number `swing` of a break.
-func ChopCadence(swing int) time.Duration {
-	return animation.Cadence(swing)
+// ChopCadence is the wait between two swings of a break.
+func ChopCadence() time.Duration {
+	return animation.Cadence()
 }
 
 // ChopAim is the block centre jittered so the swing never looks welded to a
@@ -321,7 +341,7 @@ func ChopAim(center mgl32.Vec3) mgl32.Vec3 {
 // swingUntilBreak swings until the break time is up, on the chain's rhythm.
 //
 // The chain is shared by every log of a trunk, so the wind-up is served once and
-// the burst/recovery pattern runs continuously across the tree. The swing is sent
+// the arm works continuously from the first log to the last. The swing is sent
 // before the look, not after: the arm has to be on its way when the head turns,
 // and a head that starts moving only once the arm has landed reads as the swing
 // being fired at the wrong moment.
@@ -370,29 +390,62 @@ func (tc *TreeChopper) finishBreakBlock(step MineStep) {
 	})
 }
 
-// clearObstructions removes a non-log block sitting on top of the log being
-// chopped (moss, scaffolding, leaves the tower left behind). The obstruction
-// is planned through the same visibility check as the log itself.
-func (tc *TreeChopper) clearObstructions(ctx context.Context, step MineStep) {
+// clearObstructions removes the blocks standing between the bot and a log, and
+// reports whether it got through.
+//
+// The top is cleared on every log: leaves, moss and scaffolding on a trunk hide
+// the crack overlay, and the overlay is the entire visible point of a swing.
+//
+// The four sides are only touched when the log has no open face at all. That is
+// the case where the block in the way is not decoration but the difference
+// between a tree and a wall, and it is the case that used to have no handler
+// worth the name — the log was deferred, retried twice, and abandoned, leaving
+// a half-felled tree behind a block the player could see was in the way.
+func (tc *TreeChopper) clearObstructions(ctx context.Context, logPos protocol.BlockPos) bool {
+	bot := tc.rg.bot
+	mineWorld := botMineWorld{bot: bot, model: bot.GetLocalWorldModel()}
+
+	cleared := tc.breakObstruction(ctx, protocol.BlockPos{logPos.X(), logPos.Y() + 1, logPos.Z()})
+
+	// Re-checked each pass rather than once up front: removing one block can open
+	// a face, and opening one face is the whole job.
+	for _, face := range mineFaces {
+		if _, open := PlanMineStep(mineWorld, bot.GetCoords(), logPos); open {
+			break
+		}
+		if face.offset.Y() != 0 {
+			continue // the top is already handled, and the bottom is the floor
+		}
+		pos := protocol.BlockPos{
+			logPos.X() + face.offset.X(),
+			logPos.Y(),
+			logPos.Z() + face.offset.Z(),
+		}
+		cleared = tc.breakObstruction(ctx, pos) || cleared
+	}
+	return cleared
+}
+
+// breakObstruction removes a single non-log block at pos, if it is one the bot
+// is willing and able to remove. It reports whether anything was broken.
+func (tc *TreeChopper) breakObstruction(ctx context.Context, pos protocol.BlockPos) bool {
 	bot := tc.rg.bot
 	world := bot.GetLocalWorldModel()
 
-	checkPos := protocol.BlockPos{step.Position.X(), step.Position.Y() + 1, step.Position.Z()}
-	if !world.IsSolid(checkPos.X(), checkPos.Y(), checkPos.Z()) {
-		return
+	if !world.IsSolid(pos.X(), pos.Y(), pos.Z()) {
+		return false
 	}
-
-	name, ok := bot.GetBlockName(checkPos.X(), checkPos.Y(), checkPos.Z())
-	if ok && isLogBlockName(name) {
-		return
+	name, ok := bot.GetBlockName(pos.X(), pos.Y(), pos.Z())
+	if !ok || isLogBlockName(name) || immovableBlockName(name) {
+		return false
 	}
 
 	// Same sight-line discipline as the log itself: pick an exposed face the
 	// bot can see. If the obstruction is not visible from here, the tower will
 	// pass through it on the way up anyway — do not mine blind.
-	obstructionStep, visible := PlanMineStep(botMineWorld{bot: bot, model: world}, bot.GetCoords(), checkPos)
+	obstructionStep, visible := PlanMineStep(botMineWorld{bot: bot, model: world}, bot.GetCoords(), pos)
 	if !visible {
-		return
+		return false
 	}
 
 	_ = bot.UnequipItem()
@@ -400,13 +453,13 @@ func (tc *TreeChopper) clearObstructions(ctx context.Context, step MineStep) {
 
 	bot.LookAt(obstructionStep.Aim)
 	if !sleepContext(ctx, 50*time.Millisecond) {
-		return
+		return false
 	}
 
 	_ = bot.WritePacket(&packet.PlayerAction{
 		EntityRuntimeID: bot.GetEntityRuntimeID(),
 		ActionType:      protocol.PlayerActionStartBreak,
-		BlockPosition:   checkPos,
+		BlockPosition:   pos,
 		BlockFace:       obstructionStep.Face,
 	})
 
@@ -416,18 +469,36 @@ func (tc *TreeChopper) clearObstructions(ctx context.Context, step MineStep) {
 	// takes three seconds to fall.
 	//
 	// It gets its own chain rather than the trunk's: the obstruction is a
-	// different block with a different break time, and a log that was already
-	// mid-burst should not have its burst carried over onto it. What it must not
-	// do is re-wind-up in the middle of a trunk chop, so the chain is created
-	// here and discarded with the obstruction.
+	// different block with a different break time, and the trunk's rhythm should
+	// not be stretched to fit it. What it must not do is re-wind-up in the middle
+	// of a trunk chop, so the chain is created here and discarded with the
+	// obstruction.
 	obstruction := animation.NewChain(obstructionStep.Aim)
 	tc.swingUntilBreak(ctx, obstruction, sabdBreakDuration(serverAuthBreaking(bot), name, ""))
 	tc.finishBreakBlock(obstructionStep)
 
-	world.SetSolid(checkPos.X(), checkPos.Y(), checkPos.Z(), false)
+	world.SetSolid(pos.X(), pos.Y(), pos.Z(), false)
 	time.Sleep(100 * time.Millisecond)
 
 	tc.equipBestAxe()
+	return true
+}
+
+// immovableBlockName reports whether a block is one the bot must never break
+// while clearing a way, whatever happens to be in its hand.
+//
+// This is reached far more often than it used to be. Clearing a single block
+// above the log was rare and obvious; clearing whatever walls in a log is a
+// decision the bot now makes on its own, and a decision it makes on its own can
+// be pointed at something a player built.
+func immovableBlockName(name string) bool {
+	lower := strings.ToLower(name)
+	for _, kind := range []string{"bedrock", "barrier", "command_block", "structure_block", "jigsaw", "portal"} {
+		if strings.Contains(lower, kind) {
+			return true
+		}
+	}
+	return false
 }
 
 func (tc *TreeChopper) equipBestAxe() {

@@ -12,10 +12,11 @@
 package movement
 
 import (
-	"math"
 	"time"
 
 	"bedrock-ai/internal/bot"
+
+	"github.com/sandertv/gophertunnel/minecraft/protocol/packet"
 
 	"github.com/go-gl/mathgl/mgl32"
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
@@ -63,20 +64,17 @@ func RecordPlacedSupportForTest(b *bot.Bot, cell protocol.BlockPos) {
 }
 
 // IsGroundedInWorldModelForTest runs the same grounded test the physics phase
-// runs, so a test can ask the question the tick actually asks.
+// runs, so a test can ask the question the tick actually asks. It does not
+// reimplement the test: the probe runs through a throwaway TickContext so a
+// divergence between this and UpdateGroundedState is a compile error or an
+// obviously wrong answer, never a silent second definition of "grounded".
 func IsGroundedInWorldModelForTest(b *bot.Bot, feet mgl32.Vec3) bool {
 	if b == nil || b.WorldModel == nil {
 		return false
 	}
-	cy := int32(math.Floor(float64(feet.Y() - 0.01)))
-	for _, off := range []float32{-0.3, 0, 0.3} {
-		cx := int32(math.Floor(float64(feet.X() + off)))
-		cz := int32(math.Floor(float64(feet.Z() + off)))
-		if b.WorldModel.IsSolid(cx, cy, cz) {
-			return true
-		}
-	}
-	return false
+	tc := &TickContext{B: b, CurrPos: feet}
+	tc.UpdateGroundedState()
+	return tc.IsGrounded
 }
 
 // SetClock replaces the controller's time source. Production leaves it on
@@ -125,3 +123,85 @@ func (tc *TickContext) SteerForTest() {
 
 // DropsOverTest reports whether the tick refused its step to a cliff.
 func (tc *TickContext) DropsOverTest() bool { return tc.stopsAtLedge() }
+
+// ApplyVerticalVelocityForTest runs the real vertical integration, the one the
+// tick runs, and reports the predicted height afterwards.
+//
+// It exists because the ladder bug was not in the ladder maths. The maths was
+// right; the predicted height it was supposed to write back was never written,
+// and nothing outside this file could see that field. A test that asserts on
+// the ladder's own constants would have passed against the broken code.
+func (tc *TickContext) ApplyVerticalVelocityForTest() {
+	tc.ApplyVerticalVelocity()
+}
+
+// NextYForTest reports the height the tick will predict the body at.
+func (tc *TickContext) NextYForTest() float32 { return tc.NextY }
+
+// VelYForTest reports the vertical velocity the tick settled on.
+func (tc *TickContext) VelYForTest() float32 { return tc.VelY }
+
+// HandleEmoteLookAroundForTest runs the real look-around emote, which is where
+// an unsigned underflow hides: the sweep is built from Tick%50-25, and a
+// uint64 remainder below 25 wraps instead of going negative.
+func (tc *TickContext) HandleEmoteLookAroundForTest(isPathfinding bool) {
+	tc.handleEmoteLookAround(isPathfinding)
+}
+
+// BuildInputDataForTest runs the real flag assembly, which is the only place in
+// the package that produces the input flags a PlayerAuthInput carries. A gait
+// edge is not a behaviour a test can observe any other way: the level flags it
+// sits beside look identical with and without it, so the seam is the whole
+// point of the assertion.
+// SetSyncedGroundedForTest writes the grounded flag the jump-request path
+// reads. It is deliberately the bot's flag and not TickContext's: TickContext
+// is rebuilt every tick and its own grounded field is only filled in later, by
+// the physics phase, which is exactly why the request path reads this one.
+func (tc *TickContext) SetSyncedGroundedForTest(grounded bool) {
+	if tc.B == nil {
+		return
+	}
+	tc.B.Mu.Lock()
+	tc.B.IsGrounded = grounded
+	tc.B.Mu.Unlock()
+}
+
+// TakeRequestedJumpForTest runs the one and only place a latched jump request
+// can become a jump.
+// ResetEmoteJumpForTest clears the one-hop latch so a test can stage a fresh
+// emote window on a grounded body.
+func (tc *TickContext) ResetEmoteJumpForTest() {
+	if tc == nil || tc.B == nil {
+		return
+	}
+	tc.B.Mu.Lock()
+	tc.B.EmoteJumpSpent = false
+	tc.B.Mu.Unlock()
+}
+
+// EmoteJumpSpentForTest reports whether the current emote window already
+// bought its one physical hop.
+func (tc *TickContext) EmoteJumpSpentForTest() bool {
+	if tc == nil || tc.B == nil {
+		return false
+	}
+	tc.B.Mu.Lock()
+	defer tc.B.Mu.Unlock()
+	return tc.B.EmoteJumpSpent
+}
+
+func (tc *TickContext) TakeRequestedJumpForTest() {
+	tc.takeRequestedJump()
+}
+
+func (tc *TickContext) BuildInputDataForTest(emoteJump, emoteSneak bool) protocol.InputFlags {
+	return tc.buildInputData(emoteJump, emoteSneak)
+}
+
+// BuildPlayerAuthInputPacketForTest builds the real movement packet, which is
+// the only place a pitch becomes bytes on the wire. Clamping the gaze target is
+// not the same guarantee as clamping the packet, and only the packet is what a
+// server reads.
+func (tc *TickContext) BuildPlayerAuthInputPacketForTest() *packet.PlayerAuthInput {
+	return tc.BuildPlayerAuthInputPacket(protocol.NewInputFlags(packet.InputFlagCount), nil, nil, nil)
+}

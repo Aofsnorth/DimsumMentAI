@@ -285,38 +285,38 @@ func ApplySwimInputFlags(flags *protocol.InputFlags, intent SwimIntent, wasSwimm
 	}
 	switch {
 	case intent.InWater && !wasSwimming:
-		setSwimFlag(flags, packet.InputFlagStartSwimming)
+		setInputFlag(flags, packet.InputFlagStartSwimming)
 	case !intent.InWater && wasSwimming:
-		setSwimFlag(flags, packet.InputFlagStopSwimming)
+		setInputFlag(flags, packet.InputFlagStopSwimming)
 	}
 	if intent.Jump {
-		setSwimFlag(flags, packet.InputFlagJumping)
+		setInputFlag(flags, packet.InputFlagJumping)
 	}
 	if intent.Sneak {
-		setSwimFlag(flags, packet.InputFlagSneaking)
+		setInputFlag(flags, packet.InputFlagSneaking)
 	}
 	if intent.Sprint {
-		setSwimFlag(flags, packet.InputFlagSprinting)
+		setInputFlag(flags, packet.InputFlagSprinting)
 	}
 	if intent.Vertical > 0.1 {
-		setSwimFlag(flags, packet.InputFlagUp)
+		setInputFlag(flags, packet.InputFlagUp)
 	}
 	if intent.Vertical < -0.1 {
-		setSwimFlag(flags, packet.InputFlagDown)
+		setInputFlag(flags, packet.InputFlagDown)
 	}
 	if intent.Strafe > 0.1 {
-		setSwimFlag(flags, packet.InputFlagRight)
+		setInputFlag(flags, packet.InputFlagRight)
 	} else if intent.Strafe < -0.1 {
-		setSwimFlag(flags, packet.InputFlagLeft)
+		setInputFlag(flags, packet.InputFlagLeft)
 	}
 }
 
-// setSwimFlag guards the size check protocol.InputFlags.Set insists on. The zero
+// setInputFlag guards the size check protocol.InputFlags.Set insists on. The zero
 // InputFlags has no size and Set panics on an index past the end, so a helper
 // that called it blindly would take the bot down from inside the movement loop
 // on the first malformed caller. Production always sizes from
 // packet.InputFlagCount; this is what makes the helper safe everywhere else.
-func setSwimFlag(flags *protocol.InputFlags, id int) {
+func setInputFlag(flags *protocol.InputFlags, id int) {
 	if flags.Len() <= id {
 		return
 	}

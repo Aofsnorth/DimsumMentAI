@@ -13,50 +13,67 @@ import (
 // TestCadenceVariesLikeAHand covers the "natural" side of the rhythm: a fixed
 // tick between swings is the clearest tell of a bot, and because each swing is
 // also what makes a client emit its dig sound, an unvarying interval is heard
-// as a machine-gun rattle. The pause must vary, stay inside its bounds, and
-// stay longer between bursts than inside them.
+// as a machine-gun rattle. The pause must vary — but it must stay inside the
+// width of one swing animation, because mining is continuous work and a pause
+// wider than the animation parks the arm at rest in the middle of a break.
 func TestCadenceVariesLikeAHand(t *testing.T) {
 	t.Parallel()
 
 	seen := map[time.Duration]int{}
 	for swing := 0; swing < 24; swing++ {
-		wait := animation.Cadence(swing)
-		if wait < animation.SwingMin || wait > animation.RecoveryMax {
-			t.Fatalf("swing %d: cadence %v outside [%v, %v]", swing, wait, animation.SwingMin, animation.RecoveryMax)
+		wait := animation.Cadence()
+		if wait < animation.SwingMin || wait > animation.SwingMax {
+			t.Fatalf("swing %d: cadence %v outside [%v, %v]", swing, wait, animation.SwingMin, animation.SwingMax)
 		}
 		seen[wait]++
-
-		isRecoverySlot := swing%animation.BurstLength == animation.BurstLength-1
-		if isRecoverySlot && wait < animation.RecoveryMin {
-			t.Fatalf("swing %d: recovery slot cadence %v shorter than the recovery floor %v", swing, wait, animation.RecoveryMin)
-		}
-		if !isRecoverySlot && wait > animation.RecoveryMax {
-			t.Fatalf("swing %d: burst cadence %v longer than the burst ceiling", swing, wait)
-		}
 	}
 	if len(seen) < 4 {
 		t.Fatalf("cadence produced only %d distinct values over 24 swings, want a varied rhythm", len(seen))
 	}
 }
 
-// TestCadenceNeverOutrunsTheSwingAnimation is the pacing rule itself: a viewer
-// replays the whole ~300ms arm-swing cycle on every Animate packet, so a pause
-// under that restarts the cycle mid-flight and the arm vibrates instead of
-// swinging.
-func TestCadenceNeverOutrunsTheSwingAnimation(t *testing.T) {
+// TestCadenceStaysAboveAFloor pins the lower bound of the swing range.
+//
+// This used to assert the pause could not fall under the ~250ms arm-swing
+// animation, on the theory that a swing arriving mid-arc restarts it and the arm
+// vibrates instead of chopping. The theory was reasoned, not watched, and it did
+// not survive contact with a live host: swinging faster than the arc renders
+// smooth and simply reads as faster. What the floor is for now is narrower —
+// the viewer's client still needs the swings spaced far enough apart to be
+// distinct strikes rather than one continuous blur — so the test holds a modest
+// floor instead of the arc length.
+func TestCadenceStaysAboveAFloor(t *testing.T) {
 	t.Parallel()
 
-	if animation.SwingMin < 250*time.Millisecond {
-		t.Fatalf("swing floor %v is under the ~250ms animation cycle; viewers see a vibration, not a swing", animation.SwingMin)
+	if animation.SwingMin < 80*time.Millisecond {
+		t.Fatalf("swing floor %v is tight enough to read as a blur rather than distinct chops", animation.SwingMin)
 	}
 	if animation.SwingMax <= animation.SwingMin {
-		t.Fatalf("burst range [%v, %v] is empty", animation.SwingMin, animation.SwingMax)
+		t.Fatalf("swing range [%v, %v] is empty", animation.SwingMin, animation.SwingMax)
 	}
-	if animation.RecoveryMin <= animation.SwingMax {
-		t.Fatalf("recovery floor %v does not sit above the burst ceiling %v, so a burst is indistinguishable", animation.RecoveryMin, animation.SwingMax)
+	if animation.SwingMid < animation.SwingMin || animation.SwingMid > animation.SwingMax {
+		t.Fatalf("layout rate %v sits outside the swing range [%v, %v]", animation.SwingMid, animation.SwingMin, animation.SwingMax)
 	}
-	if animation.RecoveryMax <= animation.RecoveryMin {
-		t.Fatalf("recovery range [%v, %v] is empty", animation.RecoveryMin, animation.RecoveryMax)
+}
+
+// TestCadenceNeverParksTheArmMidBreak is the upper pacing rule.
+//
+// An item's swing animation is 0.3s by default (minecraft:swing_duration), and a
+// real server re-triggers it every 5 ticks while mining — Dragonfly's
+// ContinueBreaking does exactly that, with no pauses. A cadence at or above the
+// arc length does not read as a player pausing to think; it reads as a bot that
+// stopped mining while the block is still cracking.
+func TestCadenceNeverParksTheArmMidBreak(t *testing.T) {
+	t.Parallel()
+
+	const swingAnimation = 300 * time.Millisecond
+
+	if animation.SwingMax >= swingAnimation {
+		t.Fatalf("swing ceiling %v reaches the %v swing animation; the arm comes to rest "+
+			"in the middle of a break, which is the shipped bug", animation.SwingMax, swingAnimation)
+	}
+	if animation.WindUpMax >= animation.SwingMin {
+		t.Fatalf("wind-up ceiling %v reaches the swing floor %v; a break can start on a full pause", animation.WindUpMax, animation.SwingMin)
 	}
 }
 

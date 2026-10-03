@@ -9,40 +9,51 @@ import (
 
 // Swing rhythm for block breaking.
 //
-// Two separate tells made a breaking bot look automated, and both live here
-// because every break path in the bot needs them:
+// A break is not a series of chops with rests in between: a player holds the
+// mine button and the arm works the whole time the block is cracking. The Mojang
+// block-breaking design doc says so directly — `ClientInstance::tickDestroyBlock`
+// calls `continueDestroyBlock` every simulation tick while the input is held, and
+// it "continues even if the player is swinging at air after having broken a
+// block. It only stops if the input is raised". Mining has no rests in it.
 //
-//  1. Pace faster than the animation. Every Animate packet makes the viewer's
-//     client replay the full arm-swing cycle (~300ms). Swinging again every
-//     70-150ms restarts that cycle before it finishes, so the arm reads as a
-//     vibration instead of a swing — and because each swing is also what makes
-//     a client emit its dig sound, the same mistake is heard as a machine-gun
-//     rattle. A human lands a tool around 2.5-4 times a second: 260-400ms.
-//  2. A metronome. Even at the right speed, an unvarying interval is a bot. A
-//     hand works in short bursts with a longer recovery between them, and the
-//     aim drifts a little inside the block rather than welding to one pixel.
+// The swing rate is the visible half of that, and it is set by how the bot
+// looks on a live host rather than by theory about how the client renders an
+// arc. An item's swing animation is 0.3s by default
+// (minecraft:swing_duration), and re-sending Animate faster than that used to be
+// justified as restarting the arc mid-flight, which would read as a stutter
+// rather than a chop. It does not. Asked what the bot looked like swinging at
+// 230ms, the answer was that the movement is smooth and only too slow, and
+// 100ms was the number asked for. The arc-restart worry was reasoned from the
+// animation's length rather than watched, and observation outranks the argument.
 //
-// These are shared by the chopper, the miner, the scaffold and the obstacle
-// unstick, so a single policy governs every break the bot performs. The values
-// are the ones the chopper shipped with; the other paths were still on their
-// own fixed 300-400ms ticks.
+// The upper bound matters just as much, for the opposite reason: a pause wider
+// than the swing animation parks the arm at rest mid-break, and a viewer reads
+// that as a bot that stopped mining while the block is still cracking. That was
+// the shipped bug — a burst-and-recovery cadence whose recovery ran 460-760ms,
+// one and a half to two and a half times the swing it was spacing out.
+//
+// So the floor only has to stay clear of a stutter — a swing restarted before
+// the previous one finished reads as a vibration, and since each swing also
+// drives the dig sound, as a rattle.
+//
+// These values are shared by the chopper, the miner, the scaffold and the
+// obstacle unstick, so one policy governs every break the bot performs.
 const (
-	// WindUpMin/WindUpMax is the tool raise before the first swing. Starting
-	// instantly looks automated, but it must stay under the swing floor so it
-	// reads as a separate beat rather than a delay.
-	WindUpMin = 100 * time.Millisecond
-	WindUpMax = 220 * time.Millisecond
+	// WindUpMin/WindUpMax is the tool raise before the first swing. It is small
+	// because the swing it precedes is small: at a 100ms cadence a 90ms wind-up
+	// would be almost a whole beat of raised arm, which is the stall this rhythm
+	// exists to avoid.
+	WindUpMin = 30 * time.Millisecond
+	WindUpMax = 60 * time.Millisecond
 
-	// SwingMin/SwingMax is the pause between swings inside a burst.
-	SwingMin = 260 * time.Millisecond
-	SwingMax = 400 * time.Millisecond
-
-	// RecoveryMin/RecoveryMax is the longer pause between bursts.
-	RecoveryMin = 460 * time.Millisecond
-	RecoveryMax = 760 * time.Millisecond
-
-	// BurstLength is how many swings run before a recovery pause.
-	BurstLength = 3
+	// SwingMin/SwingMax is the pause between swings, centred on 100ms — about
+	// ten a second, which is how fast held-button mining is supposed to read.
+	// The band is narrow because the ceiling is a real constraint and the floor
+	// is chosen rather than derived; a fixed interval would be a metronome, so it
+	// jitters by a few milliseconds either side of the target.
+	SwingMin = 90 * time.Millisecond
+	SwingMax = 110 * time.Millisecond
+	SwingMid = 100 * time.Millisecond
 
 	// AimJitter is how far (in blocks) the aim may wander from the block
 	// centre. Enough to read as a hand, never enough to miss.
@@ -54,12 +65,10 @@ func WindUp() time.Duration {
 	return WindUpMin + time.Duration(rand.Int63n(int64(WindUpMax-WindUpMin)))
 }
 
-// Cadence returns the pause after the nth swing: quick inside a burst, a longer
-// recovery between them.
-func Cadence(swing int) time.Duration {
-	if swing%BurstLength == BurstLength-1 {
-		return RecoveryMin + time.Duration(rand.Int63n(int64(RecoveryMax-RecoveryMin)))
-	}
+// Cadence returns the pause after a swing. The interval is jittered so a long
+// break is not a metronome, but it stays inside one swing animation's width:
+// mining is continuous work, not a burst pattern.
+func Cadence() time.Duration {
 	return SwingMin + time.Duration(rand.Int63n(int64(SwingMax-SwingMin)))
 }
 
@@ -89,25 +98,25 @@ type Beat struct {
 // arranged so the total never overshoots the break, which is what an early
 // PredictDestroy on a server-auth host is silently rejected for.
 //
-// A swing is only emitted when there is room for a full pause after it. The
-// naive version trimmed the last beat to whatever time was left, which on a
-// 3-second break produced a final swing 86ms after the previous one: too fast
-// for the arm cycle, so the last thing a viewer sees is the exact vibration this
-// rhythm exists to prevent.
+// Swing count first, pause length second. How many swings fit is decided from the
+// break, and the break's leftover time is then shared evenly between them, so every
+// pause lands near the reference rate instead of the last one absorbing the slack.
 //
-// What is left over is handed to the last swing instead of being dropped.
-// Dropping it was worse than a runt swing: the shortfall is not a rounding error
-// but a whole unused pause, up to a full recovery. A 650ms break laid down 380ms
-// of swings and then stopped, so the last quarter of the break had a raised arm
-// and no strike — the block simply vanished between beats, and the swing read as
-// disconnected from the thing it was hitting. Stretching the last beat keeps
-// every pause at or above the swing floor, because it only ever adds time to one
-// that already cleared it.
+// Two bounds shape the count. The swing floor caps how many fit: N past
+// remaining/SwingMin means a pause under the floor, which restarts the viewer's arm
+// cycle mid-flight. The reference rate sets how many are wanted, so a two-second break
+// swings about nine times rather than four.
 //
-// The exception is a break too short to carry a swing at all, where the last beat
-// is still the wind-up. Stretching that would turn a tool raise into a stall, and
-// the time cannot be spent on anything: there is no swing that fits. An instant
-// block is better served by no swing than by a strained one.
+// Dividing with floor (not ceil) is what keeps both guarantees at once: swings <=
+// remaining/SwingMin makes floor(remaining/swings) >= SwingMin, and the leftover
+// swings*share <= remaining, so the correction below can only ever lengthen the last
+// pause. An earlier version rounded the share up and then subtracted the overshoot,
+// which is how the last swing came out at 190ms — under the floor — on a 450ms break.
+//
+// No jitter is invented here, and that is deliberate: whatever jitter a break
+// gets comes from the headroom the break time actually leaves above the swing
+// floor, so a break that barely fits swings stays clean rather than having noise
+// pushed through it.
 func Beats(breakTime time.Duration, aim mgl32.Vec3) []Beat {
 	beats := []Beat{{Wait: WindUp(), Aim: aim}}
 
@@ -122,18 +131,52 @@ func Beats(breakTime time.Duration, aim mgl32.Vec3) []Beat {
 	swingAim := JitteredAim(aim)
 
 	// Assume the wind-up took its floor: never overrun the break time.
-	elapsed := WindUpMin
-	for swing := 0; ; swing++ {
-		wait := Cadence(swing)
-		if elapsed+wait >= breakTime {
-			if remainder := breakTime - elapsed; remainder > 0 && len(beats) > 1 {
-				beats[len(beats)-1].Wait += remainder
+	remaining := breakTime - WindUpMin
+
+	// A break too short to carry a swing gets none. There is no honest way to
+	// spend the time — stretching the wind-up would turn a tool raise into a
+	// stall, and a strained swing is worse than an instant block simply breaking.
+	swings := (remaining + SwingMid/2) / SwingMid
+	if fits := remaining / SwingMin; swings > fits {
+		swings = fits
+	}
+	if swings < 1 {
+		return beats
+	}
+
+	// Split the break's time between the swings. Every pause clears the swing
+	// floor, the pauses vary so a long break is not a metronome, and they total
+	// the break exactly.
+	//
+	// The split is a random partition with a floor, not N identical slices plus
+	// noise: each swing draws from the slack left above the floor and divided by
+	// how many swings remain, so no single pause can be starved by the ones before
+	// it. Two earlier attempts failed this in opposite directions. Laying down
+	// fixed cadence steps and stretching the last one to absorb the remainder left
+	// the arm parked mid-break (438ms on a 1.4s log). Jittering every slice and
+	// correcting the total on the last swing drove that one pause to 163ms — under
+	// the floor, which is the vibration the floor exists to prevent.
+	for i := time.Duration(0); i < swings-1; i++ {
+		left := swings - i
+		slack := remaining - left*SwingMin
+		wait := SwingMin
+		if slack > 0 {
+			extra := slack / left
+			if extra > 0 {
+				// Take at least half the fair share, so the swings ahead cannot
+				// crowd the last one and leave it holding a pause long enough to
+				// read as a rest.
+				wait += extra/2 + time.Duration(rand.Int63n(int64(extra-extra/2)+1))
 			}
-			return beats
 		}
 		beats = append(beats, Beat{Wait: wait, Aim: swingAim})
-		elapsed += wait
+		remaining -= wait
 	}
+
+	// Whatever is left is the final swing, and it is at least SwingMin by
+	// construction: the draws above never took more than their even share.
+	beats = append(beats, Beat{Wait: remaining, Aim: swingAim})
+	return beats
 }
 
 // Chain is a break rhythm that keeps running across several blocks.
@@ -147,10 +190,8 @@ func Beats(breakTime time.Duration, aim mgl32.Vec3) []Beat {
 // client restarted the arm cycle before the previous one finished. On a six-log
 // trunk that happened five times, and it is what a stuttering arm looks like.
 //
-// Carrying the rhythm across the logs is the fix. The wind-up is owed once, the
-// swing counter keeps counting so the burst-and-recovery pattern spans the whole
-// tree rather than restarting inside every log, and the gap at a log boundary is
-// an ordinary cadence pause.
+// Carrying the rhythm across the logs is the fix: the wind-up is owed once, and
+// the gap at a log boundary is an ordinary cadence pause rather than a stall.
 //
 // The aim is re-rolled on Reaim rather than per beat, for the same reason Beats
 // uses one aim per break: the look ease cannot follow a target that changes every
@@ -177,9 +218,8 @@ func (c *Chain) Next() (wait time.Duration, swing bool) {
 		c.started = true
 		return WindUp(), false
 	}
-	wait = Cadence(c.swings)
 	c.swings++
-	return wait, true
+	return Cadence(), true
 }
 
 // Started reports whether the wind-up has already been served.
