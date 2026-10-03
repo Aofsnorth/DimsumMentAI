@@ -17,6 +17,7 @@ import (
 	"math"
 	"time"
 
+	"bedrock-ai/internal/blockcell"
 	"bedrock-ai/internal/bot"
 	"bedrock-ai/internal/bot/entity"
 
@@ -171,7 +172,7 @@ const ledgeNoteWindow = 10 * time.Second
 
 func (tc *TickContext) noteLedgeRefusal(ledge LedgeAhead) {
 	p := tc.CurrPos
-	cx, cy, cz := int32(p.X()), int32(p.Y()), int32(p.Z())
+	cx, cy, cz := blockcell.XYZ(p.X(), p.Y(), p.Z())
 
 	if cx == lastLedgeNote.x && cy == lastLedgeNote.y && cz == lastLedgeNote.z &&
 		time.Since(lastLedgeNote.at) < ledgeNoteWindow {

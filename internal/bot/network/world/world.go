@@ -6,6 +6,7 @@ import (
 	"math"
 	"sync/atomic"
 
+	"bedrock-ai/internal/blockcell"
 	"bedrock-ai/internal/bot"
 	"bedrock-ai/internal/bot/dimension"
 	"bedrock-ai/internal/debuglog"
@@ -173,7 +174,7 @@ func handleSubChunkRequestMode(b *bot.Bot, p *packet.LevelChunk) {
 	// requester in ChunkRequesterLoop covers the surrounding 5x5.
 	pos := b.GetCoords()
 	SendSubChunkRequest(b, p.Position.X(), p.Position.Z(),
-		SubChunkRow(int32(pos.Y())), p.Dimension, limit)
+		SubChunkRowOf(pos.Y()), p.Dimension, limit)
 }
 
 // maxSubChunkCount is the highest sub-chunk count a LevelChunk payload can
@@ -190,9 +191,24 @@ const (
 	fullColumnSubChunks = maxSubChunkY - minSubChunkY + 1
 )
 
-// SubChunkRow converts a world Y coordinate into its sub-chunk row index.
+// SubChunkRow converts a block Y coordinate into its sub-chunk row index.
 func SubChunkRow(y int32) int32 {
 	return y >> 4
+}
+
+// SubChunkRowOf converts a world Y coordinate into its sub-chunk row index.
+//
+// The float overload exists because every caller of SubChunkRow has an entity
+// position, not a block coordinate, and the conversion between them is the part
+// that is easy to get wrong. The obvious `SubChunkRow(int32(pos.Y()))` compiles,
+// passes, and is correct for every Y above the origin. Below it, int32(-0.5) is
+// 0 rather than -1, so the bot standing at the centre of the bottom row asks
+// the server for the row above itself and is handed terrain that is not under
+// its feet. The arithmetic shift inside SubChunkRow handles negatives correctly
+// on its own; it just never sees them, because the conversion in front of it
+// discards them first.
+func SubChunkRowOf(y float32) int32 {
+	return SubChunkRow(blockcell.Of(y))
 }
 
 // SubChunkOffsets builds the vertical window of sub-chunk offsets to request,

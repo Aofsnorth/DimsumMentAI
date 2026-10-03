@@ -61,12 +61,12 @@ func ChunkRequesterLoop(ctx context.Context, b *bot.Bot) {
 			b.Mu.Unlock()
 
 			targets := buildChunkTargets(b, pos, mState, tPlayer)
-			sent := sendSubChunkRequests(b, targets, requested, world.SubChunkRow(int32(pos.Y())), dimension, limit)
+			sent := sendSubChunkRequests(b, targets, requested, world.SubChunkRowOf(pos.Y()), dimension, limit)
 			if sent > 0 {
 				// #region agent log
 				debuglog.Log("A", "sender.go:ChunkRequesterLoop", "subchunk requests sent", map[string]any{
 					"chunks":        sent,
-					"offsetsPerReq": len(world.SubChunkOffsets(world.SubChunkRow(int32(pos.Y())), limit)),
+					"offsetsPerReq": len(world.SubChunkOffsets(world.SubChunkRowOf(pos.Y()), limit)),
 					"totalWrites":   sent,
 					"runId":         "post-fix",
 				})
