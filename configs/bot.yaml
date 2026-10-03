@@ -107,7 +107,7 @@ bot:
 #   - Butuh AI provider aktif. Tanpa itu planning mode diam-diam jadi default.
 #     Cek baris "AGI loop started" di log untuk mode yang benar-benar jalan.
 agi:
-  enabled: true
+  enabled: false
   # "default" | "planning" | "natural". Alias: plan, long_horizon, natural_mode,
   # episode, record. Typo jatuh ke "default".
   #

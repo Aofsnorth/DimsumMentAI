@@ -907,13 +907,16 @@ func (f *Farmer) breakBlock(pos protocol.BlockPos) {
 
 	tx := &packet.InventoryTransaction{
 		TransactionData: &protocol.UseItemTransactionData{
-			ActionType:      protocol.UseItemActionBreakBlock,
-			BlockPosition:   pos,
-			BlockFace:       topFace,
-			HotBarSlot:      safecast.To[int32](held),
-			HeldItem:        protocol.ItemInstance{Stack: inv[held]},
-			Position:        f.bot.GetCoords(),
-			ClickedPosition: mgl32.Vec3{0.5, 0.5, 0.5},
+			ActionType:    protocol.UseItemActionBreakBlock,
+			BlockPosition: pos,
+			BlockFace:     topFace,
+			HotBarSlot:    safecast.To[int32](held),
+			HeldItem:      protocol.ItemInstance{Stack: inv[held]},
+			Position:      f.bot.GetCoords(),
+			// On the top face, matching useItem a few lines above for the same
+			// face. The block centre is inside the block and on none of its
+			// faces.
+			ClickedPosition: mgl32.Vec3{0.5, 1.0, 0.5},
 		},
 	}
 	_ = f.bot.WritePacket(tx)

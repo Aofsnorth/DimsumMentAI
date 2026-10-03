@@ -87,9 +87,9 @@ func (b *Bot) BreakObstacleAt(pos protocol.BlockPos) {
 			breakTime = obstacleHardBreak
 		}
 		// The shared rhythm, for the same reason the chopper and the miner use
-		// it: a fixed 300 ms metronome restarts the viewer's arm-swing cycle
-		// before it finishes, so the arm reads as vibrating rather than
-		// swinging, and the dig sound it drives comes out as a rattle.
+		// it: the arm has to keep working for the whole break at the swing
+		// animation's own rate, or the block visibly cracks on a body that has
+		// stopped mining it. See animation/rhythm.go.
 		aim := ObstacleAim(pos)
 		for i, beat := range animation.Beats(breakTime, aim) {
 			time.Sleep(beat.Wait)

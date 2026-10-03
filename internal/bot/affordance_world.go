@@ -16,6 +16,7 @@ import (
 	"sort"
 	"strings"
 
+	"bedrock-ai/internal/blockcell"
 	"bedrock-ai/internal/bot/affordance"
 	"bedrock-ai/internal/bot/storage"
 
@@ -153,7 +154,7 @@ func (b *Bot) forEachBlockWithin(pos mgl32.Vec3, reach int32, visit func(name st
 	if b.WorldModel == nil {
 		return
 	}
-	x, y, z := int32(pos.X()), int32(pos.Y()), int32(pos.Z())
+	x, y, z := blockcell.XYZ(pos.X(), pos.Y(), pos.Z())
 	for dx := int32(-reach); dx <= reach; dx++ {
 		for dz := int32(-reach); dz <= reach; dz++ {
 			for dy := int32(-3); dy <= 2; dy++ {

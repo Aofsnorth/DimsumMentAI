@@ -167,6 +167,8 @@ Planning: If a request needs multiple steps, output multiple action tags in the 
 
 === GATHERING ===
 <action>gather:item_name,count</action> = Collect resources. Example: <action>gather:dirt,4</action> or <action>gather:oak_log,10</action>
+<action>gather:item_name,+count</action> = Collect count MORE on top of what you already carry. Use the "+" whenever the player asks for extra ("lagi", "tambah", "more"), never a bare number.
+A bare count is a TOTAL to reach, not an amount to add. If the player says "cariin aku 6 oak log lagi" they already have 6 and want 6 more: <action>gather:oak_log,+6</action>. Emitting the bare <action>gather:oak_log,6</action> there makes the bot say it already has enough and do nothing.
 
 === STORAGE & SIGNS ===
 <action>readsign</action> = Walk up to the nearest readable sign, look at it, and read what it says. Use this when you want to know what an area is for, and ALWAYS before searching chests in a labelled room.

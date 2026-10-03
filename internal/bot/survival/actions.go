@@ -77,13 +77,16 @@ func (m *Manager) SleepInBed(ctx context.Context) bool {
 	// Interact with bed (right-click to sleep)
 	tx := &packet.InventoryTransaction{
 		TransactionData: &protocol.UseItemTransactionData{
-			ActionType:      protocol.UseItemActionClickBlock,
-			BlockPosition:   bedPos,
-			BlockFace:       1,
-			HotBarSlot:      safecast.To[int32](m.bot.GetHeldItemSlot()),
-			HeldItem:        protocol.ItemInstance{},
-			Position:        m.bot.GetCoords(),
-			ClickedPosition: mgl32.Vec3{0.5, 0.5, 0.5},
+			ActionType:    protocol.UseItemActionClickBlock,
+			BlockPosition: bedPos,
+			BlockFace:     1,
+			HotBarSlot:    safecast.To[int32](m.bot.GetHeldItemSlot()),
+			HeldItem:      protocol.ItemInstance{},
+			Position:      m.bot.GetCoords(),
+			// On the top face, matching the two other interactions in this
+			// file. The block centre is inside the block and on none of its
+			// faces.
+			ClickedPosition: mgl32.Vec3{0.5, 1.0, 0.5},
 		},
 	}
 	if err := m.bot.WritePacket(tx); err != nil {
