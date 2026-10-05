@@ -77,6 +77,7 @@ type TickContext struct {
 	LastPredictedY      float32
 	IsParkourJump       bool
 	TargetTolerance     float32 // arrival tolerance for walk_to (copied from bot)
+	TeleportAck         bool    // true on tick acknowledging a server teleport
 
 	// Swim is the water controller for this tick, and SwimIntent is the plan it
 	// produced. Both are nil when no controller was installed or the world
@@ -143,6 +144,15 @@ func reportIfNotMoving(b *bot.Bot, tc *TickContext, lastAt *time.Time, lastPos *
 	consecutive := b.ConsecutiveStuckCount
 	b.Mu.Unlock()
 
+	footSolid := false
+	if b.WorldModel != nil {
+		footSolid = b.WorldModel.IsSolid(tc.FeetX, tc.FeetY-1, tc.FeetZ)
+	}
+	cacheSolid, cacheLoaded := false, false
+	if b.WorldCache != nil {
+		cacheSolid, cacheLoaded = b.WorldCache.IsBlockSolid(tc.FeetX, tc.FeetY-1, tc.FeetZ)
+	}
+
 	b.Logger.Warn("bot wants to move and is not",
 		"pos", tc.CurrPos,
 		"destination", destination,
@@ -153,6 +163,9 @@ func reportIfNotMoving(b *bot.Bot, tc *TickContext, lastAt *time.Time, lastPos *
 		"ticks_stuck", ticksStuck,
 		"consecutive_stuck", consecutive,
 		"grounded", tc.IsGrounded,
+		"foot_solid", footSolid,
+		"cache_solid", cacheSolid,
+		"cache_loaded", cacheLoaded,
 	)
 }
 
@@ -197,7 +210,15 @@ func SendInputLoop(ctx context.Context, b *bot.Bot, gd minecraft.GameData) {
 			b.Mu.Lock()
 			tick := b.ServerTick
 			b.ServerTick++
-			b.Mu.Unlock()
+
+			tPos, tAck := b.TakeTeleportAckLocked()
+			if tAck {
+				b.Pos = tPos
+				b.VelY = 0.0
+				b.ServerGroundY = tPos.Y()
+				b.ServerGroundAt = time.Now()
+				b.LastServerPosAt = b.ServerGroundAt
+			}
 
 			tc := &TickContext{
 				B:              b,
@@ -208,8 +229,6 @@ func SendInputLoop(ctx context.Context, b *bot.Bot, gd minecraft.GameData) {
 				Gait:           gait,
 				Stride:         stride,
 			}
-
-			b.Mu.Lock()
 			tc.CurrPos = b.Pos
 			// Seeded here rather than left at the zero value. ApplyVerticalVelocity
 			// derives the predicted height from it on every branch, and the struct
@@ -229,6 +248,25 @@ func SendInputLoop(ctx context.Context, b *bot.Bot, gd minecraft.GameData) {
 			tc.SmoothedLookYaw = smoothLookYaw
 			tc.SmoothedLookPitch = smoothLookPitch
 			b.Mu.Unlock()
+
+			if tAck {
+				tc.TeleportAck = true
+				tc.PrevPos = tPos
+				prevPos = tPos
+				lastPredictedY = tPos.Y()
+				smoothLookYaw = tc.Yaw
+				smoothLookPitch = tc.Pitch
+				if tc.MState == "walk_to" || tc.MState == "follow" {
+					dx := tc.CurrPos.X() - lastProgressPos.X()
+					dz := tc.CurrPos.Z() - lastProgressPos.Z()
+					if dx*dx+dz*dz > 0.25 {
+						b.Mu.Lock()
+						b.CurrentPath = nil
+						b.PathIndex = 0
+						b.Mu.Unlock()
+					}
+				}
+			}
 
 			tc.FeetX = int32(math.Floor(float64(tc.CurrPos.X())))
 			tc.FeetY = int32(math.Floor(float64(tc.CurrPos.Y())))
@@ -267,7 +305,11 @@ func SendInputLoop(ctx context.Context, b *bot.Bot, gd minecraft.GameData) {
 			tc.EnsureWalkToHasPath()
 			reportIfNotMoving(b, tc, &lastProgressAt, &lastProgressPos)
 			venityIdle := tc.B.VenityCompat && tc.MState == "idle"
-			if !venityIdle {
+			if tc.TeleportAck {
+				tc.HasHorizontalMove = false
+				tc.MoveVec = mgl32.Vec2{}
+				tc.MoveDelta = mgl32.Vec3{0, -0.0784, 0}
+			} else if !venityIdle {
 				tc.performActiveSteering()
 				tc.runPhysicsAndCollisions()
 			}

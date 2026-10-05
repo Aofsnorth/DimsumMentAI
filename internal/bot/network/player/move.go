@@ -56,6 +56,8 @@ func handleMovePlayer(b *bot.Bot, p *packet.MovePlayer) {
 			b.ServerGroundY = newPos.Y()
 			b.ServerGroundAt = time.Now()
 			b.LastServerPosAt = b.ServerGroundAt
+			b.TeleportAckPending = true
+			b.TeleportAckPos = newPos
 		}
 	} else {
 		b.PlayerPositions[p.EntityRuntimeID] = trackedPlayerFeetPosition(p.Position)

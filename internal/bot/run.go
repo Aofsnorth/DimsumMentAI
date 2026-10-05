@@ -314,6 +314,7 @@ func (b *Bot) connect(ctx context.Context) (*minecraft.Conn, minecraft.GameData,
 		slog.String("server_host", b.ServerHost),
 		slog.Bool("venity_compat", b.VenityCompat),
 		slog.Bool("nether_games_compat", b.NetherGamesCompat),
+		slog.Bool("geyser_compat", b.GeyserCompat),
 		slog.Bool("UseBlockNetworkIDHashes", conn.GameData().UseBlockNetworkIDHashes),
 	)
 
@@ -341,6 +342,8 @@ func (b *Bot) initSpawn(gd minecraft.GameData) {
 	b.Mu.Lock()
 	actualPos := b.Pos
 	b.IsGrounded = true
+	b.TeleportAckPending = true
+	b.TeleportAckPos = actualPos
 	b.RewindMovement = gd.PlayerMovementSettings.RewindHistorySize > 0
 	b.serverAuthBlockBreaking = gd.PlayerMovementSettings.ServerAuthoritativeBlockBreaking
 	b.ServerTick = 0

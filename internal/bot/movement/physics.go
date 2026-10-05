@@ -469,6 +469,6 @@ func (tc *TickContext) applyStepDownAssist(feetY int32) {
 		}
 		tc.NextY = nextY
 		tc.VelY = tc.NextY - tc.CurrPos.Y()
-		tc.IsGrounded = true
+		tc.IsGrounded = (tc.NextY <= targetY)
 	}
 }

@@ -102,7 +102,7 @@ func (tc *TickContext) computeBaseSpeed() (float32, bool, bool) {
 					speed = 0.18
 				}
 			}
-			if nextNode.Y < baseY {
+			if nextNode.Y < baseY || (tc.CurrPos.Y() > float32(nextNode.Y)+0.05 && tc.IsDescending) {
 				speed = 0.13
 			}
 		}
@@ -125,7 +125,7 @@ func (tc *TickContext) computeTargetPosition(speed float32, needsStepUp, isMidJu
 	descentTargetY, descentDrop, plannedDescent := tc.plannedDescent(baseY)
 	hasSameLevelSupport := tc.hasGroundSupportAt(targetX, targetZ, baseY)
 	pathAllowsGap := tc.pathAllowsForwardWithoutGround(baseY)
-	groundUnknown := tc.B.VenityCompat && !hasSameLevelSupport && tc.groundSupportUnknownAt(targetX, targetZ, baseY)
+	groundUnknown := (tc.B.VenityCompat || tc.B.GeyserCompat) && !hasSameLevelSupport && tc.groundSupportUnknownAt(targetX, targetZ, baseY)
 	trustPath := groundUnknown && tc.HasPath
 
 	if tc.isMoveBlocked(needsStepUp, isMidJump, plannedDescent, hasSameLevelSupport, pathAllowsGap, trustPath) {
@@ -135,7 +135,8 @@ func (tc *TickContext) computeTargetPosition(speed float32, needsStepUp, isMidJu
 		tc.logVenityWalkBlocked(baseY, hasSameLevelSupport, pathAllowsGap, plannedDescent, needsStepUp, groundUnknown)
 	} else if tc.shouldDescent(plannedDescent, hasSameLevelSupport) {
 		tc.NextY, tc.VelY = controlledDescentY(tc.CurrPos.Y(), tc.NextY, float32(descentTargetY), descentDrop)
-		tc.IsGrounded = true
+		tc.IsGrounded = (tc.NextY <= float32(descentTargetY))
+		tc.syncGrounded()
 	}
 
 	return
@@ -220,15 +221,20 @@ func (tc *TickContext) descentLinkFromY() (int32, bool) {
 	}
 	tc.B.Mu.Lock()
 	defer tc.B.Mu.Unlock()
-	if tc.B.PathIndex == 0 || tc.B.PathIndex >= len(tc.B.CurrentPath) {
+	if len(tc.B.CurrentPath) == 0 || tc.B.PathIndex >= len(tc.B.CurrentPath) {
 		return 0, false
 	}
-	prev := tc.B.CurrentPath[tc.B.PathIndex-1]
+	var prevY int32
+	if tc.B.PathIndex == 0 {
+		prevY = int32(math.Floor(float64(tc.B.Pos.Y() + 0.1)))
+	} else {
+		prevY = tc.B.CurrentPath[tc.B.PathIndex-1].Y
+	}
 	next := tc.B.CurrentPath[tc.B.PathIndex]
-	if next.Y >= prev.Y {
+	if next.Y >= prevY {
 		return 0, false
 	}
-	return prev.Y, true
+	return prevY, true
 }
 
 func (tc *TickContext) plannedDescent(baseY int32) (int32, int32, bool) {
@@ -241,8 +247,18 @@ func (tc *TickContext) plannedDescent(baseY int32) (int32, int32, bool) {
 		return 0, 0, false
 	}
 	nextNode := tc.B.CurrentPath[tc.B.PathIndex]
-	drop := baseY - nextNode.Y
-	return nextNode.Y, drop, drop > 0 && drop <= 3
+	var fromY int32
+	if tc.B.PathIndex == 0 {
+		fromY = int32(math.Floor(float64(tc.B.Pos.Y() + 0.1)))
+	} else {
+		fromY = tc.B.CurrentPath[tc.B.PathIndex-1].Y
+		if baseY > fromY {
+			fromY = baseY
+		}
+	}
+	drop := fromY - nextNode.Y
+	isDescending := drop > 0 && drop <= 3 && tc.CurrPos.Y() > float32(nextNode.Y)+0.02
+	return nextNode.Y, drop, isDescending
 }
 
 func controlledDescentY(currentY, physicsNextY, targetY float32, drop int32) (float32, float32) {
@@ -336,8 +352,11 @@ func (tc *TickContext) groundSupportUnknownAt(x, z float32, feetY int32) bool {
 // logVenityWalkBlocked records why a forward step was canceled. This is the
 // primary signal for disambiguating the "bot can't walk on Venity" hypotheses:
 // H1 (ground unknown / unloaded), H2 (server pins position), H3 (input rejected).
-// Gated on debug logging (log_level: debug) and Venity only.
+// Gated on debug logging
 func (tc *TickContext) logVenityWalkBlocked(baseY int32, hasSupport, pathGap, descent, stepUp, groundUnknown bool) {
+	if (!tc.B.VenityCompat && !tc.B.GeyserCompat) || !debuglog.Enabled() {
+		return
+	}
 	if !tc.B.VenityCompat || !debuglog.Enabled() {
 		return
 	}

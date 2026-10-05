@@ -74,7 +74,7 @@ func detectGeyser(host string) bool {
 	if force := envList("GEYSER_SERVERS"); force != "" && containsToken(force, host) {
 		return true
 	}
-	for _, marker := range []string{"geyser", "floodgate", "netherite"} {
+	for _, marker := range []string{"geyser", "floodgate", "netherite", "hansprojects"} {
 		if strings.Contains(host, marker) {
 			return true
 		}

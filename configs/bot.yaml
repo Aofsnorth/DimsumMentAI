@@ -4,10 +4,10 @@
 
 # --- Server Settings ---
 server:
-  host: "192.168.1.125"
-  port: 7551
-  offline: true # true = no Xbox Live auth (local server)
-  lan_discovery: true # auto-discover the single-player world opened to LAN (direct RakNet to a client-hosted world is rejected with invalidSkin — the host requires the Nonce from its advertisement)
+  host: "hansprojects.my.id"
+  port: 25621
+  offline: false # true = no Xbox Live auth (local server)
+  lan_discovery: false # auto-discover the single-player world opened to LAN (direct RakNet to a client-hosted world is rejected with invalidSkin — the host requires the Nonce from its advertisement)
   lan_world: "A" # optional: only join a world with this exact name
   # How a server command is written on the wire. The protocol does not settle
   # this and server software disagrees: Geyser strips a leading "/" (so "/register"
@@ -19,7 +19,7 @@ server:
   # Pin it to slash/none once you know your server, to avoid a doubled command
   # on a server that executes silently without replying.
   command_prefix: "auto"
-  is_geyser_server: false
+  is_geyser_server: true
   # How texture packs are handled.
   #
   # "skip" (default) refuses them. The bot is headless and never draws, so a
@@ -64,7 +64,7 @@ bot:
   # join needs — including automatic reconnects, which is why it belongs here
   # rather than being typed once by hand.
   join_messages:
-    - ""
+    - "/login Akukuat123 Akukuat123"
   join_message_delay_sec: 5 # wait after spawning before the first line (server may still be finishing the world transfer)
   join_message_gap_sec: 1 # pause between lines, so a burst is not sent as one flood
 
@@ -293,7 +293,7 @@ ai:
   base_url: "http://localhost:20128/v1" # leave empty to use provider default (nvidia). Required for openai_compatible/anthropic_compatible/google_compatible.
   main_player: "Arthenyxx"
   respond_only_to_linked_player: false
-  respond_only_when_tagged: false # true = only respond when tagged/named in chat (e.g. Luna or @Luna)
+  respond_only_when_tagged: true # true = only respond when tagged/named in chat (e.g. Luna or @Luna)
   custom_personality: "" # Custom LLM personality prompt override (leave empty to use default)
   context_window: 1000000 # Model context window in tokens; 0 = auto-detect. Bot uses 25% of this as its per-request budget and auto-compacts history beyond it.
 

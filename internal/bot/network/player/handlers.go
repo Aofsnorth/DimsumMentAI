@@ -57,6 +57,8 @@ func handleRespawn(b *bot.Bot, pk packet.Packet) bool {
 	p := pk.(*packet.Respawn)
 	b.Mu.Lock()
 	b.Pos = p.Position.Sub(mgl32.Vec3{0, 1.62, 0})
+	b.TeleportAckPending = true
+	b.TeleportAckPos = b.Pos
 	b.Logger.Debug("bot respawned/teleported by server",
 		slog.Float64("x", float64(b.Pos.X())),
 		slog.Float64("y", float64(b.Pos.Y())),

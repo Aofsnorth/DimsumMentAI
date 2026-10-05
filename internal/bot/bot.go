@@ -146,6 +146,7 @@ type Bot struct {
 	ServerHost        string
 	VenityCompat      bool // play.venity.net hub: aggressive chunk flood + ~30s session checks
 	NetherGamesCompat bool // play.nethergames.org/net: stricter login compatibility
+	GeyserCompat      bool // fronted by Geyser bridge (Bedrock <-> Java)
 	RewindMovement    bool // server uses RewindHistorySize / CorrectPlayerMovePrediction
 
 	// join holds the pending server-switch request and the cancel func of the
@@ -358,6 +359,12 @@ type Bot struct {
 	ServerGroundY   float32
 	ServerGroundAt  time.Time
 	LastServerPosAt time.Time
+
+	// TeleportAckPending is true when the server teleported the bot (via MovePlayer
+	// or Respawn) and the next PlayerAuthInput packet must acknowledge it at the
+	// exact teleported position with InputFlagHandledTeleport set.
+	TeleportAckPending bool
+	TeleportAckPos     mgl32.Vec3
 
 	// Look angles
 	Yaw                 float32
@@ -656,6 +663,32 @@ func (b *Bot) TakeItemInteractionData() (protocol.UseItemTransactionData, bool) 
 	data := *b.pendingItemInteractionData
 	b.pendingItemInteractionData = nil
 	return data, true
+}
+
+// SetTeleportAck records a server-directed teleport/spawn position to acknowledge
+// on the next PlayerAuthInput tick.
+func (b *Bot) SetTeleportAck(pos mgl32.Vec3) {
+	b.Mu.Lock()
+	b.TeleportAckPending = true
+	b.TeleportAckPos = pos
+	b.Mu.Unlock()
+}
+
+// TakeTeleportAckLocked returns and clears the pending teleport acknowledgement position.
+// Caller MUST hold b.Mu.
+func (b *Bot) TakeTeleportAckLocked() (mgl32.Vec3, bool) {
+	if !b.TeleportAckPending {
+		return mgl32.Vec3{}, false
+	}
+	b.TeleportAckPending = false
+	return b.TeleportAckPos, true
+}
+
+// TakeTeleportAck returns and clears the pending teleport acknowledgement position.
+func (b *Bot) TakeTeleportAck() (mgl32.Vec3, bool) {
+	b.Mu.Lock()
+	defer b.Mu.Unlock()
+	return b.TakeTeleportAckLocked()
 }
 
 // PendingCraftLookup returns the channel and output NetworkID for a pending

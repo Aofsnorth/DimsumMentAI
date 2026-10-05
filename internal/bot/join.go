@@ -171,6 +171,7 @@ func (b *Bot) noteServer(address string) {
 		profile.SlashCommandFirst = *b.GeyserOverride
 	}
 	b.Mu.Lock()
+	b.GeyserCompat = profile.Geyser
 	b.VenityCompat = profile.Venity
 	b.NetherGamesCompat = profile.NetherGames
 	b.IdleNudge = profile.IdleNudge

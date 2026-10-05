@@ -92,6 +92,18 @@ func (tc *TickContext) prepareMoveVector() {
 			tc.MoveVec = mgl32.Vec2{0, -1.0}
 		}
 	}
+
+	// In vanilla Minecraft Bedrock, gravity applies every tick. When standing or
+	// walking on the ground, the client's downward impulse against the floor gives
+	// Delta.Y a negative value (~ -0.0784). Geyser calculates player ground status as:
+	//   isOnGround = VERTICAL_COLLISION && lastTickEndVelocity.getY() < 0
+	// Without a negative Delta.Y, Geyser evaluates isOnGround=false and forwards
+	// onGround=false to Java, triggering server-side anticheat rubberband / desync.
+	if groundedForPacket(tc) && !tc.ShouldJump && tc.VelY <= 0 {
+		if tc.MoveDelta.Y() >= 0 {
+			tc.MoveDelta = mgl32.Vec3{tc.MoveDelta.X(), -0.0784, tc.MoveDelta.Z()}
+		}
+	}
 }
 
 func (tc *TickContext) venityLookOnly() bool {
@@ -223,6 +235,9 @@ func (tc *TickContext) buildInputData(emoteJump, emoteSneak bool) protocol.Input
 	// If you ever need the declaration, gate it behind config keyed to a server
 	// you have actually verified accepts it. Do not re-add it as "obviously
 	// right", because it is not.
+	if tc.TeleportAck {
+		inputData.Set(packet.InputFlagHandledTeleport)
+	}
 	if groundedForPacket(tc) {
 		// VerticalCollision = standing on the floor; correct every grounded tick.
 		inputData.Set(packet.InputFlagVerticalCollision)
@@ -238,11 +253,13 @@ func (tc *TickContext) buildInputData(emoteJump, emoteSneak bool) protocol.Input
 	// flag can never hold the input key down and stack predictions on the sky.
 	if tc.ShouldJump || physicalJumpForThisTick(tc, emoteJump) {
 		inputData.Set(packet.InputFlagJumping)
+		inputData.Set(packet.InputFlagJumpDown)
 	}
 	if tc.shouldSetSneak(emoteSneak) {
 		inputData.Set(packet.InputFlagSneaking)
+		inputData.Set(packet.InputFlagSneakDown)
 	}
-	tc.applyMovementInputFlags(inputData)
+	tc.applyMovementInputFlags(&inputData)
 	tc.applySwimInputFlags(&inputData)
 	tc.applySprintFlag(&inputData)
 	// Last, and deliberately after every writer: the edges are derived from the
@@ -262,13 +279,17 @@ func (tc *TickContext) applySprintFlag(inputData *protocol.InputFlags) {
 	if tc.IsOnLadder || tc.MoveVec.Y() <= 0.5 {
 		return
 	}
-	if sprint, _, latched := tc.B.SprintHint(); latched {
-		if sprint {
-			inputData.Set(packet.InputFlagSprinting)
+	if tc.B != nil {
+		if sprint, _, latched := tc.B.SprintHint(); latched {
+			if sprint {
+				inputData.Set(packet.InputFlagSprinting)
+				inputData.Set(packet.InputFlagSprintDown)
+			}
+			return
 		}
-		return
 	}
 	inputData.Set(packet.InputFlagSprinting)
+	inputData.Set(packet.InputFlagSprintDown)
 }
 
 // applySprintHop turns a latched sprint-jump into this tick's jump, alongside
@@ -428,16 +449,31 @@ func (tc *TickContext) shouldSetSneak(emoteSneak bool) bool {
 	return tc.VelY <= 0.0 && !tc.ActivelyClimbing || tc.VelY < 0
 }
 
-func (tc *TickContext) applyMovementInputFlags(inputData protocol.InputFlags) {
-	if tc.MoveVec.Y() > 0.1 {
-		inputData.Set(packet.InputFlagUp)
-	} else if tc.MoveVec.Y() < -0.1 {
-		inputData.Set(packet.InputFlagDown)
+func (tc *TickContext) applyMovementInputFlags(inputData *protocol.InputFlags) {
+	up := tc.MoveVec.Y() > 0.1
+	down := tc.MoveVec.Y() < -0.1
+	left := tc.MoveVec.X() < -0.1
+	right := tc.MoveVec.X() > 0.1
+
+	if up && left {
+		setInputFlag(inputData, packet.InputFlagUpLeft)
+	} else if up && right {
+		setInputFlag(inputData, packet.InputFlagUpRight)
+	} else if down && left {
+		setInputFlag(inputData, packet.InputFlagDownLeft)
+	} else if down && right {
+		setInputFlag(inputData, packet.InputFlagDownRight)
 	}
-	if tc.MoveVec.X() > 0.1 {
-		inputData.Set(packet.InputFlagRight)
-	} else if tc.MoveVec.X() < -0.1 {
-		inputData.Set(packet.InputFlagLeft)
+
+	if up {
+		setInputFlag(inputData, packet.InputFlagUp)
+	} else if down {
+		setInputFlag(inputData, packet.InputFlagDown)
+	}
+	if left {
+		setInputFlag(inputData, packet.InputFlagLeft)
+	} else if right {
+		setInputFlag(inputData, packet.InputFlagRight)
 	}
 }
 

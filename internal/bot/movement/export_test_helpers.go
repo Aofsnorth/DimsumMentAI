@@ -205,3 +205,13 @@ func (tc *TickContext) BuildInputDataForTest(emoteJump, emoteSneak bool) protoco
 func (tc *TickContext) BuildPlayerAuthInputPacketForTest() *packet.PlayerAuthInput {
 	return tc.BuildPlayerAuthInputPacket(protocol.NewInputFlags(packet.InputFlagCount), nil, nil, nil)
 }
+
+// PrepareMoveVectorForTest runs prepareMoveVector so tests can inspect MoveDelta and MoveVec.
+func (tc *TickContext) PrepareMoveVectorForTest() {
+	tc.prepareMoveVector()
+}
+
+// DescentLinkFromYForTest exposes descentLinkFromY for testing.
+func (tc *TickContext) DescentLinkFromYForTest() (int32, bool) {
+	return tc.descentLinkFromY()
+}

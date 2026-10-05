@@ -82,6 +82,16 @@ func (g *GaitState) ApplyGaitEdges(inputData *protocol.InputFlags) {
 	sneaking := inputData.Load(packet.InputFlagSneaking)
 	jumping := inputData.Load(packet.InputFlagJumping)
 
+	if sprinting {
+		setInputFlag(inputData, packet.InputFlagSprintDown)
+	}
+	if sneaking {
+		setInputFlag(inputData, packet.InputFlagSneakDown)
+	}
+	if jumping {
+		setInputFlag(inputData, packet.InputFlagJumpDown)
+	}
+
 	switch {
 	case sprinting && !g.sprinting:
 		setInputFlag(inputData, packet.InputFlagStartSprinting)

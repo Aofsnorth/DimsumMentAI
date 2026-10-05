@@ -64,7 +64,9 @@ func WithServerHost(host string, explicitGeyser *bool) Option {
 			profile.IdleNudge = *explicitGeyser
 			profile.NoSubChunks = *explicitGeyser
 			profile.NoHeldItemEcho = *explicitGeyser
+			profile.SlashCommandFirst = *explicitGeyser
 		}
+		b.GeyserCompat = profile.Geyser
 		b.VenityCompat = profile.Venity
 		b.NetherGamesCompat = profile.NetherGames
 		// Derived from the profile, not from config directly: this is a fix
