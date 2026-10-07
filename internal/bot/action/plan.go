@@ -119,7 +119,7 @@ func ExecuteAndWaitWithTimeout(b *bot.Bot, label, param, user string, timeout ti
 func waitForActionSettled(b *bot.Bot, label string) {
 	switch label {
 	case "come", "goto":
-		waitForMovementIdle(b, 35*time.Second)
+		waitForMovementIdle(b, 65*time.Second)
 	case "gather", "mine", "automine", "loot", "clear", "scan":
 		waitForGatheringIdle(b, 90*time.Second)
 	case "craft":

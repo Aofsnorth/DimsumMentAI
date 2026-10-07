@@ -12,7 +12,6 @@ import (
 	"bedrock-ai/internal/bot"
 	"bedrock-ai/internal/bot/pathfinder"
 
-	"github.com/df-mc/dragonfly/server/world/chunk"
 	"github.com/go-gl/mathgl/mgl32"
 )
 
@@ -62,6 +61,26 @@ func terrainReady(b *bot.Bot, start pathfinder.Node) bool {
 	return b.WorldCache.ChunkCount() >= minChunksForPathfinding
 }
 
+// canUseScaffolding reports whether the bot should attempt to place or break
+// blocks in the world to reach a destination. On multiplayer / Geyser servers,
+// spawn areas are world-guarded and placing/breaking blocks fails repeatedly,
+// causing navigation freezes.
+func canUseScaffolding(b *bot.Bot) bool {
+	if b == nil || b.WorldModel == nil {
+		return false
+	}
+	if b.GeyserCompat || b.VenityCompat || b.NetherGamesCompat {
+		return false
+	}
+	b.Mu.Lock()
+	serverHost := b.ServerHost
+	b.Mu.Unlock()
+	if serverHost != "" && serverHost != "127.0.0.1" && serverHost != "localhost" {
+		return false
+	}
+	return true
+}
+
 // RecalculatePath computes the shortest path to targetPos using A* search.
 // A* runs without holding b.Mu so SendInputLoop is not blocked for the whole search.
 func RecalculatePath(b *bot.Bot) {
@@ -109,8 +128,17 @@ func RecalculatePath(b *bot.Bot) {
 	// burns its full budget finding nothing. Waiting a few hundred milliseconds
 	// for chunks to arrive is cheaper than a 30000-iteration dead end.
 	if !terrainReady(b, start) {
+		// ChunkCount is only meaningful with a cache to ask. terrainReady returns
+		// true when there is none (the model-backed path is all the bot will ever
+		// have), so reaching this branch implies a cache — but the log line read it
+		// unconditionally, and a bot built without one panicked here instead of
+		// logging.
+		chunks := 0
+		if b.WorldCache != nil {
+			chunks = b.WorldCache.ChunkCount()
+		}
 		b.Logger.Debug("A* skipped: terrain not loaded yet",
-			"chunks", b.WorldCache.ChunkCount(),
+			"chunks", chunks,
 			"need", minChunksForPathfinding,
 		)
 		return
@@ -148,12 +176,12 @@ func RecalculatePath(b *bot.Bot) {
 	targetHeadRID, _ := b.WorldCache.GetBlockRID(target.X, target.Y+1, target.Z)
 	targetFloorRID, _ := b.WorldCache.GetBlockRID(target.X, target.Y-1, target.Z)
 
-	startBlockLeg, _, _ := chunk.RuntimeIDToState(startRID)
-	startBlockHead, _, _ := chunk.RuntimeIDToState(startHeadRID)
-	startBlockFloor, _, _ := chunk.RuntimeIDToState(startFloorRID)
-	targetBlockLeg, _, _ := chunk.RuntimeIDToState(targetRID)
-	targetBlockHead, _, _ := chunk.RuntimeIDToState(targetHeadRID)
-	targetBlockFloor, _, _ := chunk.RuntimeIDToState(targetFloorRID)
+	startBlockLeg, _ := b.WorldCache.BlockName(startRID)
+	startBlockHead, _ := b.WorldCache.BlockName(startHeadRID)
+	startBlockFloor, _ := b.WorldCache.BlockName(startFloorRID)
+	targetBlockLeg, _ := b.WorldCache.BlockName(targetRID)
+	targetBlockHead, _ := b.WorldCache.BlockName(targetHeadRID)
+	targetBlockFloor, _ := b.WorldCache.BlockName(targetFloorRID)
 
 	b.Logger.Debug("A* Path Nodes block debug",
 		"start_leg", fmt.Sprintf("%s (rid=%d, solid=%t)", startBlockLeg, startRID, b.WorldCache.IsRIDSolid(startRID)),
@@ -166,7 +194,7 @@ func RecalculatePath(b *bot.Bot) {
 
 	// Pass 1: Normal pathfinding without fallback
 	path := pathfinder.FindPath(start, target, b.WorldModel, false)
-	if len(path) == 0 {
+	if len(path) == 0 && canUseScaffolding(b) {
 		// Pass 2: Retry with scaffolding and mining allowed, without fallback
 		b.WorldModel.AllowScaffold = true
 		b.Logger.Info("Normal pathfinding failed, retrying with scaffolding and mining allowed...")
@@ -175,7 +203,7 @@ func RecalculatePath(b *bot.Bot) {
 	}
 	partial := false
 	if len(path) == 0 {
-		// Pass 3: If both failed, retry with fallback enabled so the bot gets as close as possible.
+		// Pass 3: If normal pathfinding failed, retry with fallback enabled so the bot gets as close as possible.
 		//
 		// This is a walk to the NEAREST point A* could reach, not a route to the
 		// destination, and it used to be published in exactly the same way as a
@@ -184,6 +212,14 @@ func RecalculatePath(b *bot.Bot) {
 		// walked ten blocks to somewhere five blocks short of a tree it could not
 		// reach, which is indistinguishable from a bot that has frozen.
 		b.Logger.Info("Pathfinding with scaffolding failed, retrying with fallback enabled...")
+		path = pathfinder.FindPath(start, target, b.WorldModel, true)
+		partial = len(path) > 0
+	}
+	if len(path) == 0 && b.WorldModel != nil && b.WorldModel.HasTempSolidMarkers() {
+		// Pass 4: If pathfinding completely failed and temp-solid penalties are active,
+		// clear the penalties and retry so the bot is not fenced in by its own stuck markers.
+		b.Logger.Info("Pathfinding failed with stuck penalties active, clearing penalties and retrying...")
+		b.WorldModel.ClearTempSolid()
 		path = pathfinder.FindPath(start, target, b.WorldModel, true)
 		partial = len(path) > 0
 	}
@@ -222,16 +258,48 @@ func RecalculatePath(b *bot.Bot) {
 				"closest_reached", last,
 				"blocks_below_target", shortBy,
 				"movement_state", movementState)
+			// The route that came back is the closest the search got. Say what was in
+			// its way at the frontier, on the normal log, because "gave up short" on
+			// its own has cost several rounds of guesswork: the frontier cell is
+			// reachable, and whether the next step was refused for being a wall, a
+			// height, a hazard or a missing floor is the entire diagnosis. On a hub
+			// whose walkways are wall tiles and whose climb is a staircase, this is
+			// the line that finally names the block the bot would not step onto.
+			if b.WorldModel != nil {
+				b.Logger.Warn("A* frontier: what stopped the climb",
+					"detail", b.WorldModel.DebugClimbRefused(last, target))
+			}
 		}
 	} else {
-		// Reset PathIndex together path so readers in other goroutines
-		// (steering.go, follow.go) cannot dereference stale index into nil
-		// trip "index out range [N] length 0".
-		b.CurrentPath = nil
-		b.PathIndex = 0
-		b.LastPathRecalcTime = time.Now()
-		b.Logger.Warn("A* pathfinding failed resolve walkable path destination",
-			"start", start, "target", target, "movement_state", movementState)
+		// A failed search does not have to cost the bot its direction.
+		//
+		// Searches fail transiently and for reasons that have nothing to do with
+		// whether the route already in hand is still walkable: a chunk that has
+		// not decoded yet, a start cell the bot is halfway out of, a neighbour
+		// vetoed by a temp-solid marker the previous tick left behind. Throwing
+		// the route away on each one produces exactly the freeze this bot was
+		// reported for — the live log shows a search failing at 21:44:48 and
+		// succeeding again 200ms later from the same tile, with the bot standing
+		// still across the gap because its route had been nulled in between.
+		//
+		// A route that is already being walked is therefore kept, and only a
+		// route the bot has not set off on is discarded. PathIndex is left alone
+		// in that case, so the bot resumes where it was rather than restarting.
+		if b.CurrentPath != nil && b.PathIndex > 0 && b.PathIndex < len(b.CurrentPath) {
+			b.LastPathRecalcTime = time.Now()
+			b.Logger.Warn("A* pathfinding failed resolve walkable path destination",
+				"start", start, "target", target, "movement_state", movementState,
+				"kept_route_nodes", len(b.CurrentPath), "kept_route_index", b.PathIndex)
+		} else {
+			// Reset PathIndex together path so readers in other goroutines
+			// (steering.go, follow.go) cannot dereference stale index into nil
+			// trip "index out of range [N] length 0".
+			b.CurrentPath = nil
+			b.PathIndex = 0
+			b.LastPathRecalcTime = time.Now()
+			b.Logger.Warn("A* pathfinding failed resolve walkable path destination",
+				"start", start, "target", target, "movement_state", movementState)
+		}
 		// Diagnostic: dump per-direction walkability around start so we can see
 		// which predicate (floor/head/hazard) is vetoing every neighbor.
 		type probe struct {
@@ -247,7 +315,7 @@ func RecalculatePath(b *bot.Bot) {
 			name       string
 			dx, dy, dz int32
 		}{
-			{"N", 0, 0, -1}, {"S", 0, 0, 1}, {"E", 1, 0, 0}, {"W", -1, 0, 0},
+			{"START", 0, 0, 0}, {"N", 0, 0, -1}, {"S", 0, 0, 1}, {"E", 1, 0, 0}, {"W", -1, 0, 0},
 		}
 		for _, off := range offsets {
 			tx, ty, tz := start.X+off.dx, start.Y+off.dy, start.Z+off.dz
@@ -272,7 +340,7 @@ func RecalculatePath(b *bot.Bot) {
 			// see whether the wire hash is hitting the local hash table.
 			for dy := int32(0); dy <= 2; dy++ {
 				if rid, loaded := b.WorldCache.GetBlockRID(p.x, p.y+dy-1, p.z); loaded {
-					name, _, nameOK := chunk.RuntimeIDToState(b.WorldCache.TranslateRuntimeID(rid))
+					name, nameOK := b.WorldCache.BlockName(rid)
 					b.Logger.Warn("A* neighbor RID dump",
 						"dir", p.name,
 						"dy", dy-1,
@@ -355,7 +423,7 @@ func NavigateToBlock(b *bot.Bot, x, y, z int32, tolerance float32) bool {
 
 const (
 	navPollInterval    = 100 * time.Millisecond
-	navMaxPolls        = 200 // hard ceiling (~20s) so we never hang forever
+	navMaxPolls        = 600 // hard ceiling (~60s) so we never hang forever
 	NavStallPollsLimit = 15  // ~1.5s with no measurable progress = stuck
 	navProgressEpsilon = 0.05
 )
