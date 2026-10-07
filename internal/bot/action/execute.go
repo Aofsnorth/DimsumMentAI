@@ -18,6 +18,8 @@ import (
 	"bedrock-ai/internal/safecast"
 
 	"github.com/go-gl/mathgl/mgl32"
+	"github.com/sandertv/gophertunnel/minecraft/protocol"
+	"github.com/sandertv/gophertunnel/minecraft/protocol/packet"
 )
 
 // ActionHandler executes a single action label for bot b.
@@ -453,6 +455,9 @@ var ActionHandlers = map[string]ActionHandler{
 	"goto": func(b *bot.Bot, param, user string) { goToCoords(b, param, user) },
 	"stop": func(b *bot.Bot, _, user string) {
 		b.Stop()
+		if b.CombatMgr != nil {
+			b.CombatMgr.Disengage()
+		}
 		if b.Planner != nil {
 			b.Planner.Cancel()
 		}
@@ -460,10 +465,19 @@ var ActionHandlers = map[string]ActionHandler{
 	},
 	"stay": func(b *bot.Bot, _, user string) {
 		b.Stop()
+		if b.CombatMgr != nil {
+			b.CombatMgr.Disengage()
+		}
 		if b.Planner != nil {
 			b.Planner.Cancel()
 		}
 		ReportStatus(b, user, event.ActionStatus{Action: "stay", Success: true})
+	},
+	"disengage": func(b *bot.Bot, _, user string) {
+		if b.CombatMgr != nil {
+			b.CombatMgr.Disengage()
+		}
+		ReportStatus(b, user, event.ActionStatus{Action: "disengage", Success: true})
 	},
 	"flee": func(b *bot.Bot, param, user string) { go runAwayFromPlayer(b, user, 5*time.Second) },
 	"lookat": func(b *bot.Bot, param, user string) {
@@ -748,11 +762,63 @@ var ActionHandlers = map[string]ActionHandler{
 			reportBoolOutcome(b, user, "sleep", "", ok, "tidak bisa tidur, butuh malam dan kasur")
 		}()
 	},
+	"wakeup": func(b *bot.Bot, _, user string) {
+		go func() {
+			_ = b.WritePacket(&packet.PlayerAction{
+				EntityRuntimeID: b.GetEntityRuntimeID(),
+				ActionType:      protocol.PlayerActionStopSleeping,
+				BlockPosition:   protocol.BlockPos{0, 0, 0},
+				ResultPosition:  protocol.BlockPos{0, 0, 0},
+				BlockFace:       0,
+			})
+			ReportStatus(b, user, event.ActionStatus{Action: "wakeup", Success: true})
+		}()
+	},
 	"bed": func(b *bot.Bot, _, user string) {
 		go func() {
 			ok := b.SurvivalMgr.SleepInBed(context.Background())
 			reportBoolOutcome(b, user, "sleep", "", ok, "tidak bisa tidur, butuh malam dan kasur")
 		}()
+	},
+	"mount": func(b *bot.Bot, param, user string) {
+		go func() {
+			target, ok := SelectAttackTarget(b, param, user) // we can reuse SelectAttackTarget to find an entity by name!
+			if !ok {
+				ReportStatus(b, user, event.ActionStatus{
+					Action:  "mount",
+					Item:    param,
+					Success: false,
+					Error:   "nggak nemu entitas buat dinaiki",
+				})
+				return
+			}
+			ok = b.Interactor.MountEntity(context.Background(), interact.Target{ID: target.ID, Pos: target.Position, Name: target.Name})
+			reportBoolOutcome(b, user, "mount", target.Name, ok, "gagal naik ke "+target.Name)
+		}()
+	},
+	"dismount": func(b *bot.Bot, _, user string) {
+		b.Interactor.Dismount()
+		ReportStatus(b, user, event.ActionStatus{Action: "dismount", Success: true})
+	},
+	"ride": func(b *bot.Bot, param, user string) {
+		go func() {
+			target, ok := SelectAttackTarget(b, param, user)
+			if !ok {
+				ReportStatus(b, user, event.ActionStatus{
+					Action:  "ride",
+					Item:    param,
+					Success: false,
+					Error:   "nggak nemu entitas buat dinaiki",
+				})
+				return
+			}
+			ok = b.Interactor.MountEntity(context.Background(), interact.Target{ID: target.ID, Pos: target.Position, Name: target.Name})
+			reportBoolOutcome(b, user, "ride", target.Name, ok, "gagal naik ke "+target.Name)
+		}()
+	},
+	"unmount": func(b *bot.Bot, _, user string) {
+		b.Interactor.Dismount()
+		ReportStatus(b, user, event.ActionStatus{Action: "unmount", Success: true})
 	},
 	"torch": func(b *bot.Bot, _, user string) {
 		go func() {

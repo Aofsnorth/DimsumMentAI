@@ -134,10 +134,11 @@ func selectProactiveTarget(b *bot.Bot) (string, bool) {
 	if len(nearbyPlayers) > 0 {
 		return nearbyPlayers[0], true
 	}
-	if b.AiCfg.MainPlayer == "" {
+	mainPlayers := b.AiCfg.GetMainPlayers()
+	if len(mainPlayers) == 0 {
 		return "", false
 	}
-	return b.AiCfg.MainPlayer, true
+	return mainPlayers[0], true
 }
 
 // buildProactivePrompt synthesizes the system prompt and proactive user prompt

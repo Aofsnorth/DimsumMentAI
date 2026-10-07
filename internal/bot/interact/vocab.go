@@ -204,6 +204,11 @@ func EntityNameMatches(ent *entity.Info, canonical string) bool {
 	if !ok {
 		aliases = []string{canonical}
 	}
+	if canonical == "npc" {
+		aliases = append(aliases, "armor_stand", "armor stand", "stand")
+	} else if canonical == "armor_stand" {
+		aliases = append(aliases, "npc")
+	}
 	return containsAny(Normalise(ent.Type), aliases) || containsAny(Normalise(ent.Name), aliases)
 }
 
@@ -283,6 +288,36 @@ func clampUnit(v float32) float32 {
 	return v
 }
 
+// HorizontalFaceToward returns the horizontal block face pointing back at the bot.
+// Faces: 2 north (−Z), 3 south (+Z), 4 west (−X), 5 east (+X).
+func HorizontalFaceToward(pos protocol.BlockPos, from mgl32.Vec3) int32 {
+	dx := from.X() - (float32(pos.X()) + 0.5)
+	dz := from.Z() - (float32(pos.Z()) + 0.5)
+	if Abs32(dz) >= Abs32(dx) {
+		if dz > 0 {
+			return 3 // south (+Z)
+		}
+		return 2 // north (-Z)
+	}
+	if dx > 0 {
+		return 5 // east (+X)
+	}
+	return 4 // west (-X)
+}
+
+// AdjustFaceForBlock ensures that blocks whose interactive faces are strictly
+// horizontal (signs, hanging signs, doors, gates) never receive a top (1) or
+// bottom (0) face, which hosts (Paper, Spigot, Geyser) reject.
+func AdjustFaceForBlock(name string, face int32, pos protocol.BlockPos, from mgl32.Vec3) int32 {
+	n := Normalise(name)
+	if strings.Contains(n, "sign") || strings.Contains(n, "door") || strings.Contains(n, "gate") {
+		if face == 0 || face == 1 {
+			return HorizontalFaceToward(pos, from)
+		}
+	}
+	return face
+}
+
 // BlockFaceToward returns the block face pointing back at the bot, which is the
 // face a client reports clicking. Sending the wrong face is silently ignored, so
 // this is picked from the dominant axis rather than guessed.
@@ -323,21 +358,34 @@ func Abs32(v float32) float32 {
 	return v
 }
 
-// aimPoint is where the head should point for an entity: a little above the
-// feet, inside the entity's hitbox.
+// aimPoint is where the head should point for an entity: waist/torso level (Y + 0.9),
+// inside the entity's hitbox. We deliberately aim at torso height rather than
+// eye height (Y + 1.62) or above, because armor stands with floating holographic text
+// have invisible text marker stands stacked above them. Aiming at torso level ensures
+// the look and click packets hit the physical clickable NPC instead of floating text
+// or background geometry.
 func aimPoint(feet mgl32.Vec3) mgl32.Vec3 {
-	return mgl32.Vec3{feet.X(), feet.Y() + 1.0, feet.Z()}
+	return mgl32.Vec3{feet.X(), feet.Y() + 0.9, feet.Z()}
 }
 
 func horizontalDistance(from, to mgl32.Vec3) float32 {
 	return float32(math.Hypot(float64(to.X()-from.X()), float64(to.Z()-from.Z())))
 }
 
-// inReach uses the same 3D check for the entity limit, since an entity on a
-// ledge above the bot is still clickable.
+// inReach checks whether an entity or block is within interaction reach,
+// testing both direct distance and eye-to-torso distance.
 func inReach(from, to mgl32.Vec3, reach float32) bool {
 	dx := to.X() - from.X()
 	dy := to.Y() - from.Y()
 	dz := to.Z() - from.Z()
-	return float32(math.Sqrt(float64(dx*dx+dy*dy+dz*dz))) <= reach
+	if float32(math.Sqrt(float64(dx*dx+dy*dy+dz*dz))) <= reach {
+		return true
+	}
+	// Distance from player eye to entity torso
+	eye := from.Add(mgl32.Vec3{0, 1.62, 0})
+	torso := to.Add(mgl32.Vec3{0, 0.9, 0})
+	edx := torso.X() - eye.X()
+	edy := torso.Y() - eye.Y()
+	edz := torso.Z() - eye.Z()
+	return float32(math.Sqrt(float64(edx*edx+edy*edy+edz*edz))) <= reach
 }

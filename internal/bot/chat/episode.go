@@ -99,9 +99,8 @@ func noteHumanPresence(b *bot.Bot, who string) {
 // isOperator reports whether a player is the one the bot answers to.
 func isOperator(b *bot.Bot, name string) bool {
 	b.Mu.Lock()
-	main := b.AiCfg.MainPlayer
-	b.Mu.Unlock()
-	return main != "" && strings.EqualFold(main, name)
+	defer b.Mu.Unlock()
+	return b.AiCfg.IsMainPlayer(name)
 }
 
 // speakDuration renders a budget for a chat message, the way a person would say

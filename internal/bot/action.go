@@ -81,11 +81,18 @@ func (b *Bot) ComeToPlayer(username string) bool {
 
 	b.Mu.Lock()
 	b.MovementState = "walk_to"
-	b.TargetPlayerName = ""
+	b.TargetPlayerName = username
 	b.TargetPos = target
 	b.LookTargetName = username
 	b.LookTargetUntil = time.Now().Add(12 * time.Second)
 	b.LastPathRecalcTime = time.Now()
+	// A new command starts clean: stuck-recovery temp-solid markers left by the
+	// previous trip would make A* refuse the route this command is asking for,
+	// so the bot stood still on the second "come" (markers outlive the trip
+	// that earned them; real terrain data stays untouched below them).
+	b.WorldModel.ClearTempSolid()
+	b.ConsecutiveStuckCount = 0
+	b.TicksStuck = 0
 	b.Mu.Unlock()
 
 	b.RecalculatePath()

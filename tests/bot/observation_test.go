@@ -190,6 +190,71 @@ func TestMetadataIsForgottenWithTheEntity(t *testing.T) {
 	}
 }
 
+// TestArmorStandMetadataDoesNotPanicOnTheFlagsField is the crash on spawn.
+//
+// Geyser sends an armor stand's first SetActorData without an int64 under
+// EntityDataKeyFlags — the key is absent, nil, or a float. The map's own
+// protocol.EntityMetadata.Flag asserts int64 on whatever it finds there, so
+// reading the invisible bit through it panicked inside the packet loop and took
+// the whole bot down before it could look at the NPC in front of it.
+func TestArmorStandMetadataDoesNotPanicOnTheFlagsField(t *testing.T) {
+	t.Parallel()
+
+	absent := protocol.NewEntityMetadata()
+	delete(absent, protocol.EntityDataKeyFlags)
+
+	nilValue := protocol.NewEntityMetadata()
+	nilValue[protocol.EntityDataKeyFlags] = nil
+
+	floatValue := protocol.EntityMetadata{
+		uint32(protocol.EntityDataKeyFlags): float32(1),
+		uint32(protocol.EntityDataKeyName):  "HorizonSMP",
+	}
+
+	cases := map[string]protocol.EntityMetadata{
+		"absent": absent,
+		"nil":    nilValue,
+		"float":  floatValue,
+	}
+	for name, meta := range cases {
+		b := newObservationBot(t)
+		const stand uint64 = 5
+		b.RecordEntityMeta(stand, meta)
+
+		state, _ := b.EntityMeta(stand)
+		if state.Invisible {
+			t.Errorf("%s flags field read as invisible; an unreadable bitfield must not claim the flag", name)
+		}
+	}
+}
+
+// TestInvisibleArmorStandIsReadFromWhateverTheHostSends is the same read in the
+// other direction: when the bit really is set, every numeric encoding the hosts
+// use must still produce the reading.
+func TestInvisibleArmorStandIsReadFromWhateverTheHostSends(t *testing.T) {
+	t.Parallel()
+
+	bit := int64(1) << uint32(protocol.EntityDataFlagInvisible)
+	cases := map[string]any{
+		"int64":   bit,
+		"int32":   int32(bit),
+		"float32": float32(bit),
+	}
+	for name, value := range cases {
+		b := newObservationBot(t)
+		const stand uint64 = 6
+		b.RecordEntityMeta(stand, protocol.EntityMetadata{uint32(protocol.EntityDataKeyFlags): value})
+
+		state, ok := b.EntityMeta(stand)
+		if !ok {
+			t.Fatalf("%s: metadata was never recorded", name)
+		}
+		if !state.Invisible {
+			t.Errorf("%s: the invisible bit did not read; a hologram stand would look solid", name)
+		}
+	}
+}
+
 // TestBlockStateIsNotJustAName is the cauldron and the crop.
 //
 // Every Bedrock cauldron state is called "minecraft:cauldron" and differs only in

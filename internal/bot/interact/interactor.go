@@ -29,6 +29,7 @@ import (
 	"bedrock-ai/internal/bot/entity"
 	"bedrock-ai/internal/bot/movement/animation"
 	"bedrock-ai/internal/event"
+	"bedrock-ai/internal/safecast"
 
 	"github.com/go-gl/mathgl/mgl32"
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
@@ -41,6 +42,7 @@ type Bot interface {
 	GetCoords() mgl32.Vec3
 	GetYaw() float32
 	GetEntities() map[uint64]*entity.Info
+	GetPlayerList() map[uint64]entity.Info
 	FindPlayer(username string) (uint64, mgl32.Vec3, bool)
 	GetBlockName(x, y, z int32) (string, bool)
 	LookAt(pos mgl32.Vec3)
@@ -213,14 +215,16 @@ func (i *Interactor) Interact(ctx context.Context, user, param string) {
 // of guessing which one this particular server implements.
 func (i *Interactor) interactEntity(ctx context.Context, target Target) bool {
 	i.bot.LookAt(target.Pos)
-	if !sleepContext(ctx, settleDelay) {
+	if !i.waitForAim(ctx, target.Pos) {
 		return false
 	}
 
+	// 1. Mouse over entity: Position is relative to entity base (waist height: 0, 0.9, 0).
+	clickedRel := mgl32.Vec3{0, 0.9, 0}
 	_ = i.bot.WritePacket(&packet.Interact{
 		ActionType:            packet.InteractActionMouseOverEntity,
 		TargetEntityRuntimeID: target.ID,
-		Position:              protocol.Option(target.Pos),
+		Position:              protocol.Option(clickedRel),
 	})
 
 	// Same arm movement a player makes when tapping an NPC or server figure.
@@ -235,6 +239,24 @@ func (i *Interactor) interactEntity(ctx context.Context, target Target) bool {
 		TargetEntityRuntimeID: target.ID,
 	})
 
+	// UseItemOnEntity transaction:
+	// Geyser / Paper (Citizens, ZNPCs, server join portals) and Bedrock 1.21+
+	// hosts expect an inventory transaction with UseItemOnEntityActionInteract
+	// to trigger entity right-click / interact events.
+	held, hotbar := i.heldItem()
+	_ = i.bot.WritePacket(&packet.InventoryTransaction{
+		TransactionData: &protocol.UseItemOnEntityTransactionData{
+			TargetEntityRuntimeID: target.ID,
+			ActionType:            protocol.UseItemOnEntityActionInteract,
+			HotBarSlot:            safecast.To[int32](hotbar),
+			HeldItem:              held,
+			Position:              i.bot.GetCoords().Add(mgl32.Vec3{0, EyeHeight, 0}),
+			ClickedPosition:       clickedRel,
+		},
+	})
+
+	_ = i.bot.WritePacket(animation.InteractSwing(i.bot.GetEntityRuntimeID()))
+
 	// NPC dialogue exists only on Education Edition worlds and the request is
 	// ignored everywhere else. Sending it alongside the Interact is free and
 	// makes real NPC figures respond instead of just being clicked at.
@@ -243,6 +265,12 @@ func (i *Interactor) interactEntity(ctx context.Context, target Target) bool {
 			EntityRuntimeID: target.ID,
 			RequestType:     packet.NPCRequestActionExecuteAction,
 		})
+	}
+
+	// Hold gaze for one heartbeat after writing so the server registers the
+	// interaction before ResetLook() clears the pitch/yaw angles.
+	if !sleepContext(ctx, settleDelay) {
+		return false
 	}
 	return true
 }
@@ -297,6 +325,9 @@ func (i *Interactor) interactBlock(ctx context.Context, target Target) (bool, st
 		}
 		_ = i.bot.WritePacket(animation.InteractSwing(i.bot.GetEntityRuntimeID()))
 		_ = i.bot.QueueItemInteractionData(tx)
+		// Await at least one PlayerAuthInput heartbeat so the queued inline
+		// interaction is dispatched before ResetLook() clears the aim angles.
+		_ = sleepContext(ctx, settleDelay)
 		return true, ""
 	}
 	if i.waitForStateChange(ctx, target, before, beforeOK) {
@@ -316,6 +347,7 @@ func (i *Interactor) interactBlock(ctx context.Context, target Target) (bool, st
 	if i.waitForStateChange(ctx, target, before, beforeOK) {
 		return true, ""
 	}
+	_ = sleepContext(ctx, settleDelay)
 	return false, target.Name + " tidak merespons klik"
 }
 
@@ -381,15 +413,16 @@ func AngleDelta(a, b float32) float32 {
 // transports, copying the field shapes a vanilla client sends.
 func (i *Interactor) clickTransaction(target Target) protocol.UseItemTransactionData {
 	held, hotbar := i.heldItem()
+	face := AdjustFaceForBlock(target.Name, target.Face, target.Block, i.bot.GetCoords())
 	tx := protocol.UseItemTransactionData{
 		ActionType:      protocol.UseItemActionClickBlock,
 		TriggerType:     protocol.TriggerTypePlayerInput,
 		BlockPosition:   target.Block,
-		BlockFace:       target.Face,
+		BlockFace:       face,
 		HotBarSlot:      hotbar,
 		HeldItem:        held,
 		Position:        i.bot.GetCoords().Add(mgl32.Vec3{0, EyeHeight, 0}),
-		ClickedPosition: FaceClickedPosition(target.Face),
+		ClickedPosition: FaceClickedPosition(face),
 	}
 	if rid, ok := i.bot.GetBlockNetworkID(target.Block.X(), target.Block.Y(), target.Block.Z()); ok {
 		tx.BlockRuntimeID = rid
@@ -523,25 +556,70 @@ func (i *Interactor) resolveNamedEntity(name string, botPos mgl32.Vec3) (Target,
 		return Target{Kind: KindEntity, ID: id, Name: name, Pos: aimPoint(pos)}, true
 	}
 
-	var best Target
-	bestDist := float32(entityReach)
-	found := false
+	type match struct {
+		id   uint64
+		info entity.Info
+		dist float32
+	}
+	var matches []match
 
-	for id, ent := range i.bot.GetEntities() {
+	checkCandidate := func(id uint64, ent *entity.Info) {
 		if !isInteractableEntity(ent) {
-			continue
+			return
 		}
 		if !EntityNameMatches(ent, name) {
-			continue
+			return
 		}
-		dist := horizontalDistance(botPos, ent.Position)
-		if dist < bestDist {
-			bestDist = dist
-			best = Target{Kind: KindEntity, ID: id, Name: ent.Type, Pos: aimPoint(ent.Position)}
-			found = true
+		if !inReach(botPos, ent.Position, entityReach) {
+			return
+		}
+		matches = append(matches, match{
+			id:   id,
+			info: *ent,
+			dist: horizontalDistance(botPos, ent.Position),
+		})
+	}
+
+	for id, ent := range i.bot.GetEntities() {
+		checkCandidate(id, ent)
+	}
+	for id, pEnt := range i.bot.GetPlayerList() {
+		pe := pEnt
+		checkCandidate(id, &pe)
+	}
+
+	if len(matches) == 0 {
+		return Target{}, false
+	}
+
+	// Cluster by horizontal position (< 1.0m) and prefer the lowest Y entity in the closest cluster.
+	var clusters []match
+	for _, m := range matches {
+		foundCluster := false
+		for ci := range clusters {
+			if horizontalDistance(m.info.Position, clusters[ci].info.Position) < 1.0 {
+				foundCluster = true
+				if m.info.Position.Y() < clusters[ci].info.Position.Y() {
+					clusters[ci] = m
+				}
+				break
+			}
+		}
+		if !foundCluster {
+			clusters = append(clusters, m)
 		}
 	}
-	return best, found
+
+	var best match
+	bestDist := float32(math.MaxFloat32)
+	for _, c := range clusters {
+		if c.dist < bestDist {
+			bestDist = c.dist
+			best = c
+		}
+	}
+
+	return Target{Kind: KindEntity, ID: best.id, Name: best.info.Type, Pos: aimPoint(best.info.Position)}, true
 }
 
 // ClickBlockAt clicks the block at an exact position. It is the entry point
@@ -558,7 +636,7 @@ func (i *Interactor) ClickBlockAt(ctx context.Context, pos protocol.BlockPos) (b
 		Name:  name,
 		Block: pos,
 		Pos:   blockAim(Target{Block: pos}),
-		Face:  BlockFaceToward(pos, i.bot.GetCoords()),
+		Face:  AdjustFaceForBlock(name, BlockFaceToward(pos, i.bot.GetCoords()), pos, i.bot.GetCoords()),
 	}
 	return i.interactBlock(ctx, target)
 }
@@ -568,27 +646,88 @@ func (i *Interactor) ClickBlockAt(ctx context.Context, pos protocol.BlockPos) (b
 func (i *Interactor) resolveInFront(botPos mgl32.Vec3, blocks []Target) (Target, bool) {
 	forward := ForwardVector(i.bot.GetYaw())
 
-	var bestEntity Target
-	entityDist := float32(entityReach)
-	for id, ent := range i.bot.GetEntities() {
-		if !isInteractableEntity(ent) {
-			continue
-		}
-		if !WithinCone(botPos, ent.Position, forward, FrontConeDegrees) {
-			continue
-		}
-		dist := horizontalDistance(botPos, ent.Position)
-		if dist < entityDist {
-			entityDist = dist
-			bestEntity = Target{Kind: KindEntity, ID: id, Name: ent.Type, Pos: aimPoint(ent.Position)}
-		}
+	type candidate struct {
+		id   uint64
+		info entity.Info
+		dist float32
 	}
-	if bestEntity.ID != 0 {
-		return bestEntity, true
+	var candidates []candidate
+
+	addCandidate := func(id uint64, info *entity.Info) {
+		if !isInteractableEntity(info) {
+			return
+		}
+		if !inReach(botPos, info.Position, entityReach) {
+			return
+		}
+		if !WithinCone(botPos, info.Position, forward, FrontConeDegrees) {
+			return
+		}
+		candidates = append(candidates, candidate{
+			id:   id,
+			info: *info,
+			dist: horizontalDistance(botPos, info.Position),
+		})
 	}
 
-	// blocks comes from the caller, which already scanned the neighbourhood for
-	// any other part of this request.
+	for id, ent := range i.bot.GetEntities() {
+		addCandidate(id, ent)
+	}
+	for id, playerEnt := range i.bot.GetPlayerList() {
+		pe := playerEnt
+		addCandidate(id, &pe)
+	}
+
+	if len(candidates) > 0 {
+		// When multiple entities sit at essentially the same horizontal location
+		// (e.g. within 1.0 block horizontally), servers stack invisible armor stands
+		// above an NPC as floating holographic text lines.
+		// Group into horizontal clusters (< 1.0m) and pick the physical NPC:
+		// 1) Prefer the lowest Y entity in the cluster (the base standing on the ground).
+		// 2) Between different clusters, pick the one closest to the bot.
+		type cluster struct {
+			best candidate
+		}
+		var clusters []cluster
+
+		for _, cand := range candidates {
+			foundCluster := false
+			for ci := range clusters {
+				cBest := clusters[ci].best
+				if horizontalDistance(cand.info.Position, cBest.info.Position) < 1.0 {
+					foundCluster = true
+					// Prefer the lower Y entity (the physical base on the ground, not floating above).
+					if cand.info.Position.Y() < cBest.info.Position.Y() {
+						clusters[ci].best = cand
+					}
+					break
+				}
+			}
+			if !foundCluster {
+				clusters = append(clusters, cluster{best: cand})
+			}
+		}
+
+		var bestCand candidate
+		bestDist := float32(math.MaxFloat32)
+		for _, c := range clusters {
+			if c.best.dist < bestDist {
+				bestDist = c.best.dist
+				bestCand = c.best
+			}
+		}
+
+		if bestCand.id != 0 {
+			return Target{
+				Kind: KindEntity,
+				ID:   bestCand.id,
+				Name: bestCand.info.Type,
+				Pos:  aimPoint(bestCand.info.Position),
+			}, true
+		}
+	}
+
+	// No entity in front: fall back to interactive blocks in front.
 	inFront := make([]Target, 0, len(blocks))
 	for _, b := range blocks {
 		if WithinCone(botPos, blockAim(b), forward, FrontConeDegrees) {
@@ -645,7 +784,7 @@ func scanBlockTargets(bot Bot, botPos mgl32.Vec3, radius int32, request Request)
 					Name:  name,
 					Block: pos,
 					Pos:   blockAim(Target{Block: pos}),
-					Face:  BlockFaceToward(pos, botPos),
+					Face:  AdjustFaceForBlock(name, BlockFaceToward(pos, botPos), pos, botPos),
 				})
 			}
 		}
@@ -701,14 +840,26 @@ func sleepContext(ctx context.Context, d time.Duration) bool {
 	}
 }
 
-// Normalise lowercases, strips the namespace, so "minecraft:oak_sign",
-// "custom:oak_sign", "Oak Sign" and "oak sign" all compare equal.
+// Normalise lowercases, strips formatting codes (§r, §e, etc.), and strips namespace prefix.
 func Normalise(name string) string {
+	name = stripFormattingCodes(name)
 	name = strings.ToLower(strings.TrimSpace(name))
 	if idx := strings.IndexByte(name, ':'); idx >= 0 {
 		name = name[idx+1:]
 	}
 	return name
+}
+
+func stripFormattingCodes(s string) string {
+	var b strings.Builder
+	for i := 0; i < len(s); i++ {
+		if s[i] == '§' && i+1 < len(s) {
+			i++
+			continue
+		}
+		b.WriteByte(s[i])
+	}
+	return b.String()
 }
 
 // rawNameMatches reports whether a nearby block's name is literally what the
@@ -720,4 +871,55 @@ func rawNameMatches(blockName string, request Request) bool {
 		return false
 	}
 	return strings.Contains(Normalise(blockName), raw)
+}
+
+// MountEntity attempts to mount the target entity.
+func (i *Interactor) MountEntity(ctx context.Context, target Target) bool {
+	if !i.waitForAim(ctx, target.Pos) {
+		return false
+	}
+
+	// Right-click the entity to mount
+	held, hotbar := i.heldItem()
+	_ = i.bot.WritePacket(&packet.InventoryTransaction{
+		TransactionData: &protocol.UseItemOnEntityTransactionData{
+			TargetEntityRuntimeID: target.ID,
+			ActionType:            protocol.UseItemOnEntityActionInteract,
+			HotBarSlot:            safecast.To[int32](hotbar),
+			HeldItem:              held,
+			Position:              i.bot.GetCoords().Add(mgl32.Vec3{0, EyeHeight, 0}),
+			ClickedPosition:       mgl32.Vec3{},
+		},
+	})
+
+	_ = i.bot.WritePacket(animation.InteractSwing(i.bot.GetEntityRuntimeID()))
+	return true
+}
+
+// Dismount leaves the current vehicle.
+func (i *Interactor) Dismount() {
+	_ = i.bot.WritePacket(&packet.Interact{
+		ActionType: packet.InteractActionLeaveVehicle,
+	})
+
+	// Some servers also respond to Sneak to dismount. We send both.
+	inputData := protocol.NewInputFlags(packet.InputFlagCount)
+	// protocol.InputFlags.Set panics if it's past length, but NewInputFlags(packet.InputFlagCount) is safe.
+	// We must cast the constants or just use Set safely.
+	setInputFlag := func(flags *protocol.InputFlags, id int) {
+		if id < flags.Len() {
+			flags.Set(id)
+		}
+	}
+	setInputFlag(&inputData, packet.InputFlagSneaking)
+	setInputFlag(&inputData, packet.InputFlagSneakDown)
+
+	_ = i.bot.WritePacket(&packet.PlayerAuthInput{
+		Position:  i.bot.GetCoords(),
+		Pitch:     0,
+		Yaw:       0,
+		HeadYaw:   0,
+		InputData: inputData,
+		PlayMode:  packet.PlayModeNormal,
+	})
 }

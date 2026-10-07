@@ -15,7 +15,7 @@ import (
 // updateAllowDirectSteering about where that boundary is.
 const (
 	directSteerWalkToRadius = 16.0
-	directSteerFollowRadius = 8.0
+	directSteerFollowRadius = 16.0
 )
 
 func (tc *TickContext) updateDistanceToPlayer() {
@@ -134,7 +134,7 @@ func (tc *TickContext) updateAllowDirectSteering() {
 		if distanceToTarget < directSteerWalkToRadius {
 			tc.AllowDirectSteering = true
 		}
-	} else if distanceToTarget < directSteerFollowRadius && hDiffToTarget < 1.5 {
+	} else if distanceToTarget < directSteerFollowRadius && hDiffToTarget < 2.5 {
 		tc.AllowDirectSteering = true
 	}
 }

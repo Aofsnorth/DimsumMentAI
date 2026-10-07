@@ -165,17 +165,34 @@ func (tc *TickContext) applyPositionCorrection() {
 func (tc *TickContext) updateDescendingFlag() {
 	tc.IsGrounded = false
 	tc.IsDescending = false
-	if !tc.HasPath {
-		return
+	if tc.HasPath {
+		tc.B.Mu.Lock()
+		if tc.B.PathIndex < len(tc.B.CurrentPath) {
+			nextNode := tc.B.CurrentPath[tc.B.PathIndex]
+			if float32(nextNode.Y) < tc.CurrPos.Y()-0.05 {
+				tc.IsDescending = true
+			}
+		}
+		tc.B.Mu.Unlock()
 	}
-	tc.B.Mu.Lock()
-	if tc.B.PathIndex < len(tc.B.CurrentPath) {
-		nextNode := tc.B.CurrentPath[tc.B.PathIndex]
-		if nextNode.Y < tc.FeetY {
-			tc.IsDescending = true
+	if !tc.IsDescending && tc.B != nil && tc.B.WorldModel != nil {
+		// Probe below the resting skin, not 1cm under the feet: a body resting
+		// a little above its surface (echo residue) probed into its own air
+		// cell, found solid one block down, and read as descending while it
+		// was standing — which slowed it to descent speed and widened the
+		// grounded window at the wrong moment.
+		footCellX := int32(math.Floor(float64(tc.CurrPos.X())))
+		footCellY := int32(math.Floor(float64(tc.CurrPos.Y() - groundRestSkin)))
+		footCellZ := int32(math.Floor(float64(tc.CurrPos.Z())))
+		if !tc.B.WorldModel.IsSolid(footCellX, footCellY, footCellZ) {
+			for drop := int32(1); drop <= 3; drop++ {
+				if tc.B.WorldModel.IsSolid(footCellX, footCellY-drop, footCellZ) {
+					tc.IsDescending = true
+					break
+				}
+			}
 		}
 	}
-	tc.B.Mu.Unlock()
 }
 
 // groundCellBelow converts a sampled foot position into the one cell that can
@@ -204,6 +221,37 @@ const groundSkin = 0.02
 
 const groundSkinEpsilon = 1e-4
 
+// groundRestSkin is the wider window a SETTLED body gets: how far above a
+// block's top face the feet may hover and still count as standing on it.
+//
+// A body can come to rest slightly above the surface it stands on — sub-block
+// residue from a mid-stride server echo, a step-down assist that stopped
+// 0.14 high, or a correction that planted the feet 10cm into the floor. With
+// only the 2cm skin that body read as airborne, ApplyVerticalVelocity cleared
+// every jump request each tick, and a body facing a one-block step could
+// never hop onto it: checkWallCollision (which only ignores the step row for
+// a grounded body) cancelled the horizontal move, and the bot froze pressed
+// against the ledge forever — the permanent stall at a step_jump node.
+const groundRestSkin = 0.15
+
+// The resting window applies only to a body that is settling or settled.
+// A rising body is mid-jump and must keep the tight skin, or a ledge beside
+// the arc reads as ground and truncates the jump (the mid-air double-jump
+// bug); a fast-falling body has the swept landing in ApplyGroundLanding and
+// must not stick to a block edge it is falling past.
+const (
+	risingSkinLimit   = 0.05
+	settlingSkinFloor = -0.25
+)
+
+// groundSkinFor picks the grounding window for this tick's velocity.
+func (tc *TickContext) groundSkinFor() float32 {
+	if tc.VelY > risingSkinLimit || tc.VelY < settlingSkinFloor {
+		return groundSkin
+	}
+	return groundRestSkin
+}
+
 // groundedCell reports the cell the body is standing on, or false. A solid
 // cell only votes when the feet rest on its top face within the skin. The
 // probe cell and the cell below it are both candidates: a body hovering 2cm
@@ -215,17 +263,33 @@ func (tc *TickContext) groundedCell(dxOffset, dzOffset, feetY float32) (int32, b
 	if tc.B == nil || tc.B.WorldModel == nil {
 		return 0, false
 	}
+	skin := tc.groundSkinFor()
 	cx, cy, cz := groundCellBelow(tc.CurrPos.X()+dxOffset, tc.CurrPos.Z()+dzOffset, feetY)
 	for _, vote := range []int32{cy, cy - 1} {
 		if !tc.B.WorldModel.IsSolid(cx, vote, cz) {
 			continue
 		}
-		top := float32(vote + 1)
-		if feetY >= top-groundSkinEpsilon-groundSkin && feetY <= top+groundSkin+groundSkinEpsilon {
+		top := tc.surfaceTopY(cx, vote, cz)
+		if feetY >= top-groundSkinEpsilon-skin && feetY <= top+skin+groundSkinEpsilon {
 			return vote, true
 		}
 	}
 	return cy, false
+}
+
+// surfaceTopY returns the height of the walkable surface of the block in cell
+// (x, y, z): the cell's top face for a full block, but only 0.5 for a bottom
+// slab and 0.15 for a snow layer.
+//
+// Grounding against cell+1 unconditionally put the feet half a block BELOW the
+// real surface of a slab, so the body never read as grounded: gravity ran
+// every tick, the wall scan read the slab as a wall in front of the feet, and
+// the bot stood pressed against a slab path forever.
+func (tc *TickContext) surfaceTopY(x, y, z int32) float32 {
+	if tc.B != nil && tc.B.WorldCache != nil {
+		return float32(y) + tc.B.WorldCache.TopOffsetAt(x, y, z)
+	}
+	return float32(y + 1)
 }
 
 func (tc *TickContext) UpdateGroundedState() {
@@ -374,8 +438,24 @@ func (tc *TickContext) ApplyGroundLanding() {
 		return
 	}
 
+	// Resting catch: a body hovering just above the surface it stands on
+	// settles onto it instead of hovering outside the skin. Left alone, that
+	// residue keeps UpdateGroundedState reporting airborne and the frozen
+	// step_jump stall follows. Only the centre probe votes, so a block beside
+	// the feet can never pull the body onto itself.
+	if cell, ok := tc.groundedCell(0, 0, tc.CurrPos.Y()); ok {
+		top := tc.surfaceTopY(int32(math.Floor(float64(tc.CurrPos.X()))), cell, int32(math.Floor(float64(tc.CurrPos.Z()))))
+		if tc.CurrPos.Y() >= top-0.05 {
+			tc.NextY = top
+			tc.VelY = 0.0
+			tc.IsGrounded = true
+			return
+		}
+	}
+
 	checkOffsets := groundCheckOffsets(tc.IsDescending, tc.IsParkourJump)
 	hasGroundBelow := false
+	var landingTop float32
 	var landingCy int32 = -999
 
 	for _, dxOffset := range checkOffsets {
@@ -391,7 +471,7 @@ func (tc *TickContext) ApplyGroundLanding() {
 				if !tc.B.WorldModel.IsSolid(cx, cy, cz) {
 					continue
 				}
-				top := float32(cy + 1)
+				top := tc.surfaceTopY(cx, cy, cz)
 				// The body must have started at or above this block's top face,
 				// and its descent must cross or reach this top face. A wall
 				// beside the body (whose top is above CurrPos.Y) can never match.
@@ -399,6 +479,7 @@ func (tc *TickContext) ApplyGroundLanding() {
 					if !hasGroundBelow || cy > landingCy {
 						hasGroundBelow = true
 						landingCy = cy
+						landingTop = top
 					}
 				}
 			}
@@ -406,7 +487,7 @@ func (tc *TickContext) ApplyGroundLanding() {
 	}
 
 	if hasGroundBelow {
-		tc.NextY = float32(landingCy + 1)
+		tc.NextY = landingTop
 		tc.VelY = 0.0
 		tc.IsGrounded = true
 		if tc.IsParkourJump {
@@ -444,24 +525,39 @@ func parkourWindowActive(until time.Time) bool {
 }
 
 func (tc *TickContext) applyStepDownAssist(feetY int32) {
-	if !tc.IsDescending || !tc.HasPath || tc.IsOnLadder {
+	if !tc.IsDescending || tc.IsOnLadder {
 		return
 	}
-	tc.B.Mu.Lock()
-	if tc.B.PathIndex >= len(tc.B.CurrentPath) {
+	var targetY float32
+	if tc.HasPath {
+		tc.B.Mu.Lock()
+		if tc.B.PathIndex < len(tc.B.CurrentPath) {
+			nextNode := tc.B.CurrentPath[tc.B.PathIndex]
+			targetY = float32(nextNode.Y)
+		}
 		tc.B.Mu.Unlock()
+	}
+	if targetY == 0 && tc.B != nil && tc.B.WorldModel != nil {
+		footCellX := int32(math.Floor(float64(tc.CurrPos.X())))
+		footCellY := int32(math.Floor(float64(tc.CurrPos.Y() - 0.01)))
+		footCellZ := int32(math.Floor(float64(tc.CurrPos.Z())))
+		for drop := int32(1); drop <= 3; drop++ {
+			if tc.B.WorldModel.IsSolid(footCellX, footCellY-drop, footCellZ) {
+				targetY = float32(footCellY - drop + 1)
+				break
+			}
+		}
+	}
+	if targetY == 0 {
 		return
 	}
-	nextNode := tc.B.CurrentPath[tc.B.PathIndex]
-	tc.B.Mu.Unlock()
 
-	if nextNode.Y >= feetY || feetY-nextNode.Y > 3 {
+	if targetY >= tc.CurrPos.Y()-0.05 || tc.CurrPos.Y()-targetY > 3.5 {
 		return
 	}
-	if tc.Dist > 1.4 {
+	if tc.HasPath && tc.Dist > 1.4 {
 		return
 	}
-	targetY := float32(nextNode.Y)
 	if tc.CurrPos.Y() > targetY {
 		nextY := tc.CurrPos.Y() - 0.16
 		if nextY < targetY {

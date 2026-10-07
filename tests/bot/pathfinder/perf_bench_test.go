@@ -198,3 +198,5 @@ func TestPackBlockKeyRoundTrips(t *testing.T) {
 		seen[key] = c
 	}
 }
+
+func (*benchQuerier) BlockName(rid uint32) (string, bool) { return "", false }

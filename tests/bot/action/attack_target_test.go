@@ -136,3 +136,5 @@ func TestHandleAttack_DoesNotEngagePlayerTarget(t *testing.T) {
 		t.Fatal("SelectAttackTarget(steve) engaged a player; want mob-only selection")
 	}
 }
+
+func (openBlockQuerier) BlockName(rid uint32) (string, bool) { return "", false }

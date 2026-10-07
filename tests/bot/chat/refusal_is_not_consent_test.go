@@ -153,3 +153,40 @@ func TestAnExplicitCountStillWins(t *testing.T) {
 		t.Errorf("param %q, want it to end in ,5", steps[0].Param)
 	}
 }
+
+func TestInferActionIntent_InteractVerbs(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		msg       string
+		reply     string
+		wantLabel string
+		wantParam string
+	}{
+		{"klik npc", "Oke aku klik ya", "interact", "npc"},
+		{"klik npc didepanmu", "Siap", "interact", "npc"},
+		{"klik sign didepanmu", "Oke, aku klik lagi ya.", "interact", "sign"},
+		{"klik armor stand", "Siap", "interact", "armor_stand"},
+		{"tekan tombol", "Oke", "interact", "button"},
+		{"pencet tombolnya", "Baik", "interact", "button"},
+		{"buka pintu", "Siap", "interact", "door"},
+		{"buka chest", "Oke", "interact", "chest"},
+		{"klik di depanmu", "Oke", "interact", "depan"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.msg, func(t *testing.T) {
+			t.Parallel()
+			steps := chat.InferActionIntentForTest(tc.msg, tc.reply)
+			if len(steps) == 0 {
+				t.Fatalf("%q produced no action steps", tc.msg)
+			}
+			if steps[0].Label != tc.wantLabel {
+				t.Errorf("got label %q, want %q", steps[0].Label, tc.wantLabel)
+			}
+			if steps[0].Param != tc.wantParam {
+				t.Errorf("got param %q, want %q", steps[0].Param, tc.wantParam)
+			}
+		})
+	}
+}

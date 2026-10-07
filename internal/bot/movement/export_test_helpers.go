@@ -41,6 +41,11 @@ func (tc *TickContext) AdvancePathForTest(maxHeightDiff float32) {
 	tc.advancePath(maxHeightDiff)
 }
 
+// AdvancePathOrArriveForTest runs the advance-or-arrive check against computeAdvanceParams.
+func (tc *TickContext) AdvancePathOrArriveForTest() {
+	tc.advancePathOrArrive()
+}
+
 // CheckWalkToArrivalForTest runs the tolerance-based arrival check, the other
 // way a trip ends.
 func (tc *TickContext) CheckWalkToArrivalForTest() {
@@ -148,6 +153,41 @@ func (tc *TickContext) HandleEmoteLookAroundForTest(isPathfinding bool) {
 	tc.handleEmoteLookAround(isPathfinding)
 }
 
+// HandleStuckRecalcForTest runs the stuck-recovery ladder step that must be
+// called with b.Mu already held.
+//
+// The lock is what the test is about. This function's sibling helpers
+// (recalculatePathLocked, markCurrentPathTempSolidLocked, breakPathObstacleLocked)
+// release and re-acquire b.Mu around the work they hand off, because the caller
+// holds it. One of them instead ACQUIRED it, and sync.Mutex does not nest: the
+// movement tick blocked forever on a lock it was itself holding, which reads as a
+// hang with no error and no log line past the last tick.
+//
+// Acquiring here, in the test, is the whole point — a version of
+// handleStuckRecalcLocked that re-locks will wedge this call and the test has to
+// time out and fail rather than silently pass.
+func (tc *TickContext) HandleStuckRecalcForTest() {
+	tc.B.Mu.Lock()
+	defer tc.B.Mu.Unlock()
+	tc.handleStuckRecalcLocked()
+}
+
+// TickContextForTest builds the per-tick context the way SendInputLoop does,
+// with only the fields a steering test needs filled in.
+func TickContextForTest(b *bot.Bot, feet mgl32.Vec3) *TickContext {
+	return &TickContext{
+		B:       b,
+		CurrPos: feet,
+		FeetX:   int32(feet.X()),
+		FeetZ:   int32(feet.Z()),
+		TPos:    b.TargetPos,
+		MState:  b.MovementState,
+		HasPath: b.CurrentPath != nil,
+		Dist:    1,
+		Dx:      1,
+	}
+}
+
 // BuildInputDataForTest runs the real flag assembly, which is the only place in
 // the package that produces the input flags a PlayerAuthInput carries. A gait
 // edge is not a behaviour a test can observe any other way: the level flags it
@@ -214,4 +254,19 @@ func (tc *TickContext) PrepareMoveVectorForTest() {
 // DescentLinkFromYForTest exposes descentLinkFromY for testing.
 func (tc *TickContext) DescentLinkFromYForTest() (int32, bool) {
 	return tc.descentLinkFromY()
+}
+
+// HasGroundSupportAtForTest exposes hasGroundSupportAt for testing.
+func (tc *TickContext) HasGroundSupportAtForTest(x, z float32, feetY int32) bool {
+	return tc.hasGroundSupportAt(x, z, feetY)
+}
+
+// RunPhysicsAndCollisionsForTest exposes runPhysicsAndCollisions for testing.
+func (tc *TickContext) RunPhysicsAndCollisionsForTest() {
+	tc.runPhysicsAndCollisions()
+}
+
+// ComputeTargetPositionForTest exposes computeTargetPosition for testing.
+func (tc *TickContext) ComputeTargetPositionForTest(speed float32, needsStepUp, isMidJump bool) (float32, float32) {
+	return tc.computeTargetPosition(speed, needsStepUp, isMidJump)
 }

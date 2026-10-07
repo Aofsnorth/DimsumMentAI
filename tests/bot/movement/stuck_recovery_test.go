@@ -340,3 +340,5 @@ func TestCanDirectSteerToTargetMatchesSteeringGate(t *testing.T) {
 		t.Fatal("far walk_to target: reported direct steering, want false (dropping the path would freeze)")
 	}
 }
+
+func (flatGroundQuerier) BlockName(rid uint32) (string, bool) { return "", false }

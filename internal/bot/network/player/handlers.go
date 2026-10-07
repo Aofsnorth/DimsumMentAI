@@ -6,11 +6,13 @@ import (
 	"log/slog"
 
 	"bedrock-ai/internal/bot"
+	"bedrock-ai/internal/bot/dimension"
 	"bedrock-ai/internal/bot/entity"
 	"bedrock-ai/internal/bot/inventory/trading"
 	"bedrock-ai/internal/safecast"
 
 	"github.com/go-gl/mathgl/mgl32"
+	"github.com/sandertv/gophertunnel/minecraft/protocol"
 	"github.com/sandertv/gophertunnel/minecraft/protocol/packet"
 )
 
@@ -63,8 +65,57 @@ func handleRespawn(b *bot.Bot, pk packet.Packet) bool {
 		slog.Float64("x", float64(b.Pos.X())),
 		slog.Float64("y", float64(b.Pos.Y())),
 		slog.Float64("z", float64(b.Pos.Z())),
+		slog.Uint64("state", uint64(p.State)),
 	)
 	b.Mu.Unlock()
+
+	if p.State == packet.RespawnStateReadyToSpawn {
+		_ = b.WritePacket(&packet.Respawn{
+			State:           packet.RespawnStateClientReadyToSpawn,
+			Position:        p.Position,
+			EntityRuntimeID: b.GetEntityRuntimeID(),
+		})
+	}
+	return true
+}
+
+func handleTransfer(b *bot.Bot, pk packet.Packet) bool {
+	p := pk.(*packet.Transfer)
+	addr := fmt.Sprintf("%s:%d", p.Address, p.Port)
+	b.Logger.Info("received transfer packet from server",
+		slog.String("address", p.Address),
+		slog.Uint64("port", uint64(p.Port)),
+	)
+	if err := b.RequestJoin(addr); err != nil {
+		b.Logger.Error("failed to handle transfer packet", "address", addr, "error", err)
+	}
+	return true
+}
+
+func handleChangeDimension(b *bot.Bot, pk packet.Packet) bool {
+	p := pk.(*packet.ChangeDimension)
+	b.Mu.Lock()
+	b.ChunkDimension = p.Dimension
+	b.Dimension = dimension.FromServerID(p.Dimension)
+	b.Pos = p.Position
+	b.TeleportAckPending = true
+	b.TeleportAckPos = p.Position
+	b.MovementState = "idle"
+	b.CurrentPath = nil
+	b.Actors = make(map[uint64]*entity.Info)
+	b.Mu.Unlock()
+
+	b.Logger.Info("bot dimension changed by server",
+		slog.Int64("dimension", int64(p.Dimension)),
+		slog.Float64("x", float64(p.Position.X())),
+		slog.Float64("y", float64(p.Position.Y())),
+		slog.Float64("z", float64(p.Position.Z())),
+	)
+
+	_ = b.WritePacket(&packet.PlayerAction{
+		ActionType:      protocol.PlayerActionDimensionChangeDone,
+		EntityRuntimeID: b.GetEntityRuntimeID(),
+	})
 	return true
 }
 
@@ -112,11 +163,15 @@ func handleLevelEvent(b *bot.Bot, pk packet.Packet) bool {
 
 func handleAddActor(b *bot.Bot, pk packet.Packet) bool {
 	p := pk.(*packet.AddActor)
+	name := p.EntityType
+	if n, ok := p.EntityMetadata[uint32(protocol.EntityDataKeyName)].(string); ok && n != "" {
+		name = n
+	}
 	b.Mu.Lock()
 	b.Actors[p.EntityRuntimeID] = &entity.Info{
 		ID:       p.EntityRuntimeID,
 		Type:     p.EntityType,
-		Name:     p.EntityType,
+		Name:     name,
 		Position: p.Position,
 		Health:   20,
 	}
@@ -126,7 +181,7 @@ func handleAddActor(b *bot.Bot, pk packet.Packet) bool {
 	// or a crop-relevant flag is ever stated. Discarding it is why taming could
 	// not be confirmed: the flag was in the packet and on the floor.
 	b.RecordEntityMeta(p.EntityRuntimeID, p.EntityMetadata)
-	b.Logger.Debug("tracked actor spawned", slog.String("type", p.EntityType), slog.Uint64("runtime_id", p.EntityRuntimeID))
+	b.Logger.Debug("tracked actor spawned", slog.String("type", p.EntityType), slog.String("name", name), slog.Uint64("runtime_id", p.EntityRuntimeID))
 	return true
 }
 
@@ -475,5 +530,23 @@ func handlePacketViolationWarning(b *bot.Bot, pk packet.Packet) bool {
 		slog.Int("packet_id", int(p.PacketID)),
 		slog.String("context", p.ViolationContext),
 	)
+	return true
+}
+
+func handleSetActorLink(b *bot.Bot, pk packet.Packet) bool {
+	p := pk.(*packet.SetActorLink)
+	
+	b.Mu.Lock()
+	defer b.Mu.Unlock()
+	
+	if p.EntityLink.RiderEntityUniqueID == b.Conn.GameData().EntityUniqueID {
+		if p.EntityLink.Type == protocol.EntityLinkRemove {
+			b.VehicleID = 0
+			b.Logger.Info("dismounted vehicle", "vehicle_id", p.EntityLink.RiddenEntityUniqueID)
+		} else {
+			b.VehicleID = p.EntityLink.RiddenEntityUniqueID
+			b.Logger.Info("mounted vehicle", "vehicle_id", p.EntityLink.RiddenEntityUniqueID, "type", p.EntityLink.Type)
+		}
+	}
 	return true
 }

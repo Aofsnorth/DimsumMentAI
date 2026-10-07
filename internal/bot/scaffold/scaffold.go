@@ -121,7 +121,7 @@ func IsReplaceable(blockName string) bool {
 	// the table. A suffix is the honest way to catch the rest: anything ending
 	// in _sapling, _bush, _roots or _vines is a plant, breaks instantly, and is
 	// not something a bot should refuse to climb a block over.
-	for _, suffix := range []string{"_sapling", "_bush", "_roots", "_vines", "_fungus", "_flower"} {
+	for _, suffix := range []string{"_sapling", "_bush", "_roots", "_vines", "_fungus", "_flower", "_sign", "_hanging_sign", "_banner", "_torch"} {
 		if strings.HasSuffix(n, suffix) {
 			return true
 		}
@@ -241,7 +241,7 @@ func Occupied(bot Bot, cell protocol.BlockPos) (string, bool) {
 		return "", false
 	}
 	n := normalise(name)
-	if airBlocks[n] {
+	if airBlocks[n] || strings.HasSuffix(n, "_sign") || strings.HasSuffix(n, "_hanging_sign") {
 		return "", false
 	}
 	return n, true

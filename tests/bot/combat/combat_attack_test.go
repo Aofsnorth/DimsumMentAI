@@ -258,3 +258,26 @@ func (f *combatFakeBot) FindScaffoldItem() (uint32, protocol.ItemStack, bool) {
 }
 
 func (f *combatFakeBot) PlaceShield(ctx context.Context, threat mgl32.Vec3) bool { return false }
+
+func TestCombatManager_DisengageClearsCombat(t *testing.T) {
+	t.Parallel()
+	f := newCombatFakeBot(mgl32.Vec3{0, 64, 0}, stripLoaded(-2, 8), noSolid)
+	f.players["Steve"] = struct {
+		id  uint64
+		pos mgl32.Vec3
+	}{id: 42, pos: mgl32.Vec3{2, 64, 0}}
+	cm := combat.NewCombatManager(f, f.logger)
+
+	if !cm.EngagePlayer("steve") {
+		t.Fatal("EngagePlayer(steve) = false")
+	}
+	if !cm.InCombat() {
+		t.Fatal("InCombat() = false, want true")
+	}
+
+	cm.Disengage()
+
+	if cm.InCombat() {
+		t.Fatal("InCombat() = true after Disengage(), want false")
+	}
+}

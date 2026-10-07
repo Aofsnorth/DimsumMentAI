@@ -168,7 +168,7 @@ func (tc *TickContext) computePathAdvanceDist() (float32, bool) {
 		dz2 := nextNode.Z - currNode.Z
 
 		if dx1 != dx2 || dz1 != dz2 {
-			advanceDist = 0.3
+			advanceDist = 0.55
 		}
 	}
 
@@ -200,6 +200,8 @@ func (tc *TickContext) advancePath(maxHeightDiff float32) {
 	canAdvance := heightDiff < float64(maxHeightDiff)
 	if yDiff > 0.5 {
 		canAdvance = heightDiff < 1.05 && float64(tc.CurrPos.Y())+0.15 >= float64(nextNode.Y)
+	} else if yDiff < -0.05 && !tc.IsLadderActive && !tc.IsOnLadder {
+		canAdvance = float64(tc.CurrPos.Y()) <= float64(nextNode.Y)+0.25
 	}
 
 	if !canAdvance {
@@ -217,7 +219,9 @@ func (tc *TickContext) advancePath(maxHeightDiff float32) {
 		tc.B.PathIndex = 0
 		if tc.B.MovementState == "walk_to" {
 			tc.B.MovementState = "idle"
-			tc.B.Logger.Debug("bot arrived at target destination", slog.Float64("x", float64(tc.TPos.X())), slog.Float64("z", float64(tc.TPos.Z())))
+			if tc.B.Logger != nil {
+				tc.B.Logger.Debug("bot arrived at target destination", slog.Float64("x", float64(tc.TPos.X())), slog.Float64("z", float64(tc.TPos.Z())))
+			}
 		}
 		// The trip Jev styled is over; the next one starts unstlyled. A
 		// sprint latch that survived arrival would run the bot's next idle
@@ -499,17 +503,12 @@ func (tc *TickContext) tryStuckJump() bool {
 	}
 	tc.B.Mu.Unlock()
 
-	if stuckCount != 1 || !hasPath {
-		return false
-	}
-
-	baseY := int32(math.Floor(float64(tc.CurrPos.Y() + 0.1)))
-	if node.Y < baseY {
+	if stuckCount > 2 || !hasPath {
 		return false
 	}
 
 	tc.B.Mu.Lock()
-	tc.B.Logger.Debug("Stuck-recovery jump triggered", "node_y", node.Y, "base_y", baseY)
+	tc.B.Logger.Debug("Stuck-recovery jump triggered", "node_y", node.Y, "consecutive", stuckCount)
 	tc.B.Mu.Unlock()
 
 	tc.ShouldJump = true
@@ -522,6 +521,11 @@ func (tc *TickContext) handleStuckRecalcLocked() {
 	if consecutive >= 2 {
 		tc.breakPathObstacleLocked()
 	}
+	// A fresh command resets the escalation ladder on purpose: the new trip
+	// starts from zero, and a penalty window sized by the OLD trip would fence
+	// off the very route the new command is asking for ("come" twice in a row
+	// froze on the second, because trip one's stuck penalty still marked the
+	// step-up cell temp-solid when trip two began).
 	// Tell the world model about the cells the bot is physically pressed against
 	// before re-planning. A* is deterministic, so re-planning from the same tile
 	// against the same model returns the same route and the bot walks into the
@@ -541,7 +545,24 @@ func (tc *TickContext) handleStuckRecalcLocked() {
 	if !tc.CanDirectSteerToTarget() {
 		return
 	}
-	tc.B.Logger.Warn("Multiple stuck detections, attempting direct movement fallback", "consecutive_count", consecutive)
+	// A route that was just computed is a route A* had already validated against
+	// the obstacles this bot has been bumping into. Throwing it away because the
+	// body has been stuck for three ticks converts "walk around it" into "walk
+	// straight into it", which is the wedge the ladder exists to prevent — and it
+	// repeated until the trip was abandoned. Direct steering is the last resort
+	// for when the search had nothing to offer at all.
+	//
+	// Read the route directly: this function is the locked half of the pair, and
+	// its caller (handleStuck) is already holding b.Mu. Re-acquiring it here does
+	// not nest, it deadlocks — sync.Mutex is not reentrant, so the movement tick
+	// would block forever on a lock it is holding itself. That froze the bot hard
+	// enough to need a process kill, on approach to any destination within
+	// directSteerWalkToRadius, which is every destination the bot is close to.
+	replanned := len(tc.B.CurrentPath) > 0
+	if replanned {
+		return
+	}
+	tc.B.Logger.Warn("Multiple stuck detections and no route, attempting direct movement fallback", "consecutive_count", consecutive)
 	tc.B.CurrentPath = nil
 	tc.B.PathIndex = 0
 	tc.B.ConsecutiveStuckCount = 0
@@ -601,7 +622,7 @@ func (tc *TickContext) CanDirectSteerToTarget() bool {
 	if tc.MState == "walk_to" {
 		return dist < directSteerWalkToRadius
 	}
-	return dist < directSteerFollowRadius && absFloat32(dy) < 1.5
+	return dist < directSteerFollowRadius && absFloat32(dy) < 2.5
 }
 
 func (tc *TickContext) breakPathObstacleLocked() {

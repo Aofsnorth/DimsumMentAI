@@ -13,6 +13,51 @@ import (
 	"github.com/sandertv/gophertunnel/minecraft/protocol/packet"
 )
 
+// teleportAckDistance is how far the server's reported feet position may sit
+// from the bot's own before an unflagged MovePlayer is still treated as a
+// teleport. A Geyser front-end relays ordinary movement as a stream of
+// MoveModeNormal echoes, so distance is the only signal left for the host that
+// moves the player without saying so.
+const teleportAckDistance = 2.2
+
+// ShouldAckTeleport reports whether a server-sent MovePlayer for the local
+// player must be acknowledged with InputFlagHandledTeleport on the next
+// PlayerAuthInput tick.
+//
+// A real client acknowledges teleports, not every position echo. Geyser
+// forwards each ordinary client position update as an unflagged MovePlayer, and
+// calling all of them teleports froze the body: the next tick skips steering and
+// physics to hold the acked position, so as soon as the server echoed at 20Hz
+// there was never a tick that steered, and the bot stood still with a full set
+// of walk inputs on the wire.
+func ShouldAckTeleport(mode byte, serverPos, localPos mgl32.Vec3) bool {
+	if mode == packet.MoveModeTeleport || mode == packet.MoveModeReset {
+		return true
+	}
+	dx := serverPos.X() - localPos.X()
+	dy := serverPos.Y() - localPos.Y()
+	dz := serverPos.Z() - localPos.Z()
+	return dx*dx+dy*dy+dz*dz > teleportAckDistance*teleportAckDistance
+}
+
+// ApplySelfMovePlayer updates bot position and teleport acknowledgement state
+// for a confirmed local player movement packet. Caller MUST hold b.Mu.
+func ApplySelfMovePlayer(b *bot.Bot, mode byte, newPos mgl32.Vec3) bool {
+	ack := ShouldAckTeleport(mode, newPos, b.Pos)
+	if ack || b.MovementState == "idle" {
+		b.Pos = newPos
+		b.VelY = 0.0
+	}
+	b.ServerGroundY = newPos.Y()
+	b.ServerGroundAt = time.Now()
+	b.LastServerPosAt = b.ServerGroundAt
+	if ack {
+		b.TeleportAckPending = true
+		b.TeleportAckPos = newPos
+	}
+	return ack
+}
+
 func handleMovePlayer(b *bot.Bot, p *packet.MovePlayer) {
 	b.Mu.Lock()
 	isSelf := p.EntityRuntimeID == b.Conn.GameData().EntityRuntimeID
@@ -51,13 +96,9 @@ func handleMovePlayer(b *bot.Bot, p *packet.MovePlayer) {
 					// #endregion
 				}
 			}
-			b.Pos = newPos
-			b.VelY = 0.0
-			b.ServerGroundY = newPos.Y()
-			b.ServerGroundAt = time.Now()
-			b.LastServerPosAt = b.ServerGroundAt
-			b.TeleportAckPending = true
-			b.TeleportAckPos = newPos
+			// Read the ack decision against the pre-update Pos: once b.Pos is
+			// overwritten every echo looks like a zero-distance no-op.
+			ApplySelfMovePlayer(b, p.Mode, newPos)
 		}
 	} else {
 		b.PlayerPositions[p.EntityRuntimeID] = trackedPlayerFeetPosition(p.Position)

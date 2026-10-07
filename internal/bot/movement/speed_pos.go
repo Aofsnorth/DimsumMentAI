@@ -52,6 +52,30 @@ func (tc *TickContext) horizontalMovePredictedPos() mgl32.Vec3 {
 	speed, needsStepUp, isMidJump := tc.computeMoveSpeed(absYawDiff)
 	targetX, targetZ := tc.computeTargetPosition(speed, needsStepUp, isMidJump)
 	if tc.checkWallCollision(targetX, targetZ, needsStepUp, isMidJump) {
+		baseY := int32(math.Floor(float64(tc.CurrPos.Y() + 0.1)))
+		_, _, plannedDescent := tc.plannedDescent(baseY)
+		pathAllowsGap := tc.pathAllowsForwardWithoutGround(baseY)
+
+		supportedX := tc.hasGroundSupportAt(targetX, tc.CurrPos.Z(), baseY) || isMidJump || plannedDescent || pathAllowsGap
+		canSlideX := supportedX && !tc.checkWallCollision(targetX, tc.CurrPos.Z(), needsStepUp, isMidJump)
+
+		supportedZ := tc.hasGroundSupportAt(tc.CurrPos.X(), targetZ, baseY) || isMidJump || plannedDescent || pathAllowsGap
+		canSlideZ := supportedZ && !tc.checkWallCollision(tc.CurrPos.X(), targetZ, needsStepUp, isMidJump)
+
+		if canSlideX && !canSlideZ {
+			return mgl32.Vec3{targetX, tc.NextY, tc.CurrPos.Z()}
+		}
+		if canSlideZ && !canSlideX {
+			return mgl32.Vec3{tc.CurrPos.X(), tc.NextY, targetZ}
+		}
+		if canSlideX && canSlideZ {
+			distX := absFloat32(targetX - tc.NextTarget.X())
+			distZ := absFloat32(targetZ - tc.NextTarget.Z())
+			if distX < distZ {
+				return mgl32.Vec3{targetX, tc.NextY, tc.CurrPos.Z()}
+			}
+			return mgl32.Vec3{tc.CurrPos.X(), tc.NextY, targetZ}
+		}
 		return mgl32.Vec3{tc.CurrPos.X(), tc.NextY, tc.CurrPos.Z()}
 	}
 	return mgl32.Vec3{targetX, tc.NextY, targetZ}
@@ -124,6 +148,23 @@ func (tc *TickContext) computeTargetPosition(speed float32, needsStepUp, isMidJu
 	baseY := int32(math.Floor(float64(tc.CurrPos.Y() + 0.1)))
 	descentTargetY, descentDrop, plannedDescent := tc.plannedDescent(baseY)
 	hasSameLevelSupport := tc.hasGroundSupportAt(targetX, targetZ, baseY)
+	if hasSameLevelSupport {
+		targetCellX := int32(math.Floor(float64(targetX)))
+		targetCellZ := int32(math.Floor(float64(targetZ)))
+		if !tc.B.WorldModel.IsSolid(targetCellX, baseY-1, targetCellZ) {
+			hasSameLevelSupport = false
+		}
+	}
+	if !plannedDescent && !tc.HasPath && !hasSameLevelSupport {
+		for drop := int32(1); drop <= 2; drop++ {
+			if tc.hasGroundSupportAt(targetX, targetZ, baseY-drop) {
+				descentTargetY = baseY - drop
+				descentDrop = drop
+				plannedDescent = true
+				break
+			}
+		}
+	}
 	pathAllowsGap := tc.pathAllowsForwardWithoutGround(baseY)
 	groundUnknown := (tc.B.VenityCompat || tc.B.GeyserCompat) && !hasSameLevelSupport && tc.groundSupportUnknownAt(targetX, targetZ, baseY)
 	trustPath := groundUnknown && tc.HasPath
@@ -169,6 +210,15 @@ func (tc *TickContext) checkWallCollision(targetX, targetZ float32, needsStepUp,
 	// in place against the ledge forever. Ignore that single bottom level here
 	// and rely on the head level (minY+1) to catch genuine 2+ block walls.
 	groundedStepUp := needsStepUp && !isMidJump
+	stepTargetY := minY
+	if groundedStepUp && tc.HasPath {
+		tc.B.Mu.Lock()
+		if tc.B.PathIndex < len(tc.B.CurrentPath) {
+			stepTargetY = tc.B.CurrentPath[tc.B.PathIndex].Y
+		}
+		tc.B.Mu.Unlock()
+	}
+
 	// Controlled descent sinks the whole body toward the landing level while the
 	// horizontal step is still sliding off the ledge, so the sunk body keeps
 	// intersecting the very support it is leaving behind and the scan cancels the
@@ -179,7 +229,7 @@ func (tc *TickContext) checkWallCollision(targetX, targetZ float32, needsStepUp,
 
 	for bx := minX; bx <= maxX; bx++ {
 		for by := minY; by <= maxY; by++ {
-			if WallScanSkipsRow(by, minY, descentFromY, groundedStepUp, linkDescends) {
+			if WallScanSkipsRow(by, minY, descentFromY, groundedStepUp, linkDescends, stepTargetY, tc.NextY) {
 				continue
 			}
 			for bz := minZ; bz <= maxZ; bz++ {
@@ -205,8 +255,15 @@ func (tc *TickContext) checkWallCollision(targetX, targetZ float32, needsStepUp,
 //   - rows below descentFromY while following a descending path link: that is the
 //     corridor between the two A*-validated nodes — the ledge being left behind — so a
 //     body sunk toward the landing level must never read it as a wall.
-func WallScanSkipsRow(by, minY, descentFromY int32, groundedStepUp, linkDescends bool) bool {
-	if groundedStepUp && by == minY {
+func WallScanSkipsRow(by, minY, descentFromY int32, groundedStepUp, linkDescends bool, stepTargetY int32, nextY float32) bool {
+	// If the maximum possible top of a block at this row (by + 1.0) is within
+	// the bot's auto-step height (0.6) from its current feet level (nextY),
+	// it cannot act as a horizontal wall. This allows walking on slabs (nextY=70.5)
+	// where the slab cell (by=70) would otherwise be seen as a solid wall.
+	if float32(by)+1.0 <= nextY+0.6 {
+		return true
+	}
+	if groundedStepUp && (by == minY || by == stepTargetY) {
 		return true
 	}
 	return linkDescends && by < descentFromY
@@ -280,7 +337,7 @@ func controlledDescentY(currentY, physicsNextY, targetY float32, drop int32) (fl
 }
 
 // pathAllowsForwardWithoutGround is true when the active path expects a gap
-// jump or the next stand node already has floor support.
+// jump or step jump.
 func (tc *TickContext) pathAllowsForwardWithoutGround(feetY int32) bool {
 	if !tc.HasPath || tc.B.WorldModel == nil {
 		return false
@@ -302,12 +359,7 @@ func (tc *TickContext) pathAllowsForwardWithoutGround(feetY int32) bool {
 			return true
 		}
 	}
-	floorY := next.Y - 1
-	if floorY < feetY-3 {
-		return false
-	}
-	return tc.B.WorldModel.IsSolid(next.X, floorY, next.Z) &&
-		!tc.B.WorldModel.IsHazard(next.X, floorY, next.Z)
+	return false
 }
 
 func (tc *TickContext) hasGroundSupportAt(x, z float32, feetY int32) bool {
@@ -357,9 +409,9 @@ func (tc *TickContext) logVenityWalkBlocked(baseY int32, hasSupport, pathGap, de
 	if (!tc.B.VenityCompat && !tc.B.GeyserCompat) || !debuglog.Enabled() {
 		return
 	}
-	if !tc.B.VenityCompat || !debuglog.Enabled() {
-		return
-	}
+	// Geyser is admitted on the first gate above, not the second: a forward
+	// step this host cancels used to log nothing at all, and a stuck bot whose
+	// only symptom was silence could not be told apart from a bot still thinking.
 	if tc.Tick%10 != 0 {
 		return
 	}

@@ -167,3 +167,5 @@ func TestIsLoadedDistinguishesAirFromUnknown(t *testing.T) {
 		t.Error("model without a chunk querier reported unknown, want permissive")
 	}
 }
+
+func (loadedRectQuerier) BlockName(rid uint32) (string, bool) { return "", false }

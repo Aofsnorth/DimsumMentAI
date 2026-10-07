@@ -398,12 +398,13 @@ func (s ServerConfig) LANDiscoveryEnabled() bool {
 }
 
 type BotConfig struct {
-	Name       string `yaml:"name"`
-	Language   string `yaml:"language"`
-	LogLevel   string `yaml:"log_level"`
-	StatePath  string `yaml:"state_path"`
-	MemoryPath string `yaml:"memory_path"`
-	Debug      bool   `yaml:"debug"`
+	Name       string   `yaml:"name"`
+	Aliases    []string `yaml:"aliases"` // custom tag aliases/nicknames to address the bot (e.g. ["Luna", "luna"])
+	Language   string   `yaml:"language"`
+	LogLevel   string   `yaml:"log_level"`
+	StatePath  string   `yaml:"state_path"`
+	MemoryPath string   `yaml:"memory_path"`
+	Debug      bool     `yaml:"debug"`
 
 	// JoinMessages are sent once after every successful join, and again after
 	// every rejoin or server switch. A line starting with "/" is sent as a real
@@ -427,16 +428,63 @@ type SkinConfig struct {
 }
 
 type AIConfig struct {
-	Provider                  string  `yaml:"provider"` // openai_compatible, anthropic_compatible, google_compatible, nvidia, none
-	Model                     string  `yaml:"model"`
-	BaseURL                   string  `yaml:"base_url"` // endpoint URL; empty uses provider default (nvidia only). Required for the *_compatible providers.
-	MainPlayer                string  `yaml:"main_player"`
-	RespondOnlyToLinkedPlayer bool    `yaml:"respond_only_to_linked_player"`
-	RespondOnlyWhenTagged     bool    `yaml:"respond_only_when_tagged"`
-	CustomPersonality         string  `yaml:"custom_personality"`
-	ContextWindow             int     `yaml:"context_window"`         // override model context window in tokens; 0 = auto-detect. Bot uses 25% of this as its request budget.
-	ProactiveIntervalSec      int     `yaml:"proactive_interval_sec"` // 0 = disabled. Periodic autonomous conversation tick.
-	ProactiveChance           float64 `yaml:"proactive_chance"`       // 0.0-1.0, probability of actually querying LLM each tick.
+	Provider                  string   `yaml:"provider"` // openai_compatible, anthropic_compatible, google_compatible, nvidia, none
+	Model                     string   `yaml:"model"`
+	BaseURL                   string   `yaml:"base_url"` // endpoint URL; empty uses provider default (nvidia only). Required for the *_compatible providers.
+	MainPlayer                string   `yaml:"main_player"`
+	MainPlayers               []string `yaml:"main_players"` // support multiple linked players
+	RespondOnlyToLinkedPlayer bool     `yaml:"respond_only_to_linked_player"`
+	RespondOnlyWhenTagged     bool     `yaml:"respond_only_when_tagged"`
+	TagAliases                []string `yaml:"tag_aliases"`      // optional additional aliases recognized when tagged
+	OnlyTagAliases            bool     `yaml:"only_tag_aliases"` // true = only names in tag_aliases can be tagged
+	CustomPersonality         string   `yaml:"custom_personality"`
+	ContextWindow             int      `yaml:"context_window"`         // override model context window in tokens; 0 = auto-detect. Bot uses 25% of this as its request budget.
+	ProactiveIntervalSec      int      `yaml:"proactive_interval_sec"` // 0 = disabled. Periodic autonomous conversation tick.
+	ProactiveChance           float64  `yaml:"proactive_chance"`       // 0.0-1.0, probability of actually querying LLM each tick.
+}
+
+// GetMainPlayers returns the consolidated list of configured main players.
+// It merges MainPlayers and comma-separated tokens in MainPlayer.
+func (cfg AIConfig) GetMainPlayers() []string {
+	seen := make(map[string]bool)
+	var result []string
+	add := func(name string) {
+		trimmed := strings.TrimSpace(name)
+		if trimmed == "" {
+			return
+		}
+		lower := strings.ToLower(trimmed)
+		if !seen[lower] {
+			seen[lower] = true
+			result = append(result, trimmed)
+		}
+	}
+	for _, p := range cfg.MainPlayers {
+		add(p)
+	}
+	if cfg.MainPlayer != "" {
+		for _, part := range strings.Split(cfg.MainPlayer, ",") {
+			add(part)
+		}
+	}
+	return result
+}
+
+// IsMainPlayer checks if the given player name matches any configured main player.
+func (cfg AIConfig) IsMainPlayer(name string) bool {
+	if name == "" {
+		return false
+	}
+	cleanName := strings.TrimSpace(name)
+	cleanNameNoDot := strings.TrimPrefix(cleanName, ".")
+	for _, p := range cfg.GetMainPlayers() {
+		cleanP := strings.TrimSpace(p)
+		cleanPNoDot := strings.TrimPrefix(cleanP, ".")
+		if strings.EqualFold(cleanName, cleanP) || strings.EqualFold(cleanNameNoDot, cleanPNoDot) {
+			return true
+		}
+	}
+	return false
 }
 
 type ChatConfig struct {

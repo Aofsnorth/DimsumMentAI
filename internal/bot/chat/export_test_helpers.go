@@ -7,7 +7,11 @@
 
 package chat
 
-import "bedrock-ai/internal/bot/action"
+import (
+	"bedrock-ai/internal/bot"
+	"bedrock-ai/internal/bot/action"
+	"bedrock-ai/internal/event"
+)
 
 // MovementActionsForTest exposes the movement-intent matcher.
 func MovementActionsForTest(msg string) []action.Step {
@@ -17,6 +21,11 @@ func MovementActionsForTest(msg string) []action.Step {
 // IsStopFollowingIntentForTest exposes the opt-out matcher.
 func IsStopFollowingIntentForTest(msg string) bool {
 	return isStopFollowingIntent(msg)
+}
+
+// IsStopAttackIntentForTest exposes the combat opt-out matcher.
+func IsStopAttackIntentForTest(msg string) bool {
+	return isStopAttackIntent(msg)
 }
 
 // IsAffirmativeReplyForTest exposes the reply matcher that decides whether a
@@ -31,4 +40,19 @@ func IsAffirmativeReplyForTest(reply string) bool { return isAffirmativeReply(re
 // step came back.
 func InferActionIntentForTest(msg, reply string) []action.Step {
 	return inferActionIntent(msg, reply)
+}
+
+// IsTaggedInMessageForTest exposes the tag matcher for test assertions.
+func IsTaggedInMessageForTest(msg, botName string, extraTags ...string) bool {
+	return isTaggedInMessage(msg, botName, extraTags...)
+}
+
+// IsTaggedInBotForTest exposes the bot-aware tag matcher for test assertions.
+func IsTaggedInBotForTest(msg string, b *bot.Bot) bool {
+	return isTaggedInBot(msg, b)
+}
+
+// ShouldProcessChatForTest exposes shouldProcessChat for test assertions.
+func ShouldProcessChatForTest(b *bot.Bot, evt event.ChatEvent, msg, botName string) bool {
+	return shouldProcessChat(b, evt, msg, botName)
 }

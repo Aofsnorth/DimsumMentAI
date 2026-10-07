@@ -181,12 +181,16 @@ func main() {
 	}
 
 	// --- Bot ---
+	tagAliases := append([]string{}, cfg.Bot.Aliases...)
+	tagAliases = append(tagAliases, cfg.AI.TagAliases...)
+
 	b, err := bot.New(
 		bot.WithLogger(logger),
 		bot.WithDialer(dialer.Dial),
 		bot.WithRegistry(registry),
 		bot.WithEventBus(bus),
 		bot.WithName(cfg.Bot.Name),
+		bot.WithTagAliases(tagAliases),
 		bot.WithServerHost(cfg.Server.Host, cfg.Server.GeyserOverride()),
 		bot.WithLanguage(cfg.Bot.Language),
 		bot.WithStatePath(cfg.Bot.StatePath),

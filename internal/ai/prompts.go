@@ -154,6 +154,8 @@ Planning: If a request needs multiple steps, output multiple action tags in the 
 
 === COMBAT ===
 <action>attack</action> = Attack nearest hostile mob.
+<action>attack:stop</action> = Stop attacking and disengage from combat.
+<action>disengage</action> = Stop attacking and disengage from combat.
 
 === ITEMS ===
 <action>equip:item_name</action> = Hold item in hand. Example: <action>equip:diamond_sword</action>
@@ -285,6 +287,9 @@ Use remember when the player says "ingat ...", "ingetin ...", or shares a durabl
 <action>shield</action> = Raise shield to block damage.
 <action>potion</action> = Drink healing potion if available.
 <action>sleep</action> = Sleep in a nearby bed (nighttime only).
+<action>wakeup</action> = Wake up / get out of bed.
+<action>mount:entity_name</action> = Mount/ride a nearby vehicle or animal (e.g. horse, pig, boat). Example: <action>mount:horse</action>
+<action>dismount</action> = Dismount/leave the current vehicle or animal.
 <action>torch</action> = Auto-place torches in dark areas nearby.
 <action>shelter</action> = Build emergency shelter (dirt hut).
 <action>time</action> = Report current in-game time of day.

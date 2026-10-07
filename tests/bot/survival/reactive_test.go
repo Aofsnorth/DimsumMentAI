@@ -27,6 +27,13 @@ type fakeBot struct {
 	names     map[int32]string
 	// equipped records every slot passed to EquipItem, in order.
 	equipped []uint32
+	// written records every packet passed to WritePacket.
+	written []packet.Packet
+	// queued records every inline item interaction.
+	queued []protocol.UseItemTransactionData
+	// held is the selected hotbar slot; EquipItem of a main-inventory slot
+	// swaps the stack into it, like the real bot does.
+	held uint32
 }
 
 func newFakeBot() *fakeBot {
@@ -37,18 +44,26 @@ func newFakeBot() *fakeBot {
 	}
 }
 
-func (f *fakeBot) GetCoords() mgl32.Vec3                             { return mgl32.Vec3{} }
-func (f *fakeBot) WritePacket(pk packet.Packet) error                { return nil }
-func (f *fakeBot) GetEntities() map[uint64]*entity.Info              { return nil }
-func (f *fakeBot) NavigateTo(pos mgl32.Vec3)                         {}
-func (f *fakeBot) NavigateToBlock(x, y, z int32, tol float32) bool   { return true }
-func (f *fakeBot) StopMovement()                                     {}
-func (f *fakeBot) LookAt(pos mgl32.Vec3)                             {}
-func (f *fakeBot) InjectAIEvent(msg string)                          {}
-func (f *fakeBot) GetHeldItemSlot() uint32                           { return 0 }
-func (f *fakeBot) GetInventorySlots() map[uint32]protocol.ItemStack  { return f.inventory }
-func (f *fakeBot) GetItemNames() map[int32]string                    { return f.names }
-func (f *fakeBot) EquipItem(slot uint32) error                       { f.equipped = append(f.equipped, slot); return nil }
+func (f *fakeBot) GetCoords() mgl32.Vec3                            { return mgl32.Vec3{} }
+func (f *fakeBot) WritePacket(pk packet.Packet) error               { f.written = append(f.written, pk); return nil }
+func (f *fakeBot) GetEntities() map[uint64]*entity.Info             { return nil }
+func (f *fakeBot) NavigateTo(pos mgl32.Vec3)                        {}
+func (f *fakeBot) NavigateToBlock(x, y, z int32, tol float32) bool  { return true }
+func (f *fakeBot) StopMovement()                                    {}
+func (f *fakeBot) LookAt(pos mgl32.Vec3)                            {}
+func (f *fakeBot) InjectAIEvent(msg string)                         {}
+func (f *fakeBot) GetHeldItemSlot() uint32                          { return f.held }
+func (f *fakeBot) GetInventorySlots() map[uint32]protocol.ItemStack { return f.inventory }
+func (f *fakeBot) GetItemNames() map[int32]string                   { return f.names }
+func (f *fakeBot) EquipItem(slot uint32) error {
+	f.equipped = append(f.equipped, slot)
+	if slot >= 9 {
+		f.inventory[f.held], f.inventory[slot] = f.inventory[slot], f.inventory[f.held]
+	} else {
+		f.held = slot
+	}
+	return nil
+}
 func (f *fakeBot) UnequipItem() error                                { return nil }
 func (f *fakeBot) SendChat(msg string)                               {}
 func (f *fakeBot) ReportActionStatus(u string, s event.ActionStatus) {}
@@ -59,6 +74,10 @@ func (f *fakeBot) GetBlockName(x, y, z int32) (string, bool) {
 	return n, ok
 }
 func (f *fakeBot) IsBusy() bool { return f.busy }
+func (f *fakeBot) QueueItemInteractionData(d protocol.UseItemTransactionData) error {
+	f.queued = append(f.queued, d)
+	return nil
+}
 
 func newTestManager(b *fakeBot) *survival.Manager {
 	return survival.NewManager(b, slog.New(slog.NewTextHandler(io.Discard, nil)))

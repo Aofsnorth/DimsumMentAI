@@ -21,6 +21,7 @@ type ChunkQuerier interface {
 	GetBlockRID(x, y, z int32) (rid uint32, loaded bool)
 	IsBlockAir(x, y, z int32) (isAir bool, loaded bool)
 	IsBlockSolid(x, y, z int32) (isSolid bool, loaded bool)
+	BlockName(rid uint32) (string, bool)
 }
 
 type LocalWorldModel struct {
@@ -322,6 +323,25 @@ func (w *LocalWorldModel) SetTempSolid(x, y, z int32, duration time.Duration) {
 	w.tempSolidBlocks[PackBlockKey(x, y, z)] = time.Now().Add(duration)
 }
 
+// HasTempSolidMarkers reports whether any temporary solid penalties are currently recorded.
+func (w *LocalWorldModel) HasTempSolidMarkers() bool {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+	return len(w.tempSolidBlocks) > 0
+}
+
+// ClearTempSolid drops every stuck-recovery marker at once.
+//
+// Markers are penalties earned by one trip; a new command must not inherit
+// them, or the second "come" walks into a fence the first trip's recovery
+// built around the route it is now being asked to take. Real terrain answers
+// are untouched: overrides from mining/placing live in solidBlocks.
+func (w *LocalWorldModel) ClearTempSolid() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.tempSolidBlocks = make(map[int64]time.Time)
+}
+
 func (w *LocalWorldModel) IsSolid(x, y, z int32) bool {
 	w.mu.RLock()
 	defer w.mu.RUnlock()
@@ -353,7 +373,17 @@ func (w *LocalWorldModel) IsSolid(x, y, z int32) bool {
 	if w.chunkQuerier != nil {
 		isSolid, loaded := w.chunkQuerier.IsBlockSolid(x, y, z)
 		if loaded {
-			return isSolid
+			if isSolid {
+				return true
+			}
+			// Start node footing: if the bot is physically at (startX, startY, startZ),
+			// the block immediately under its feet (startY-1) is where it is standing.
+			// Treating it as solid ensures start node footing is recognized even on
+			// proxy/modded palettes where the block might be a non-full block or unmapped.
+			if w.hasBounds && x == w.startX && y == w.startY-1 && z == w.startZ {
+				return true
+			}
+			return false
 		}
 	}
 

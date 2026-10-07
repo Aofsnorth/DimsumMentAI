@@ -326,7 +326,13 @@ func (b *Bot) connect(ctx context.Context) (*minecraft.Conn, minecraft.GameData,
 }
 
 func (b *Bot) initSpawn(gd minecraft.GameData) {
+	b.WorldCache.SetLogger(b.Logger)
+	b.Logger.Info("start game block palette", "custom_blocks", len(gd.CustomBlocks), "hashes", gd.UseBlockNetworkIDHashes, "geyser", b.GeyserCompat)
 	b.WorldCache.SetUseBlockNetworkIDHashes(gd.UseBlockNetworkIDHashes)
+	b.WorldCache.SetGeyserCompat(b.GeyserCompat)
+	if len(gd.CustomBlocks) > 0 {
+		b.WorldCache.SetCustomBlocks(gd.CustomBlocks)
+	}
 	b.Mu.Lock()
 	b.Pos = gd.PlayerPosition.Sub(mgl32.Vec3{0, 1.62, 0})
 	b.Yaw = gd.Yaw

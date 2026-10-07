@@ -27,8 +27,8 @@ func TestDetectHansProjectsAsGeyser(t *testing.T) {
 		if !p.NoHeldItemEcho {
 			t.Errorf("Detect(%q).NoHeldItemEcho = false, want true", host)
 		}
-		if !p.IdleNudge {
-			t.Errorf("Detect(%q).IdleNudge = false, want true", host)
+		if p.IdleNudge {
+			t.Errorf("Detect(%q).IdleNudge = true, want false (disabled by default)", host)
 		}
 		if !p.SlashCommandFirst {
 			t.Errorf("Detect(%q).SlashCommandFirst = false, want true", host)

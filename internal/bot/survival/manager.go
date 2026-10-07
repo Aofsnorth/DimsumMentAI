@@ -15,7 +15,6 @@ import (
 
 	"bedrock-ai/internal/bot/entity"
 	"bedrock-ai/internal/event"
-	"bedrock-ai/internal/safecast"
 )
 
 // Bot interface for survival subsystem
@@ -38,6 +37,9 @@ type Bot interface {
 	GetEntityRuntimeID() uint64
 	GetLocalWorldModel() entity.WorldModel
 	GetBlockName(x, y, z int32) (string, bool)
+	// QueueItemInteractionData embeds a use-item transaction in the next
+	// PlayerAuthInput (the 1.21.90+ client's way of using an item).
+	QueueItemInteractionData(data protocol.UseItemTransactionData) error
 	// IsBusy reports whether the bot is already occupied. The reactive loop
 	// uses it to decide whether a self-care action may interrupt, and it is the
 	// same definition the AGI loop uses, so the two never disagree about
@@ -185,18 +187,9 @@ func (m *Manager) UseHealingPotion() bool {
 				time.Sleep(150 * time.Millisecond)
 
 				// Use the potion (same as eating)
-				tx := &packet.InventoryTransaction{
-					TransactionData: &protocol.UseItemTransactionData{
-						ActionType:      protocol.UseItemActionClickBlock,
-						BlockPosition:   protocol.BlockPos{0, -1, 0},
-						BlockFace:       255,
-						HotBarSlot:      safecast.To[int32](slot),
-						HeldItem:        protocol.ItemInstance{Stack: item},
-						Position:        m.bot.GetCoords(),
-						ClickedPosition: mgl32.Vec3{0, 0, 0},
-					},
+				if !m.useHeldItem() {
+					continue
 				}
-				_ = m.bot.WritePacket(tx)
 				time.Sleep(1000 * time.Millisecond)
 
 				m.mu.Lock()

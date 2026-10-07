@@ -13,6 +13,7 @@ import (
 	"bedrock-ai/internal/bot/entity"
 	"bedrock-ai/internal/bot/perception"
 	"bedrock-ai/internal/event"
+	"bedrock-ai/internal/handler"
 )
 
 // HandleIncomingChat handles messages from players and queries the LLM when
@@ -23,6 +24,20 @@ func HandleIncomingChat(ctx context.Context, b *bot.Bot, evt event.ChatEvent) {
 	if msg == "" {
 		b.Logger.Info("chat ignored: empty message")
 		return
+	}
+
+	// If source is missing, extract sender from message prefix using bot's known player tracking
+	if evt.SourceName == "" {
+		if sender, cleanMsg, ok := handler.ExtractChatSenderAndMessage(msg, b.FindKnownPlayer); ok {
+			evt.SourceName = sender
+			msg = cleanMsg
+			evt.Message = cleanMsg
+		}
+	} else {
+		// Clean any prefix/rank from SourceName if it's like "MEMBER Synterix" or "[VIP] Synterix"
+		if canonical, ok := b.FindKnownPlayer(evt.SourceName); ok {
+			evt.SourceName = canonical
+		}
 	}
 
 	botName := b.Name
@@ -81,6 +96,15 @@ func HandleIncomingChat(ctx context.Context, b *bot.Bot, evt event.ChatEvent) {
 		b.DisableImplicitFollow(evt.SourceName)
 		b.Logger.Info("chat: following stopped by request", slog.String("from", evt.SourceName))
 		b.SendSafeChat("Siap, aku berhenti ikutin.")
+		return
+	}
+
+	if isStopAttackIntent(msg) {
+		if b.CombatMgr != nil {
+			b.CombatMgr.Disengage()
+		}
+		b.Logger.Info("chat: combat stopped by request", slog.String("from", evt.SourceName))
+		b.SendSafeChat("Siap, aku berhenti menyerang.")
 		return
 	}
 
@@ -179,18 +203,23 @@ func shouldProcessChat(b *bot.Bot, evt event.ChatEvent, msg, botName string) boo
 		return false
 	}
 
-	if b.AiCfg.RespondOnlyToLinkedPlayer && b.AiCfg.MainPlayer != "" {
-		if !strings.EqualFold(evt.SourceName, b.AiCfg.MainPlayer) {
-			b.Logger.Info("chat ignored: not linked main player",
-				slog.String("source", evt.SourceName),
-				slog.String("main_player", b.AiCfg.MainPlayer),
-			)
-			return false
+	if b.AiCfg.RespondOnlyToLinkedPlayer {
+		mainPlayers := b.AiCfg.GetMainPlayers()
+		if len(mainPlayers) > 0 {
+			if !b.AiCfg.IsMainPlayer(evt.SourceName) {
+				b.Logger.Info("chat ignored: not linked main player",
+					slog.String("source", evt.SourceName),
+					slog.String("main_players", strings.Join(mainPlayers, ", ")),
+				)
+				return false
+			}
 		}
 	}
 
+	isTagged := isTaggedInBot(msg, b)
+
 	if b.AiCfg.RespondOnlyWhenTagged {
-		if !isTaggedInMessage(msg, botName) {
+		if !isTagged {
 			b.Logger.Info("chat ignored: bot not tagged in message",
 				slog.String("msg", msg),
 				slog.String("bot_name", botName),
@@ -199,34 +228,160 @@ func shouldProcessChat(b *bot.Bot, evt event.ChatEvent, msg, botName string) boo
 		}
 	}
 
-	if b.AiCfg.MainPlayer == "" {
+	if len(b.AiCfg.GetMainPlayers()) == 0 {
 		pCoords, ok := b.GetPlayerCoords(evt.SourceName)
 		if !ok {
-			b.Logger.Info("chat ignored: player position unknown", slog.String("player", evt.SourceName))
-			return false
-		}
-		botCoords := b.GetCoords()
-		dx := pCoords.X() - botCoords.X()
-		dy := pCoords.Y() - botCoords.Y()
-		dz := pCoords.Z() - botCoords.Z()
-		dist := float32(mathSqrt(float64(dx*dx + dy*dy + dz*dz)))
-		if dist > 10.0 {
-			b.Logger.Info("chat ignored: player too far",
-				slog.String("player", evt.SourceName),
-				slog.Float64("distance", float64(dist)),
-			)
-			return false
+			if !isTagged {
+				b.Logger.Info("chat ignored: player position unknown", slog.String("player", evt.SourceName))
+				return false
+			}
+			b.Logger.Debug("player position unknown for tagged chat, proceeding", slog.String("player", evt.SourceName))
+		} else {
+			botCoords := b.GetCoords()
+			dx := pCoords.X() - botCoords.X()
+			dy := pCoords.Y() - botCoords.Y()
+			dz := pCoords.Z() - botCoords.Z()
+			dist := float32(mathSqrt(float64(dx*dx + dy*dy + dz*dz)))
+			maxDist := float32(10.0)
+			if isTagged {
+				maxDist = 64.0
+			}
+			if dist > maxDist {
+				b.Logger.Info("chat ignored: player too far",
+					slog.String("player", evt.SourceName),
+					slog.Float64("distance", float64(dist)),
+					slog.Float64("max_distance", float64(maxDist)),
+				)
+				return false
+			}
 		}
 	}
 
 	return true
 }
 
+// isTaggedInBot reports whether the message explicitly mentions the bot. It checks
+// the bot's active username, original configured name, and any configured aliases.
+func isTaggedInBot(msg string, b *bot.Bot) bool {
+	if b == nil {
+		return false
+	}
+	b.Mu.Lock()
+	activeName := b.Name
+	cfgName := b.ConfiguredName
+	tagAliases := append([]string{}, b.TagAliases...)
+	aiAliases := append([]string{}, b.AiCfg.TagAliases...)
+	onlyAliases := b.AiCfg.OnlyTagAliases
+	b.Mu.Unlock()
+
+	if onlyAliases {
+		extra := make([]string, 0, len(tagAliases)+len(aiAliases))
+		extra = append(extra, tagAliases...)
+		extra = append(extra, aiAliases...)
+		return isTaggedInMessage(msg, "", extra...)
+	}
+
+	extra := make([]string, 0, 2+len(tagAliases)+len(aiAliases))
+	if cfgName != "" {
+		extra = append(extra, cfgName)
+	}
+	extra = append(extra, tagAliases...)
+	extra = append(extra, aiAliases...)
+
+	return isTaggedInMessage(msg, activeName, extra...)
+}
+
 // isTaggedInMessage reports whether the message explicitly mentions the bot.
-func isTaggedInMessage(msg, botName string) bool {
+// It checks botName as well as any extra candidate tags/aliases.
+func isTaggedInMessage(msg, botName string, extraTags ...string) bool {
 	msgLower := strings.ToLower(msg)
-	botNameLower := strings.ToLower(botName)
-	return strings.Contains(msgLower, botNameLower) || strings.Contains(msgLower, "@"+botNameLower)
+	allTags := make([]string, 0, len(extraTags)+2)
+	if botName != "" {
+		allTags = append(allTags, botName)
+	}
+	allTags = append(allTags, extraTags...)
+
+	for _, tag := range allTags {
+		tag = strings.TrimSpace(tag)
+		if tag == "" {
+			continue
+		}
+		tagLower := strings.ToLower(tag)
+
+		// Check tag directly (with @ and word-boundary)
+		if matchWordOrTag(msgLower, tagLower) {
+			return true
+		}
+
+		// Also check without leading '.' (Bedrock/Geyser gamertag prefix)
+		if strings.HasPrefix(tagLower, ".") && len(tagLower) > 1 {
+			if matchWordOrTag(msgLower, strings.TrimPrefix(tagLower, ".")) {
+				return true
+			}
+		}
+
+		// Also check with leading '.'
+		if !strings.HasPrefix(tagLower, ".") {
+			if matchWordOrTag(msgLower, "."+tagLower) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func matchWordOrTag(msgLower, tagLower string) bool {
+	if tagLower == "" {
+		return false
+	}
+	// Direct @tag match with boundary (e.g. @Luna, @Luna!, @.Shiga)
+	atTag := "@" + tagLower
+	idx := 0
+	for {
+		pos := strings.Index(msgLower[idx:], atTag)
+		if pos < 0 {
+			break
+		}
+		absPos := idx + pos
+		endPos := absPos + len(atTag)
+		idx = endPos
+
+		leftOK := absPos == 0 || isBoundaryRune(rune(msgLower[absPos-1]))
+		rightOK := endPos == len(msgLower) || isBoundaryRune(rune(msgLower[endPos]))
+		if leftOK && rightOK {
+			return true
+		}
+	}
+
+	// Exact whole message match
+	if msgLower == tagLower {
+		return true
+	}
+	// Word boundary match for bare tag
+	idx = 0
+	for {
+		pos := strings.Index(msgLower[idx:], tagLower)
+		if pos < 0 {
+			break
+		}
+		absPos := idx + pos
+		endPos := absPos + len(tagLower)
+		idx = endPos
+
+		leftOK := absPos == 0 || isBoundaryRune(rune(msgLower[absPos-1]))
+		rightOK := endPos == len(msgLower) || isBoundaryRune(rune(msgLower[endPos]))
+
+		if leftOK && rightOK {
+			return true
+		}
+	}
+	return false
+}
+
+func isBoundaryRune(r rune) bool {
+	return r == ' ' || r == '\t' || r == '\n' || r == ',' || r == '.' || r == '!' || r == '?' ||
+		r == ':' || r == ';' || r == '@' || r == '>' || r == '<' || r == '(' || r == ')' ||
+		r == '"' || r == '\''
 }
 
 // handlePlanCommand handles explicit "plan:" prefix messages.
@@ -265,6 +420,18 @@ func buildChatContext(b *bot.Bot, sourceName, msg, botName string) string {
 		heldItem,
 		invSummary,
 	)
+
+	// Inform model of its display name and aliases so it recognizes when players address it by configured name
+	b.Mu.Lock()
+	cfgName := b.ConfiguredName
+	aliases := append([]string{}, b.TagAliases...)
+	b.Mu.Unlock()
+	if cfgName != "" && !strings.EqualFold(cfgName, botName) {
+		systemPrompt += fmt.Sprintf("\n- In addition to \"%s\", players also call you \"%s\" (or \"@%s\"). That name also refers to YOU.", botName, cfgName, cfgName)
+	}
+	if len(aliases) > 0 {
+		systemPrompt += fmt.Sprintf("\n- You also respond to tags/nicknames: %s.", strings.Join(aliases, ", "))
+	}
 
 	systemPrompt += "\n\n[GROUNDED PERCEPTION] Visible mobs (line-of-sight, non-item): " + visibleMobs + "."
 	systemPrompt += "\nVisible blocks nearby (line-of-sight, clickable ones can be used with interact): " + visibleBlocks + "."

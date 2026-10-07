@@ -4,6 +4,7 @@ package pathfinder
 
 import (
 	"fmt"
+	"math"
 	"strings"
 
 	"bedrock-ai/internal/debuglog"
@@ -68,6 +69,60 @@ func (w *LocalWorldModel) GetNeighbors(node Node) []Node {
 	return neighbors
 }
 
+// DebugClimbRefused explains, for a search that exhausted without reaching its
+// destination, which cell nearest the destination was the last one the bot could
+// stand on and what stopped it going further. Diagnostic-only.
+//
+// A*'s own exhaustion line reports the best node and the iteration count, which
+// says where the search stopped but never why. On a hub whose walkways are wall
+// tiles, "why" is always a height question — the bot can see the destination and
+// cannot climb to it — and every predicate involved reads a different block. This
+// dumps them together, per direction, from the frontier cell itself.
+func (w *LocalWorldModel) DebugClimbRefused(from, target Node) string {
+	w.mu.RLock()
+	hasBounds := w.hasBounds
+	w.mu.RUnlock()
+	footing := w.footingTopY()
+	out := fmt.Sprintf("frontier=(%d,%d,%d) target=(%d,%d,%d) dy=%d footingTop=%.2f footingIsWall=%v bounds=%v:",
+		from.X, from.Y, from.Z, target.X, target.Y, target.Z, target.Y-from.Y, footing,
+		hasBounds && w.isFenceOrWall(w.startX, w.startY-1, w.startZ), hasBounds)
+	for _, d := range []struct {
+		name   string
+		dx, dz int32
+	}{
+		{"N", 0, -1}, {"S", 0, 1}, {"E", 1, 0}, {"W", -1, 0},
+	} {
+		tx, tz := from.X+d.dx, from.Z+d.dz
+		// Same level: can we walk there? One up: can we jump there?
+		walk := w.canStandAt(tx, from.Y, tz)
+		_, stepJump := w.canStepJumpTo(d.dx, d.dz, 1, from)
+		// The neighbour's own floor, named, so "is it a wall" stops being a guess.
+		floorName := "?"
+		if w.chunkQuerier != nil {
+			if rid, ok := w.chunkQuerier.GetBlockRID(tx, from.Y-1, tz); ok {
+				if n, ok := blockNameFor(w.chunkQuerier, rid); ok {
+					floorName = n
+				} else {
+					floorName = "<unnamed>"
+				}
+			}
+		}
+		upName := "?"
+		if w.chunkQuerier != nil {
+			if rid, ok := w.chunkQuerier.GetBlockRID(tx, from.Y, tz); ok {
+				if n, ok := blockNameFor(w.chunkQuerier, rid); ok {
+					upName = n
+				} else {
+					upName = "<unnamed>"
+				}
+			}
+		}
+		out += fmt.Sprintf(" %s[walk=%v jump=%v floor=%s@y%d wall=%v up=%s]",
+			d.name, walk, stepJump, floorName, from.Y-1, w.isFenceOrWall(tx, from.Y-1, tz), upName)
+	}
+	return out
+}
+
 // DebugNeighborVeto explains why each cardinal direction from n was vetoed.
 // Diagnostic-only; called by A* when start expands to zero neighbors.
 func (w *LocalWorldModel) DebugNeighborVeto(n Node) string {
@@ -89,9 +144,16 @@ func (w *LocalWorldModel) DebugNeighborVeto(n Node) string {
 		headH := w.IsHazard(tx, n.Y+1, tz)
 		floorH := w.IsHazard(tx, n.Y-1, tz)
 		halfBlock := w.isHalfBlock(tx, n.Y-1, tz)
+		fenceWall := w.isFenceOrWall(tx, n.Y-1, tz)
 		ladder := w.IsLadder(tx, n.Y, tz)
-		out += fmt.Sprintf(" %s[canStand=%v isAir=%v feet=%v head=%v floor=%v feetHaz=%v headHaz=%v floorHaz=%v half=%v ladder=%v]",
-			d.name, canStand, isAir, feetS, headS, floorS, feetH, headH, floorH, halfBlock, ladder)
+		// Whether each climb construction can leave this cell. Without these a
+		// dump that shows every flat move vetoed reads as "boxed in" even when
+		// the real answer is "the only way out is a jump, and the jump rule
+		// refused it" — which is a different bug in a different predicate.
+		_, stepJump := w.canStepJumpTo(d.dx, d.dz, 1, n)
+		_, parkour := w.canParkourTo(d.dx, d.dz, 2, n)
+		out += fmt.Sprintf(" %s[canStand=%v isAir=%v feet=%v head=%v floor=%v feetHaz=%v headHaz=%v floorHaz=%v half=%v fenceWall=%v ladder=%v stepJump=%v parkour=%v]",
+			d.name, canStand, isAir, feetS, headS, floorS, feetH, headH, floorH, halfBlock, fenceWall, ladder, stepJump, parkour)
 	}
 	return out
 }
@@ -249,7 +311,15 @@ func (w *LocalWorldModel) diagonalSidesClear(cx, cy, cz, dx, dz int32) bool {
 		!w.IsHazard(cx+dx, cy, cz) && !w.IsHazard(cx+dx, cy+1, cz)
 	adj2Clear := !w.IsSolid(cx, cy, cz+dz) && !w.IsSolid(cx, cy+1, cz+dz) &&
 		!w.IsHazard(cx, cy, cz+dz) && !w.IsHazard(cx, cy+1, cz+dz)
-	return adj1Clear && adj2Clear
+	if !adj1Clear || !adj2Clear {
+		return false
+	}
+	// Diagonal movement sweeps across adjacent cells. Both adjacent cells must
+	// have solid floor support so the bot doesn't cut across a corner with no ground
+	// and drop into a gap or pit.
+	adj1Floor := w.IsSolid(cx+dx, cy-1, cz) && !w.IsHazard(cx+dx, cy-1, cz)
+	adj2Floor := w.IsSolid(cx, cy-1, cz+dz) && !w.IsHazard(cx, cy-1, cz+dz)
+	return adj1Floor && adj2Floor
 }
 
 // appendScaffoldNeighbors adds mining, placing, and tower-up neighbors when scaffolding is allowed.
@@ -354,7 +424,7 @@ func (w *LocalWorldModel) canStandAt(x, y, z int32) bool {
 			if w.isClimbableSurface(x, y-1, z) {
 				return true
 			}
-			if w.isHalfBlock(x, y-1, z) {
+			if w.wallBlocksStanding(x, y, z) {
 				return false
 			}
 			return true
@@ -364,6 +434,74 @@ func (w *LocalWorldModel) canStandAt(x, y, z int32) bool {
 		}
 	}
 	return false
+}
+
+// wallBlocksStanding reports whether the fence or wall under (x, y, z) stands in
+// the body's way instead of carrying it.
+//
+// A wall or fence is 1.5 blocks tall, so its collision top sits half a block
+// above the top of its own cell. Two things follow, and the bot has to be
+// treated correctly on both:
+//
+//   - A body whose feet are at node level y is INSIDE a wall occupying y-1: the
+//     wall reaches y+0.5. Nobody stands there, and planning a route through such
+//     a cell walks the bot into a wall forever. That is the veto that has to
+//     stay.
+//   - But the bot itself is very often standing on one of those walls. A hub
+//     built from granite_wall / tuff_brick_wall tiles decodes every walkway tile
+//     that way, so the bot's feet rest at y+0.5 — half a block above the node
+//     level the start calculation derives from floor(feet). Vetoing those
+//     unconditionally meant the bot's own foothold read as unusable:
+//     canStandAt returned false for every neighbour, GetNeighbors returned
+//     nothing, and A* dead-ended with zero nodes on a surface the bot was
+//     visibly standing on.
+//
+// So the test is not "is it a wall" but "is its top too high to walk onto from
+// where the bot is standing". Climbing onto a wall is refused; walking across
+// the tops of walls is allowed, because there the wall is the floor rather than
+// a barrier.
+func (w *LocalWorldModel) wallBlocksStanding(x, y, z int32) bool {
+	if !w.isFenceOrWall(x, y-1, z) {
+		return false
+	}
+	// A wall or fence is 1.5 blocks tall (top at y+0.5), so a standing body's head
+	// reaches y+2.3 and requires the ceiling cell at y+2 to be clear.
+	return w.IsSolid(x, y+2, z) || w.IsHazard(x, y+2, z)
+}
+
+// wallTopOverCell is how far a wall or fence's collision top rises above the top
+// of the cell it occupies (1.5 blocks tall in a 1-block cell).
+const wallTopOverCell = 0.5
+
+// maxStepUp is the tallest ledge a player walks up without jumping (0.6 blocks,
+// Minecraft's step height).
+//
+// It matters because the two footing heights a wall surface can present are half
+// a block apart. A bot standing on ordinary ground has its feet at exactly the
+// node level; a bot standing on a wall has them half a block higher. Comparing
+// those two heights with nothing else — which is what this rule did first —
+// vetoes the ordinary-ground-to-wall-surface transition. That transition is a
+// half-block step, which a player makes without thinking, and the bot refused it:
+// standing at the edge of a lobby paved in tuff_brick_wall, every tile inside it
+// read as unclimbable and A* could not enter the lobby at all.
+const maxStepUp = 0.6
+
+// footingTopY is the height the bot's feet currently rest at, which is what a
+// neighbouring floor has to be compared against.
+//
+// It is not always the node level. Standing on a wall or fence puts the feet
+// half a block above the top of the floor's cell, and that difference is the
+// whole question — so it is read from the world rather than assumed.
+func (w *LocalWorldModel) footingTopY() float64 {
+	if !w.hasBounds {
+		// No trip in progress, so there is no known footing. Refuse the climb
+		// rather than invent one.
+		return math.Inf(-1)
+	}
+	if w.isFenceOrWall(w.startX, w.startY-1, w.startZ) {
+		return float64(w.startY) + wallTopOverCell
+	}
+	return float64(w.startY)
 }
 
 // tryDrop searches up to maxSafeStandDrop blocks down for a safe landing.
@@ -411,8 +549,13 @@ func (w *LocalWorldModel) canParkourTo(dx, dz, distance int32, node Node) (Node,
 }
 
 func (w *LocalWorldModel) parkourStartClear(cx, cy, cz int32) bool {
-	if w.IsHazard(cx, cy-1, cz) || !w.IsSolid(cx, cy-1, cz) {
+	if w.IsHazard(cx, cy-1, cz) {
 		return false
+	}
+	if !(w.hasBounds && cx == w.startX && cy == w.startY && cz == w.startZ) {
+		if !w.IsSolid(cx, cy-1, cz) {
+			return false
+		}
 	}
 	return !w.IsSolid(cx, cy+1, cz) && !w.IsSolid(cx, cy+2, cz)
 }
@@ -448,30 +591,46 @@ func (w *LocalWorldModel) canStepJumpTo(dx, dz, distance int32, node Node) (Node
 	tz := cz + dz*distance
 	ty := cy + 1
 
-	if !w.stepJumpTargetClear(tx, ty, tz) {
+	if !w.stepJumpTargetClear(tx, ty, tz, node) {
 		return Node{}, false
 	}
 	if !w.stepJumpGapClear(cx, cy, cz, dx, dz, distance) {
 		return Node{}, false
 	}
 
-	return Node{X: tx, Y: ty, Z: tz, G: node.G + 3.0 + float32(distance)*1.5, LinkType: LinkStepJump}, true
+	cost := float32(3.0) + float32(distance)*1.5
+	if distance == 1 && (w.isHalfBlock(cx, cy-1, cz) || w.isHalfBlock(tx, ty-1, tz)) {
+		cost = 1.2
+	}
+	return Node{X: tx, Y: ty, Z: tz, G: node.G + cost, LinkType: LinkStepJump}, true
 }
 
 func (w *LocalWorldModel) stepJumpStartClear(cx, cy, cz int32) bool {
-	if w.IsHazard(cx, cy-1, cz) || !w.IsSolid(cx, cy-1, cz) {
+	if w.IsHazard(cx, cy-1, cz) {
 		return false
+	}
+	// At the bot's own current start position, the bot is already standing there.
+	// Allow jumping out of a pit or hole even if the block beneath reads as non-solid.
+	if !(w.hasBounds && cx == w.startX && cy == w.startY && cz == w.startZ) {
+		if !w.IsSolid(cx, cy-1, cz) {
+			return false
+		}
 	}
 	return !w.IsSolid(cx, cy+1, cz) && !w.IsSolid(cx, cy+2, cz)
 }
 
-func (w *LocalWorldModel) stepJumpTargetClear(tx, ty, tz int32) bool {
+func (w *LocalWorldModel) stepJumpTargetClear(tx, ty, tz int32, from Node) bool {
 	if !w.IsSolid(tx, ty-1, tz) || w.IsHazard(tx, ty-1, tz) {
 		return false
 	}
-	if w.isHalfBlock(tx, ty-1, tz) {
-		return !w.IsSolid(tx, ty+1, tz) && !w.IsSolid(tx, ty+2, tz) &&
-			!w.IsHazard(tx, ty+1, tz) && !w.IsHazard(tx, ty+2, tz)
+	if w.isFenceOrWall(tx, ty-1, tz) {
+		// A wall or fence is 1.5 blocks tall. Stepping onto it from below is
+		// only possible when climbing from a stair or slab, where the step-up
+		// is within reach. Jumping onto a wall barrier from ordinary ground or
+		// another wall is refused.
+		if !w.isHalfBlock(from.X, from.Y-1, from.Z) {
+			return false
+		}
 	}
 	return !w.IsSolid(tx, ty, tz) && !w.IsSolid(tx, ty+1, tz) &&
 		!w.IsHazard(tx, ty, tz) && !w.IsHazard(tx, ty+1, tz)
@@ -657,24 +816,19 @@ func (w *LocalWorldModel) isHalfBlock(x, y, z int32) bool {
 	if !loaded {
 		return false
 	}
-	if !runtimeIDToStateAvailable() {
-		return false
-	}
-	name, properties, ok := chunk.RuntimeIDToState(rid)
+	name, ok := blockNameFor(w.chunkQuerier, rid)
 	if !ok {
 		return false
 	}
-	if strings.HasSuffix(name, "_slab") || strings.HasSuffix(name, "_stairs") || strings.HasSuffix(name, "_step") {
+	if strings.Contains(name, "stair") || strings.Contains(name, "slab") || strings.Contains(name, "step") {
 		return true
 	}
-	if strings.Contains(name, "stair") && strings.Contains(name, "outer") ||
-		strings.Contains(name, "stair") && strings.Contains(name, "inner") {
-		return true
-	}
-	if properties != nil {
-		if half, ok := properties["half"]; ok {
-			if half == "top" || half == "bottom" {
-				return true
+	if runtimeIDToStateAvailable() {
+		if _, properties, ok := chunk.RuntimeIDToState(rid); ok && properties != nil {
+			if half, ok := properties["half"]; ok {
+				if half == "top" || half == "bottom" {
+					return true
+				}
 			}
 		}
 	}
@@ -689,13 +843,34 @@ func (w *LocalWorldModel) isClimbableSurface(x, y, z int32) bool {
 	if !loaded {
 		return false
 	}
-	if !runtimeIDToStateAvailable() {
-		return false
-	}
-	name, _, ok := chunk.RuntimeIDToState(rid)
+	name, ok := blockNameFor(w.chunkQuerier, rid)
 	if !ok {
 		return false
 	}
 	return name == "minecraft:ladder" || name == "minecraft:scaffolding" ||
 		strings.Contains(name, "vine") || strings.Contains(name, "rope")
+}
+
+func (w *LocalWorldModel) isFenceOrWall(x, y, z int32) bool {
+	if w.chunkQuerier == nil {
+		return false
+	}
+	rid, loaded := w.chunkQuerier.GetBlockRID(x, y, z)
+	if !loaded {
+		return false
+	}
+	name, ok := blockNameFor(w.chunkQuerier, rid)
+	if !ok {
+		return false
+	}
+	return isFenceOrWallName(name)
+}
+
+func isFenceOrWallName(name string) bool {
+	return strings.HasSuffix(name, "_wall") ||
+		strings.HasSuffix(name, "_fence") ||
+		strings.HasSuffix(name, "_fence_gate") ||
+		name == "minecraft:fence" ||
+		name == "minecraft:fence_gate" ||
+		name == "minecraft:cobblestone_wall"
 }

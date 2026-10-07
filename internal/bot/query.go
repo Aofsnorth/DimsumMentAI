@@ -9,6 +9,7 @@ import (
 	"bedrock-ai/internal/bot/affordance"
 	"bedrock-ai/internal/bot/entity"
 	"bedrock-ai/internal/bot/scaffold"
+	"bedrock-ai/internal/bot/survival"
 
 	"github.com/go-gl/mathgl/mgl32"
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
@@ -28,6 +29,53 @@ func (b *Bot) FindPlayer(username string) (uint64, mgl32.Vec3, bool) {
 		}
 	}
 	return 0, mgl32.Vec3{}, false
+}
+
+// FindKnownPlayer looks up a candidate player name or formatted name (e.g. "MEMBER Synterix", "[VIP] Synterix")
+// against tracked player entity IDs and server PlayerList UUIDs.
+// It returns the canonical tracked username and true if matched.
+func (b *Bot) FindKnownPlayer(query string) (string, bool) {
+	b.Mu.Lock()
+	defer b.Mu.Unlock()
+
+	query = strings.TrimSpace(query)
+	if query == "" {
+		return "", false
+	}
+
+	// 1. Direct or suffix match against tracked entity IDs (nearby players)
+	for name := range b.PlayerEntityIDs {
+		if playerNameMatches(name, query) {
+			return name, true
+		}
+	}
+	// 2. Direct or suffix match against server PlayerList (all connected players)
+	for _, username := range b.PlayerUUIDs {
+		if playerNameMatches(username, query) {
+			return username, true
+		}
+	}
+
+	// 3. Test individual tokens from right to left (to strip ranks/prefixes like "MEMBER Synterix", "[VIP] Synterix")
+	words := strings.Fields(query)
+	for i := len(words) - 1; i >= 0; i-- {
+		word := strings.Trim(words[i], "[]()<>:|»#* \t")
+		if word == "" {
+			continue
+		}
+		for name := range b.PlayerEntityIDs {
+			if playerNameMatches(name, word) {
+				return name, true
+			}
+		}
+		for _, username := range b.PlayerUUIDs {
+			if playerNameMatches(username, word) {
+				return username, true
+			}
+		}
+	}
+
+	return "", false
 }
 
 func (b *Bot) FindPlayerView(username string) (uint64, mgl32.Vec3, float32, float32, bool) {
@@ -152,6 +200,28 @@ func (b *Bot) GetEntities() map[uint64]*entity.Info {
 		snapshot[id] = &cp
 	}
 	return snapshot
+}
+
+// GetPlayerList returns a snapshot of tracked player entities other than the bot itself.
+func (b *Bot) GetPlayerList() map[uint64]entity.Info {
+	b.Mu.Lock()
+	defer b.Mu.Unlock()
+	out := make(map[uint64]entity.Info, len(b.PlayerEntityIDs))
+	for name, id := range b.PlayerEntityIDs {
+		if strings.EqualFold(name, b.Name) {
+			continue
+		}
+		if pos, ok := b.PlayerPositions[id]; ok {
+			out[id] = entity.Info{
+				ID:       id,
+				Type:     "minecraft:player",
+				Name:     name,
+				Position: pos,
+				Health:   20,
+			}
+		}
+	}
+	return out
 }
 
 func (b *Bot) GetHeldItemSlot() uint32 {
@@ -309,6 +379,9 @@ func (b *Bot) SendChat(msg string) {
 }
 
 func (b *Bot) GetEntityRuntimeID() uint64 {
+	if b.Conn == nil {
+		return 0
+	}
 	return b.Conn.GameData().EntityRuntimeID
 }
 
@@ -427,6 +500,9 @@ func (b *Bot) WritePacket(pk packet.Packet) error {
 			return nil
 		}
 	}
+	if b.Conn == nil {
+		return nil
+	}
 	return b.Conn.WritePacket(pk)
 }
 
@@ -516,10 +592,11 @@ func (b *Bot) EquipItem(slot uint32) error {
 
 	pk := &packet.MobEquipment{
 		EntityRuntimeID: b.Conn.GameData().EntityRuntimeID,
-		NewItem:         protocol.ItemInstance{StackNetworkID: itemStackNetworkID, Stack: item},
-		InventorySlot:   byte(targetHotbarSlot),
-		HotBarSlot:      byte(targetHotbarSlot),
-		WindowID:        0,
+		// Bare stack: the host rejects echoed NBT (see survival.WireItemStack).
+		NewItem:       protocol.ItemInstance{Stack: survival.WireItemStack(item)},
+		InventorySlot: byte(targetHotbarSlot),
+		HotBarSlot:    byte(targetHotbarSlot),
+		WindowID:      0,
 	}
 	return b.Conn.WritePacket(pk)
 }
@@ -741,7 +818,16 @@ func (b *Bot) playerApproachPosition(username string) (mgl32.Vec3, bool) {
 		0,
 		float32(math.Sin(yawWorldRad)) * 1.6,
 	}
-	return pos.Add(front), true
+	approachPos := pos.Add(front)
+	if b.WorldModel != nil {
+		ax := int32(math.Floor(float64(approachPos.X())))
+		ay := int32(math.Floor(float64(approachPos.Y() + 0.1)))
+		az := int32(math.Floor(float64(approachPos.Z())))
+		if b.WorldModel.IsSolid(ax, ay, az) || b.WorldModel.IsSolid(ax, ay+1, az) || !b.WorldModel.IsSolid(ax, ay-1, az) {
+			return pos, true
+		}
+	}
+	return approachPos, true
 }
 
 // SetAppetite records how much risk the bot should take on purpose.

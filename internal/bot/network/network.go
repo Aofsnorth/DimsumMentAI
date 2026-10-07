@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"bedrock-ai/internal/bot"
@@ -20,9 +21,41 @@ import (
 	"github.com/sandertv/gophertunnel/minecraft/protocol/packet"
 )
 
+// startHeartbeat logs how long ago the host last sent anything, and what it
+// was, once a second — but only while the gap is abnormal. During healthy play
+// the server sends LevelChunk/LevelEvent constantly, so the line stays silent;
+// it appears exactly when a packet the bot sent made the host stop answering,
+// which is the only signature of the silent death it is here to explain.
+func startHeartbeat(ctx context.Context, b *bot.Bot, lastNano *atomic.Int64, lastType *atomic.Value) {
+	go func() {
+		t := time.NewTicker(time.Second)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				age := time.Since(time.Unix(0, lastNano.Load()))
+				if age < time.Second {
+					continue
+				}
+				b.Logger.Info("net heartbeat",
+					slog.Int64("last_packet_age_ms", age.Milliseconds()),
+					slog.Any("last_packet", lastType.Load()))
+			}
+		}
+	}()
+}
+
 func PacketLoop(ctx context.Context, b *bot.Bot) error {
 	var lastReadAt time.Time
 	var packetsSinceLog int
+	var lastNano atomic.Int64
+	var lastType atomic.Value
+	lastNano.Store(time.Now().UnixNano())
+	lastType.Store("none")
+	startHeartbeat(ctx, b, &lastNano, &lastType)
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -41,6 +74,8 @@ func PacketLoop(ctx context.Context, b *bot.Bot) error {
 
 		logReadGap(pk, lastReadAt, &packetsSinceLog)
 		lastReadAt = time.Now()
+		lastNano.Store(lastReadAt.UnixNano())
+		lastType.Store(fmt.Sprintf("%T", pk))
 		handleStart := lastReadAt
 
 		handled := handlePacket(ctx, b, pk)

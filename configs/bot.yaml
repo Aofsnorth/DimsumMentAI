@@ -38,6 +38,7 @@ server:
 # --- Bot Identity ---
 bot:
   name: "Luna" # In-game display name
+  aliases: ["Luna", "luna", ".ShigaLucifer", "ShigaLucifer"] # Tag nicknames recognized in chat (bisa diubah-ubah, tidak harus pakai nama Xbox)
   language: "Indonesian" # AI reply language, e.g. "English", "Indonesian", "Japanese"
   log_level: "info" # debug, info, warn, or error (debug writes logs/debug-090ce4.log — flip it on when diagnosing)
   memory_path: "data/bot_memory.json" # Curated long-term memories (facts + named places)
@@ -65,6 +66,8 @@ bot:
   # rather than being typed once by hand.
   join_messages:
     - "/login Akukuat123 Akukuat123"
+    - "/skin url https://namemc.com/skin/d06c7244c4cdda83"
+    - "/server HorizonSURVIVAL"
   join_message_delay_sec: 5 # wait after spawning before the first line (server may still be finishing the world transfer)
   join_message_gap_sec: 1 # pause between lines, so a burst is not sent as one flood
 
@@ -291,9 +294,15 @@ ai:
   #kc/inclusionai/ling-3.0-flash:free
   # API key is loaded from .env (NVIDIA_API_KEY). See .env.example.
   base_url: "http://localhost:20128/v1" # leave empty to use provider default (nvidia). Required for openai_compatible/anthropic_compatible/google_compatible.
-  main_player: "Arthenyxx"
-  respond_only_to_linked_player: false
+  main_player: "Synterix"
+  main_players:
+    - "Synterix"
+  respond_only_to_linked_player: true
   respond_only_when_tagged: true # true = only respond when tagged/named in chat (e.g. Luna or @Luna)
+  only_tag_aliases: false # true = only names in tag_aliases can be tagged (ignores default bot name/gamertag)
+  tag_aliases:
+    - "Luna"
+    - "luna"
   custom_personality: "" # Custom LLM personality prompt override (leave empty to use default)
   context_window: 1000000 # Model context window in tokens; 0 = auto-detect. Bot uses 25% of this as its per-request budget and auto-compacts history beyond it.
 

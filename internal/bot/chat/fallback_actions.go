@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"bedrock-ai/internal/bot/action"
+	"bedrock-ai/internal/bot/interact"
 )
 
 var coordinateIntentRegex = regexp.MustCompile(`(?i)(?:koordinat|kordinat|coords?|coordinate|goto|jalan\s+ke|pergi\s+ke|ke)[^-+0-9]*([-+]?\d+(?:\.\d+)?)\s+([-+]?\d+(?:\.\d+)?)\s+([-+]?\d+(?:\.\d+)?)`)
@@ -34,7 +35,7 @@ var comeIntentRegex = regexp.MustCompile(
 		`(?:\s+(?:dong|ya|please|pls|tolong))?` +
 		`|` +
 		// A destination that is the whole request.
-		`\b(?:kesini|ke\s*sini|ke\s*tempat\s*ku|ke\s*tempatku|come\s*here|come\s*to\s*me|to\s*me|join\s*me|sini)\b` +
+		`\b(?:kesini|ke\s*sini|ke\s*tempat\s*(?:ku|saya|aku|gua)|come\s*here|come\s*to\s*me|to\s*me|join\s*me|sini)\b` +
 		`(?:\s+(?:dong|ya|please|pls|tolong))?` +
 		`)`)
 
@@ -70,6 +71,23 @@ func isStopFollowingIntent(msg string) bool {
 		return true
 	}
 	return stopFollowingIntentRegex.MatchString(lower)
+}
+
+// stopAttackIntentRegex matches requests to stop attacking / disengage from combat
+// in Indonesian and English ("berhenti attack", "stop serang", "jangan serang", etc.).
+var stopAttackIntentRegex = regexp.MustCompile(
+	`(?i)\b(?:berhenti|stop|batal|jangan|cancel)\b[\s\S]{0,20}?\b(?:attack|serang|nyerang|menyerang|tarung|bertarung|hit|hitting|mukul|mukuk|pvp|fight|fighting)\b` +
+		`|\b(?:no\s*attack|disengage)\b`,
+)
+
+// isStopAttackIntent reports whether a message is the player asking the bot
+// to stop attacking or stop combat.
+func isStopAttackIntent(msg string) bool {
+	lower := strings.ToLower(strings.TrimSpace(msg))
+	if strings.HasPrefix(lower, "!disengage") {
+		return true
+	}
+	return stopAttackIntentRegex.MatchString(lower)
 }
 
 func fallbackMovementActions(msg string) []action.Step {
@@ -253,6 +271,27 @@ var countRegex = regexp.MustCompile(`\d+`)
 func inferActionIntent(msg, reply string) []action.Step {
 	lower := strings.ToLower(msg)
 	replyLower := strings.ToLower(reply)
+
+	if containsAny(lower, "klik", "click", "interact", "tekan", "pencet", "sentuh") ||
+		(containsAny(lower, "buka") && (containsAny(lower, "pintu", "door", "chest", "peti", "trapdoor", "gerbang", "gate", "barrel"))) {
+		req := interact.ParseRequest(msg)
+		param := "depan"
+		if req.Block != "" {
+			param = req.Block
+		} else if req.Entity != "" {
+			param = req.Entity
+		} else if req.InFront {
+			param = "depan"
+		} else {
+			replyReq := interact.ParseRequest(reply)
+			if replyReq.Block != "" {
+				param = replyReq.Block
+			} else if replyReq.Entity != "" {
+				param = replyReq.Entity
+			}
+		}
+		return []action.Step{{Label: "interact", Param: param}}
+	}
 
 	var label string
 	switch {

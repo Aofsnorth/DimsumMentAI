@@ -91,13 +91,14 @@ func (b *Bot) InjectAIEvent(msg string) {
 		invSummary := b.GetInventorySummary()
 
 		b.Mu.Lock()
-		mainPlayer := b.AiCfg.MainPlayer
+		mainPlayers := b.AiCfg.GetMainPlayers()
 		botName := b.Name
 		b.Mu.Unlock()
 
-		if mainPlayer == "" {
+		if len(mainPlayers) == 0 {
 			return
 		}
+		mainPlayer := mainPlayers[0]
 
 		playerCoordsStr := ""
 		if pCoords, ok := b.GetPlayerCoords(mainPlayer); ok {

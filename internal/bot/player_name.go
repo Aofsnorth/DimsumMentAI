@@ -18,6 +18,9 @@ func playerNameMatches(known, query string) bool {
 	if strings.EqualFold(known, query) {
 		return true
 	}
+	if strings.EqualFold(strings.TrimPrefix(known, "."), strings.TrimPrefix(query, ".")) {
+		return true
+	}
 	return strings.HasSuffix(strings.ToLower(query), " "+strings.ToLower(known))
 }
 

@@ -132,6 +132,18 @@ func FindPath(startNode, targetNode Node, world WorldModel, allowFallback bool) 
 	}
 
 	if allowFallback && bestNode != start {
+		// The route that comes back is the closest the search got. Say what was in
+		// its way, because "gave up short" on its own has cost this bot several
+		// rounds of guesswork: the frontier cell is reachable, and whether the next
+		// step was refused for being a wall, a height, a hazard or a missing floor
+		// is the entire diagnosis.
+		if w, ok := world.(interface {
+			DebugClimbRefused(from, target Node) string
+		}); ok {
+			debuglog.Log("P", "pathfinder/astar.go:FindPath", "A* gave up short, frontier detail", map[string]any{
+				"detail": w.DebugClimbRefused(*bestNode, targetNode),
+			})
+		}
 		return smoothPath(ReconstructPath(bestNode), world)
 	}
 
@@ -321,6 +333,26 @@ func canWalkLine(from, to Node, dx, dz, horizDist int32, world WorldModel) bool 
 
 		if !canWalkAtSample(bx, by, bz, world) {
 			return false
+		}
+
+		// Also verify body bounding box corners for diagonal links so the bot does
+		// not clip across an empty corner with no ground support or into a wall.
+		if dx != 0 && dz != 0 {
+			corners := [4][2]float32{
+				{-0.25, -0.25},
+				{-0.25, 0.25},
+				{0.25, -0.25},
+				{0.25, 0.25},
+			}
+			for _, c := range corners {
+				cx := int32(math.Floor(float64(sx + c[0])))
+				cz := int32(math.Floor(float64(sz + c[1])))
+				if cx != bx || cz != bz {
+					if !canWalkAtSample(cx, by, cz, world) {
+						return false
+					}
+				}
+			}
 		}
 	}
 	return true

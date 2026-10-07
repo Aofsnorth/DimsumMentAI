@@ -143,3 +143,5 @@ func TestUnloadedWorldDoesNotBackOffRepaths(t *testing.T) {
 			b.WalkToRepathFailures)
 	}
 }
+
+func (unloadedQuerier) BlockName(rid uint32) (string, bool) { return "", false }

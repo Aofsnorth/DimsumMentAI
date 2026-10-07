@@ -111,3 +111,5 @@ func TestIsStandableOnAnUnknownBlockStillExpands(t *testing.T) {
 func neighborsAnyWaterAware(w *pathfinder.LocalWorldModel, from pathfinder.Node) bool {
 	return len(w.GetNeighbors(from)) > 0
 }
+
+func (loadedQuerier) BlockName(rid uint32) (string, bool) { return "", false }

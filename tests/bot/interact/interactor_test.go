@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"log/slog"
+	"math"
 	"testing"
 
 	"bedrock-ai/internal/bot/entity"
@@ -55,6 +56,24 @@ func (f *fakeBot) GetCoords() mgl32.Vec3 { return f.pos }
 func (f *fakeBot) GetYaw() float32       { return f.yaw }
 func (f *fakeBot) GetEntities() map[uint64]*entity.Info {
 	return f.entities
+}
+
+func (f *fakeBot) GetPlayerList() map[uint64]entity.Info {
+	out := make(map[uint64]entity.Info)
+	for name, id := range f.players {
+		if ent, ok := f.entities[id]; ok {
+			out[id] = *ent
+		} else {
+			out[id] = entity.Info{
+				ID:       id,
+				Type:     "minecraft:player",
+				Name:     name,
+				Position: f.pos,
+				Health:   20,
+			}
+		}
+	}
+	return out
 }
 
 func (f *fakeBot) FindPlayer(username string) (uint64, mgl32.Vec3, bool) {
@@ -502,6 +521,25 @@ func TestInteractEntitySendsHoverThenOpen(t *testing.T) {
 		t.Errorf("third action = %d, want NPCOpen (%d)", open.ActionType, packet.InteractActionNPCOpen)
 	}
 
+	// Fourth packet: InventoryTransaction with UseItemOnEntityTransactionData for Geyser / Paper NPC right clicks.
+	if len(b.packets) < 4 {
+		t.Fatalf("wrote %d packets, want at least 4 including InventoryTransaction", len(b.packets))
+	}
+	tx, ok := b.packets[3].(*packet.InventoryTransaction)
+	if !ok {
+		t.Fatalf("fourth packet = %T, want *packet.InventoryTransaction", b.packets[3])
+	}
+	useData, ok := tx.TransactionData.(*protocol.UseItemOnEntityTransactionData)
+	if !ok {
+		t.Fatalf("transaction data = %T, want *protocol.UseItemOnEntityTransactionData", tx.TransactionData)
+	}
+	if useData.TargetEntityRuntimeID != 22 {
+		t.Errorf("useItem target runtime ID = %d, want 22", useData.TargetEntityRuntimeID)
+	}
+	if useData.ActionType != protocol.UseItemOnEntityActionInteract {
+		t.Errorf("useItem action = %d, want %d (Interact)", useData.ActionType, protocol.UseItemOnEntityActionInteract)
+	}
+
 	if b.lookCalls == 0 {
 		t.Error("never looked at the target before clicking; the server drops clicks that arrive before the look settles")
 	}
@@ -805,5 +843,158 @@ func TestResolveCustomBlockByName(t *testing.T) {
 	}
 	if target.Block != (protocol.BlockPos{0, 64, 3}) {
 		t.Errorf("block = %v, want the custom block's position", target.Block)
+	}
+}
+
+// TestResolveInFront_PrefersBaseNPCOverStackedHologram tests that when an NPC has
+// floating holographic text armor stands stacked directly above it, interact:depan
+// resolves the physical base entity at ground level instead of the floating text marker.
+func TestResolveInFront_PrefersBaseNPCOverStackedHologram(t *testing.T) {
+	t.Parallel()
+
+	b := newFakeBot()
+	// Stacked entities at same X/Z:
+	// Entity 10: physical base NPC armor stand at Y = 64.0
+	// Entity 11: floating hologram line at Y = 65.5
+	// Entity 12: floating hologram line at Y = 66.0
+	addEntity(b, 10, "minecraft:armor_stand", "Alex", 0.5, 64.0, 2.5)
+	addEntity(b, 11, "minecraft:armor_stand", "§l§eHorizonSMP", 0.5, 65.5, 2.5)
+	addEntity(b, 12, "minecraft:armor_stand", "§aJoin Sekarang!", 0.5, 66.0, 2.5)
+
+	target, err := newTestInteractor(b).Resolve(interact.ParseRequest("depan"))
+	if err != nil {
+		t.Fatalf("resolve failed: %v", err)
+	}
+	if target.Kind != interact.KindEntity {
+		t.Fatalf("kind = %v, want KindEntity", target.Kind)
+	}
+	if target.ID != 10 {
+		t.Errorf("target ID = %d, want physical NPC (ID 10), got floating hologram", target.ID)
+	}
+	// Aim point must target torso height (64.0 + 0.9 = 64.9), not floating text height.
+	wantAimY := float32(64.9)
+	if math.Abs(float64(target.Pos.Y()-wantAimY)) > 0.05 {
+		t.Errorf("aim Y = %f, want torso height %f", target.Pos.Y(), wantAimY)
+	}
+}
+
+// TestResolveInFront_PrioritizesEntityOverBackgroundBlock tests that when an entity
+// sits in front, interact:depan resolves the entity and does NOT fall through to
+// background blocks such as a hanging sign.
+func TestResolveInFront_PrioritizesEntityOverBackgroundBlock(t *testing.T) {
+	t.Parallel()
+
+	b := newFakeBot()
+	addEntity(b, 55, "minecraft:armor_stand", "Portal NPC", 0.5, 64.0, 2.5)
+	b.blocks[interact.BlockKey(protocol.BlockPos{0, 64, 3})] = "minecraft:warped_hanging_sign"
+
+	target, err := newTestInteractor(b).Resolve(interact.ParseRequest("depan"))
+	if err != nil {
+		t.Fatalf("resolve failed: %v", err)
+	}
+	if target.Kind != interact.KindEntity {
+		t.Fatalf("kind = %v, want KindEntity (armor stand), but hit background block", target.Kind)
+	}
+	if target.ID != 55 {
+		t.Errorf("target ID = %d, want 55", target.ID)
+	}
+}
+
+// TestResolveInFront_ResolvesPlayerNPC tests that player-modeled NPCs in b.GetPlayerList()
+// are recognized by resolveInFront and chosen over background blocks.
+func TestResolveInFront_ResolvesPlayerNPC(t *testing.T) {
+	t.Parallel()
+
+	b := newFakeBot()
+	b.players["HorizonJoiner"] = 77
+	b.entities[77] = &entity.Info{
+		ID:       77,
+		Type:     "minecraft:player",
+		Name:     "HorizonJoiner",
+		Position: mgl32.Vec3{0.5, 64.0, 2.5},
+		Health:   20,
+	}
+	b.blocks[interact.BlockKey(protocol.BlockPos{0, 64, 3})] = "minecraft:warped_hanging_sign"
+
+	target, err := newTestInteractor(b).Resolve(interact.ParseRequest("depan"))
+	if err != nil {
+		t.Fatalf("resolve failed: %v", err)
+	}
+	if target.Kind != interact.KindEntity {
+		t.Fatalf("kind = %v, want KindEntity", target.Kind)
+	}
+	if target.ID != 77 {
+		t.Errorf("target ID = %d, want 77", target.ID)
+	}
+}
+
+func TestHangingSignFaceClampedToHorizontal(t *testing.T) {
+	t.Parallel()
+
+	// Bot is at Y=74, Z=-54; sign is at Y=72, Z=-57.
+	// dy = 1.5, dz = 2.5 (from eye Y=75.62, dy is 3.12).
+	// Without clamping, dy can dominate and produce Face 1 (top), which hosts reject.
+	pos := protocol.BlockPos{87, 72, -57}
+	botPos := mgl32.Vec3{87, 74, -55}
+
+	face := interact.AdjustFaceForBlock("minecraft:warped_hanging_sign", 1, pos, botPos)
+	if face == 0 || face == 1 {
+		t.Fatalf("AdjustFaceForBlock returned %d, want horizontal face (2..5)", face)
+	}
+	if face != 3 { // bot is to the south (+Z), so south face (3) points at the bot
+		t.Errorf("face = %d, want 3 (south)", face)
+	}
+
+	b := newFakeBot()
+	b.pos = botPos
+	b.blocks[interact.BlockKey(pos)] = "minecraft:warped_hanging_sign"
+	b.blockIDs[interact.BlockKey(pos)] = 1200
+
+	newTestInteractor(b).Interact(context.Background(), "tester", "sign")
+
+	var useItemTx *protocol.UseItemTransactionData
+	for _, pk := range b.packets {
+		if tx, ok := pk.(*packet.InventoryTransaction); ok {
+			if data, ok := tx.TransactionData.(*protocol.UseItemTransactionData); ok {
+				useItemTx = data
+				break
+			}
+		}
+	}
+	if useItemTx == nil {
+		t.Fatal("no UseItemTransactionData sent for hanging sign")
+	}
+	if useItemTx.BlockFace == 0 || useItemTx.BlockFace == 1 {
+		t.Errorf("clicked BlockFace = %d, want horizontal face (not top/bottom)", useItemTx.BlockFace)
+	}
+	if useItemTx.ClickedPosition.Y() == 1.0 {
+		t.Errorf("ClickedPosition = %v, must not be top ceiling (Y=1.0)", useItemTx.ClickedPosition)
+	}
+}
+
+func TestInteractEntity_ArmorStandSendsUseItemOnEntity(t *testing.T) {
+	t.Parallel()
+
+	b := newFakeBot()
+	b.pos = mgl32.Vec3{62.89, 73.0, -54.75}
+	addEntity(b, 5, "minecraft:armor_stand", "minecraft:armor_stand", 61.53, 74.8, -53.51)
+
+	newTestInteractor(b).Interact(context.Background(), "tester", "npc")
+
+	foundUseItem := false
+	for _, pk := range b.packets {
+		if tx, ok := pk.(*packet.InventoryTransaction); ok {
+			if useData, ok := tx.TransactionData.(*protocol.UseItemOnEntityTransactionData); ok {
+				if useData.TargetEntityRuntimeID == 5 && useData.ActionType == protocol.UseItemOnEntityActionInteract {
+					foundUseItem = true
+				}
+			}
+		}
+	}
+	if !foundUseItem {
+		t.Fatal("UseItemOnEntityTransactionData not sent for armor stand NPC")
+	}
+	if len(b.statuses) != 1 || !b.statuses[0].Success {
+		t.Fatalf("expected success status report, got: %+v", b.statuses)
 	}
 }

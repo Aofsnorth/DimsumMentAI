@@ -135,7 +135,9 @@ func (b *Bot) ReportActionStatus(user string, status event.ActionStatus) {
 		b.Mu.Unlock()
 	}
 	if user == "" {
-		user = b.AiCfg.MainPlayer
+		if players := b.AiCfg.GetMainPlayers(); len(players) > 0 {
+			user = players[0]
+		}
 	}
 	if user == "" {
 		return

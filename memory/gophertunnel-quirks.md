@@ -1,11 +1,11 @@
 ---
 name: gophertunnel-quirks
-description: gophertunnel v1.62 gotchas that break the bot — resource packs, non-flushing writes, command wire format, and the non-reentrant Bot mutex
+description: gophertunnel v1.62 gotchas that break the bot — resource packs, non-flushing writes, command wire format, the non-reentrant Bot mutex, and Geyser's unflagged MovePlayer echo
 metadata:
   type: project
 ---
 
-Four non-obvious failure modes in this bot, each found by a real disconnect or
+Five non-obvious failure modes in this bot, each found by a real disconnect or
 hang rather than by reading docs.
 
 **1. A required resource pack kills the login outright.**
@@ -36,6 +36,31 @@ servers answer commands with `Text` rather than `CommandOutput`.
 `b.Mu` again — every `attack` action self-deadlocked the whole bot. Fixed by
 exporting the pure `bot.PlayerNameMatches` for locked callers. When auditing this
 codebase, grep for a `*Locked` helper that reaches for a locking `Bot` method.
+
+**5. A Geyser front-end echoes your own position back as an unflagged
+`MovePlayer`, and acking those echoes freezes the body.**
+`handleMovePlayer` set `TeleportAckPending` for every self `MovePlayer`, and the
+input loop's teleport branch deliberately skips `performActiveSteering()` and
+`runPhysicsAndCollisions()` on the ack tick. A relay that echoes at tick rate
+re-arms the flag between every tick, so no tick ever steered: the AI layer kept
+computing routes (its path logs keep printing) while the body stood still with a
+full set of walk inputs on the wire — the "can't move, but it looks like it is
+running" report from `hansprojects.my.id`. Fixed in `network/player/move.go`:
+`ShouldAckTeleport` acknowledges only a flagged teleport/reset or an unflagged
+jump further than `teleportAckDistance` (2.2 blocks), which prevents normal
+1-block drops (~1.41 blocks) and network latency from triggering false teleport
+acks. Furthermore, `ApplySelfMovePlayer` only overwrites `b.Pos` when a real
+teleport is acked or while the bot is `idle`, preventing delayed 20Hz echoes
+from yanking the bot backward mid-stride during active walking. Note the ack
+decision must be read against the **pre-update** `b.Pos`, because overwriting
+it first makes every echo measure as zero distance.
+
+**6. `chunk.StateToRuntimeID` panics on complex block properties.**
+Dragonfly's `hashProperties` only accepts `bool`, `uint8`, `int32`, `string`.
+Bedrock 1.21+ server palettes in `StartGame.Blocks` carry complex properties
+such as `blockTags: []interface{}`, triggering `panic: invalid block property type`.
+`safeStateToRuntimeID` in `internal/bot/world/cache.go` sanitizes property types,
+recovers from panics, and falls back to `chunk.StateToRuntimeID(name, nil)`.
 
 **Also:** `debuglog.Log` was called from the packet read loop and opened/wrote/
 closed the file per call under a global mutex. On a laggy server `logReadGap`

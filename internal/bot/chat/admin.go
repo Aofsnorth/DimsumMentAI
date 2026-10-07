@@ -52,11 +52,17 @@ var adminCommandHandlers = map[string]func(b *bot.Bot, param, user string){
 	"cmd":        handleAdminCmd,
 	"command":    handleAdminCmd,
 	"verb":       handleAdminVerb,
+	"click":      handleAdminInteract,
+	"interact":   handleAdminInteract,
 }
 
 // handleAdminCmd runs a server command from chat: "!cmd /register pass pass".
 // The leading "!" is the bot's own prefix, so the command itself keeps the
 // slash a player would type.
+func handleAdminInteract(b *bot.Bot, param, user string) {
+	action.Execute(b, "interact", param, user)
+}
+
 func handleAdminCmd(b *bot.Bot, param, user string) {
 	action.Execute(b, "cmd", param, user)
 }
@@ -131,6 +137,9 @@ func handleAdminHome(b *bot.Bot, param, user string) {
 
 func handleAdminStop(b *bot.Bot, param, user string) {
 	b.Stop()
+	if b.CombatMgr != nil {
+		b.CombatMgr.Disengage()
+	}
 	if b.Planner != nil {
 		b.Planner.Cancel()
 	}

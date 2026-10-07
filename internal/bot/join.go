@@ -165,13 +165,15 @@ func (b *Bot) noteServer(address string) {
 	// while the config still reads true.
 	if b.GeyserOverride != nil {
 		profile.Geyser = *b.GeyserOverride
-		profile.IdleNudge = *b.GeyserOverride
 		profile.NoSubChunks = *b.GeyserOverride
 		profile.NoHeldItemEcho = *b.GeyserOverride
 		profile.SlashCommandFirst = *b.GeyserOverride
 	}
 	b.Mu.Lock()
 	b.GeyserCompat = profile.Geyser
+	if b.WorldCache != nil {
+		b.WorldCache.SetGeyserCompat(profile.Geyser)
+	}
 	b.VenityCompat = profile.Venity
 	b.NetherGamesCompat = profile.NetherGames
 	b.IdleNudge = profile.IdleNudge

@@ -20,6 +20,7 @@ var packetHandlers = map[uint32]func(*bot.Bot, packet.Packet) bool{
 	packet.IDMoveActorDelta:              handleMoveActorDelta,
 	packet.IDMoveActorAbsolute:           handleMoveActorAbsolute,
 	packet.IDSetActorMotion:              handleSetActorMotion,
+	packet.IDSetActorLink:                handleSetActorLink,
 	packet.IDTakeItemActor:               handleTakeItemActor,
 	packet.IDRemoveActor:                 handleRemoveActor,
 	packet.IDInventoryContent:            handleInventoryContent,
@@ -41,6 +42,8 @@ var packetHandlers = map[uint32]func(*bot.Bot, packet.Packet) bool{
 	packet.IDSetActorData:                handleSetActorData,
 	packet.IDUpdateTrade:                 handleUpdateTrade,
 	packet.IDPlayerEnchantOptions:        handlePlayerEnchantOptions,
+	packet.IDTransfer:                    handleTransfer,
+	packet.IDChangeDimension:             handleChangeDimension,
 }
 
 // HandlePlayerPacket dispatches a packet to the appropriate handler.

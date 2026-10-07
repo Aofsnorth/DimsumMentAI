@@ -143,6 +143,8 @@ type Bot struct {
 	Registry          *handler.Registry
 	Bus               *event.Bus
 	Name              string
+	ConfiguredName    string   // configured name from yaml (preserved even if server PlayerList renames bot)
+	TagAliases        []string // custom aliases/nicknames the bot responds to when tagged
 	ServerHost        string
 	VenityCompat      bool // play.venity.net hub: aggressive chunk flood + ~30s session checks
 	NetherGamesCompat bool // play.nethergames.org/net: stricter login compatibility
@@ -235,6 +237,7 @@ type Bot struct {
 
 	// Player Tracking
 	PlayerTracker
+	VehicleID int64 // RiddenEntityUniqueID when the bot mounts a vehicle/horse
 
 	// Actor Tracking
 	Actors              map[uint64]*entity.Info

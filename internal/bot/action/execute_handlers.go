@@ -29,6 +29,15 @@ func init() {
 // fight on its own, so the step reports whether a target was actually engaged —
 // "nothing to attack" is a failure, not a quiet success.
 func handleAttack(b *bot.Bot, param, user string) {
+	clean := strings.ToLower(strings.TrimSpace(param))
+	if clean == "stop" || clean == "berhenti" || clean == "batal" || clean == "cancel" || clean == "disengage" || clean == "jangan" {
+		if b.CombatMgr != nil {
+			b.CombatMgr.Disengage()
+		}
+		ReportStatus(b, user, event.ActionStatus{Action: "attack", Item: "stop", Success: true})
+		return
+	}
+
 	target, ok := SelectAttackTarget(b, param, user)
 	if !ok {
 		b.Logger.Warn("ExecuteAction: no visible non-item mob found to attack", "param", param)

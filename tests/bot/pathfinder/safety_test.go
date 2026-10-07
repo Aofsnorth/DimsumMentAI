@@ -120,6 +120,49 @@ func TestLethalBlocksAreHazards(t *testing.T) {
 	}
 }
 
+func TestFenceAndWallAreNotWalkableSurfaces(t *testing.T) {
+	t.Parallel()
+
+	fencesAndWalls := []string{
+		"minecraft:mossy_cobblestone_wall",
+		"minecraft:cobblestone_wall",
+		"minecraft:stone_brick_wall",
+		"minecraft:oak_fence",
+		"minecraft:spruce_fence",
+		"minecraft:nether_brick_fence",
+		"minecraft:fence_gate",
+	}
+
+	for _, name := range fencesAndWalls {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			cells := map[string]string{
+				blockKeyFor(0, 63, 0): "minecraft:stone",
+				blockKeyFor(0, 64, 0): "minecraft:air",
+				blockKeyFor(0, 65, 0): "minecraft:air",
+
+				blockKeyFor(1, 63, 0): "minecraft:stone",
+				blockKeyFor(1, 64, 0): name,
+				blockKeyFor(1, 65, 0): "minecraft:air",
+				blockKeyFor(1, 66, 0): "minecraft:air",
+
+				blockKeyFor(2, 63, 0): "minecraft:stone",
+				blockKeyFor(2, 64, 0): "minecraft:air",
+				blockKeyFor(2, 65, 0): "minecraft:air",
+			}
+			w := safetyModel(cells)
+
+			start := pathfinder.Node{X: 0, Y: 64, Z: 0}
+			neighbors := w.GetNeighbors(start)
+			for _, n := range neighbors {
+				if n.X == 1 && n.Z == 0 {
+					t.Fatalf("neighbor %v allowed movement onto/over fence/wall %s", n, name)
+				}
+			}
+		})
+	}
+}
+
 // TestOrdinaryTerrainIsNotLethal is the other half, and the one that keeps the
 // safety list from swallowing the world. A bot that refuses to walk through
 // grass cannot cross a plain, which is worse than the problem being solved.
@@ -307,5 +350,45 @@ func TestResetKeepsTheQuerierAndTheTrip(t *testing.T) {
 	}
 	if !w.HasPathBounds() {
 		t.Error("Reset dropped the path bounds; the current trip was forgotten")
+	}
+}
+
+func TestSlabAndStairsAreWalkableSurfaces(t *testing.T) {
+	t.Parallel()
+
+	walkable := []string{
+		"minecraft:stone_slab",
+		"minecraft:oak_slab",
+		"minecraft:oak_stairs",
+		"minecraft:stone_stairs",
+	}
+
+	for _, name := range walkable {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			cells := map[string]string{
+				blockKeyFor(0, 63, 0): "minecraft:stone",
+				blockKeyFor(0, 64, 0): "minecraft:air",
+				blockKeyFor(0, 65, 0): "minecraft:air",
+
+				blockKeyFor(1, 63, 0): name,
+				blockKeyFor(1, 64, 0): "minecraft:air",
+				blockKeyFor(1, 65, 0): "minecraft:air",
+			}
+			w := safetyModel(cells)
+
+			start := pathfinder.Node{X: 0, Y: 64, Z: 0}
+			neighbors := w.GetNeighbors(start)
+			found := false
+			for _, n := range neighbors {
+				if n.X == 1 && n.Z == 0 {
+					found = true
+					break
+				}
+			}
+			if !found {
+				t.Fatalf("expected neighbor movement onto %s at (1, 64, 0), got none", name)
+			}
+		})
 	}
 }

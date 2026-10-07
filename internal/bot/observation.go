@@ -3,6 +3,8 @@ package bot
 import (
 	"time"
 
+	"bedrock-ai/internal/bot/combat"
+
 	"github.com/df-mc/dragonfly/server/world/chunk"
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
 	"github.com/sandertv/gophertunnel/minecraft/protocol/packet"
@@ -67,6 +69,10 @@ type EntityMetaState struct {
 	OwnerKnown bool
 	// Baby is the baby flag.
 	Baby bool
+	// Invisible is the invisible flag (e.g. holographic text armor stands).
+	Invisible bool
+	// Nametag is the custom display name sent in EntityDataKeyName.
+	Nametag string
 }
 
 // RecordActorEvent appends an event to the ring, evicting the oldest when full.
@@ -150,6 +156,19 @@ func (b *Bot) RecordEntityMeta(runtimeID uint64, meta protocol.EntityMetadata) {
 	}
 	if v, ok := meta[uint32(protocol.EntityDataFlagBaby)]; ok {
 		state.Baby = metaBool(v)
+	}
+	// combat.EntityFlagSet, not the map's own meta.Flag: that helper asserts the
+	// flags field is an int64 and panics when the key is absent, nil, or sent as
+	// another numeric type. Geyser does exactly that on an armor stand's first
+	// SetActorData, and the panic took the whole bot down on spawn.
+	if combat.EntityFlagSet(meta, uint32(protocol.EntityDataFlagInvisible)) {
+		state.Invisible = true
+	}
+	if nameVal, ok := meta[uint32(protocol.EntityDataKeyName)].(string); ok && nameVal != "" {
+		state.Nametag = nameVal
+		if actor, tracked := b.Actors[runtimeID]; tracked && actor != nil {
+			actor.Name = nameVal
+		}
 	}
 	b.EntityMetas[runtimeID] = state
 }

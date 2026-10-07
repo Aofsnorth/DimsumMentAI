@@ -44,6 +44,15 @@ func WithEventBus(bus *event.Bus) Option {
 func WithName(name string) Option {
 	return func(b *Bot) {
 		b.Name = name
+		b.ConfiguredName = name
+	}
+}
+
+// WithTagAliases configures custom nicknames and aliases the bot will respond to
+// when tagged in chat.
+func WithTagAliases(aliases []string) Option {
+	return func(b *Bot) {
+		b.TagAliases = append(b.TagAliases, aliases...)
 	}
 }
 
@@ -61,12 +70,14 @@ func WithServerHost(host string, explicitGeyser *bool) Option {
 		profile := servercompat.Detect(host)
 		if explicitGeyser != nil {
 			profile.Geyser = *explicitGeyser
-			profile.IdleNudge = *explicitGeyser
 			profile.NoSubChunks = *explicitGeyser
 			profile.NoHeldItemEcho = *explicitGeyser
 			profile.SlashCommandFirst = *explicitGeyser
 		}
 		b.GeyserCompat = profile.Geyser
+		if b.WorldCache != nil {
+			b.WorldCache.SetGeyserCompat(profile.Geyser)
+		}
 		b.VenityCompat = profile.Venity
 		b.NetherGamesCompat = profile.NetherGames
 		// Derived from the profile, not from config directly: this is a fix

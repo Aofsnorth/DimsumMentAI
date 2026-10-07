@@ -54,9 +54,8 @@ func Detect(host string) Profile {
 		NetherGames: strings.Contains(h, "nethergames") || strings.Contains(h, "ngmc.co"),
 		Geyser:      detectGeyser(h),
 	}
-	// Only Geyser-fronted servers are known to drop a silent client. A server
-	// where the bot already sits fine must keep sitting fine.
-	p.IdleNudge = p.Geyser
+	// IdleNudge disabled by default to prevent unwanted wandering on join.
+	p.IdleNudge = false
 	p.NoSubChunks = p.Geyser
 	p.NoHeldItemEcho = p.Geyser
 	p.SlashCommandFirst = p.Geyser

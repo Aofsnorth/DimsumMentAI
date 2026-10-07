@@ -5,6 +5,7 @@ package movement
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"time"
 
@@ -153,6 +154,19 @@ func reportIfNotMoving(b *bot.Bot, tc *TickContext, lastAt *time.Time, lastPos *
 		cacheSolid, cacheLoaded = b.WorldCache.IsBlockSolid(tc.FeetX, tc.FeetY-1, tc.FeetZ)
 	}
 
+	if b.WorldCache != nil {
+		b.Logger.Debug("stuck block probe",
+			"feet", [3]int32{tc.FeetX, tc.FeetY, tc.FeetZ},
+			"feet_y_exact", tc.CurrPos.Y(),
+			"geyser", b.WorldCache.GeyserCompat(),
+			"here", probeColumn(b, tc.FeetX, tc.FeetY, tc.FeetZ),
+			"east", probeColumn(b, tc.FeetX+1, tc.FeetY, tc.FeetZ),
+			"west", probeColumn(b, tc.FeetX-1, tc.FeetY, tc.FeetZ),
+			"south", probeColumn(b, tc.FeetX, tc.FeetY, tc.FeetZ+1),
+			"north", probeColumn(b, tc.FeetX, tc.FeetY, tc.FeetZ-1),
+		)
+	}
+
 	b.Logger.Warn("bot wants to move and is not",
 		"pos", tc.CurrPos,
 		"destination", destination,
@@ -167,6 +181,22 @@ func reportIfNotMoving(b *bot.Bot, tc *TickContext, lastAt *time.Time, lastPos *
 		"cache_solid", cacheSolid,
 		"cache_loaded", cacheLoaded,
 	)
+}
+
+// probeColumn renders the cells from feetY-2 to feetY+2 of one column as
+// y:rid:name:solid:top, so a stuck report shows what the bot actually sees.
+func probeColumn(b *bot.Bot, x, feetY, z int32) []string {
+	out := make([]string, 0, 5)
+	for y := feetY - 2; y <= feetY+2; y++ {
+		rid, loaded := b.WorldCache.GetBlockRID(x, y, z)
+		if !loaded {
+			out = append(out, fmt.Sprintf("%d:unloaded", y))
+			continue
+		}
+		name, _ := b.WorldCache.BlockName(rid)
+		out = append(out, fmt.Sprintf("%d:%d:%s:solid=%v:top=%.2f", y, rid, name, b.WorldCache.IsRIDSolid(rid), b.WorldCache.TopOffsetAt(x, y, z)))
+	}
+	return out
 }
 
 // SendInputLoop handles the physical updates and steering of the bot
@@ -271,6 +301,17 @@ func SendInputLoop(ctx context.Context, b *bot.Bot, gd minecraft.GameData) {
 			tc.FeetX = int32(math.Floor(float64(tc.CurrPos.X())))
 			tc.FeetY = int32(math.Floor(float64(tc.CurrPos.Y())))
 			tc.FeetZ = int32(math.Floor(float64(tc.CurrPos.Z())))
+
+			if tick%60 == 0 && b.WorldCache != nil {
+				b.Logger.Debug("world probe",
+					"pos", tc.CurrPos,
+					"mstate", tc.MState,
+					"here", probeColumn(b, tc.FeetX, tc.FeetY, tc.FeetZ),
+				)
+			}
+			if tick%400 == 0 && b.WorldCache != nil {
+				b.Logger.Debug("rid census", "top", b.WorldCache.RIDCensus(tc.FeetY-6, tc.FeetY+4, 14))
+			}
 
 			// Per-tick body clearance: feet/head cells are non-solid for
 			// collision only this tick. Do not use SetSolid(false) here —
