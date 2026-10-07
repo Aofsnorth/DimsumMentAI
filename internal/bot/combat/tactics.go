@@ -90,6 +90,27 @@ func MobMovePlan(mob string, dist float32, appetite affordance.Appetite) MovePla
 	}
 }
 
+// PvP melee band, in blocks. Standing still in front of a player is a gift:
+// every swing lands. The bot keeps a circle — outside 2.2 it backs off along
+// the line, inside 3.4 it closes, inside the band it strafes around the
+// target with the side flipping every couple of seconds. This is the same
+// band a human duelist keeps, at the same speed — the movement is the
+// movement system's ordinary walk, never a teleport-step.
+const (
+	pvpBandMin float32 = 2.2
+	pvpBandMax float32 = 3.4
+)
+
+// PvPPlan is the duel disposition: hold the circle, leave the aim at the
+// torso. It applies only while the target is inside the melee conversation;
+// far away, the default close-on-target answer is what a duel wants anyway.
+func PvPPlan(dist float32) MovePlan {
+	if dist > pvpBandMax {
+		return MovePlan{}
+	}
+	return MovePlan{Strafe: true, BandMin: pvpBandMin, BandMax: pvpBandMax}
+}
+
 // creeperTactic fights normally until the creeper is inside blast range and
 // then runs. The fuse is not readable from the tracked entity data, so
 // closeness stands in for primed: a creeper that close is one that is about

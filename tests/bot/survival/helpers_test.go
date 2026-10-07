@@ -8,11 +8,14 @@ import (
 // through a network-ID-to-name map, so a fake item only needs a distinct ID and
 // a matching entry in the fake's names map.
 const (
-	netIDLeatherHelmet  int32 = 100
-	netIDIronChestplate int32 = 101
-	netIDDiamondHelmet  int32 = 102
-	netIDGoldenBoots    int32 = 103
-	netIDWoodenPickaxe  int32 = 104
+	netIDLeatherHelmet     int32 = 100
+	netIDIronChestplate    int32 = 101
+	netIDDiamondHelmet     int32 = 102
+	netIDGoldenBoots       int32 = 103
+	netIDWoodenPickaxe     int32 = 104
+	netIDIronHelmet        int32 = 105
+	netIDDiamondChestplate int32 = 106
+	netIDLeatherChestplate int32 = 107
 )
 
 // stock puts a single item of the given type into a fake inventory slot,

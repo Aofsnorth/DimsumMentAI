@@ -1,84 +1,93 @@
 package combat
 
 import (
-	"bedrock-ai/internal/safecast"
 	"strings"
 	"time"
-
-	"github.com/go-gl/mathgl/mgl32"
-	"github.com/sandertv/gophertunnel/minecraft/protocol"
-	"github.com/sandertv/gophertunnel/minecraft/protocol/packet"
 )
 
 // ===================== SHIELD BLOCKING =====================
 
-// RaiseShield equips and raises a shield for blocking
+// offhandEquipper is the optional view of the bot that can move an item into
+// the off-hand container. It is an assertion rather than a method on the
+// combat Bot interface for the same reason the health reader is: three test
+// doubles implement that interface, and "can wear a shield" is not worth
+// pushing through all of them. A bot without the ability simply reports that
+// it could not raise the shield, which is the honest answer.
+type offhandEquipper interface {
+	EquipToOffhand(slot uint32) error
+}
+
+// sneakHolder is the optional view of the bot that can hold the combat
+// crouch. On Bedrock a shield blocks only while the player is sneaking, so
+// the raise/lower pair has to own the crouch flag on the input stream.
+type sneakHolder interface {
+	SetSneakHeld(held bool)
+}
+
+// RaiseShield puts the bot in the blocking state: shield into the off hand,
+// crouch held down. Both halves matter — the server resolves blocking off
+// the off-hand slot and the sneaking input, and the old behaviour (shield in
+// the hotbar plus a fake use-item transaction) was a shield the server never
+// counted, which is why blocking never happened in game.
 func (cm *CombatManager) RaiseShield() bool {
-	inv := cm.bot.GetInventorySlots()
-	names := cm.bot.GetItemNames()
-
-	// Find shield in inventory (can be in off-hand slot 40 or hotbar)
-	var shieldSlot uint32
-	found := false
-
-	for slot, item := range inv {
-		if item.Count <= 0 {
-			continue
-		}
-		name := strings.ToLower(names[item.NetworkID])
-		if strings.Contains(name, "shield") {
-			shieldSlot = slot
-			found = true
-			break
-		}
-	}
-
-	if !found {
+	if !cm.HasShield() {
 		cm.logger.Debug("RaiseShield: no shield found")
 		return false
 	}
 
-	// Equip shield (in Bedrock, shield is typically in off-hand)
-	if err := cm.bot.EquipItem(shieldSlot); err != nil {
+	inv := cm.bot.GetInventorySlots()
+	names := cm.bot.GetItemNames()
+	if inv[40].Count > 0 && strings.Contains(strings.ToLower(names[inv[40].NetworkID]), "shield") {
+		// Already wearing it in the off hand; only the crouch is missing.
+		if holder, ok := cm.bot.(sneakHolder); ok {
+			holder.SetSneakHeld(true)
+		}
+		cm.mu.Lock()
+		cm.shieldUp = true
+		cm.mu.Unlock()
+		cm.logger.Info("Shield raised (already in off hand, crouch held)")
+		return true
+	}
+
+	shieldSlot := findBest(cm.slotNames(), WeaponShield)
+	if shieldSlot < 0 {
 		return false
 	}
-	time.Sleep(100 * time.Millisecond)
 
-	// Send use item packet to raise shield
-	tx := &packet.InventoryTransaction{
-		TransactionData: &protocol.UseItemTransactionData{
-			ActionType:      protocol.UseItemActionClickBlock,
-			BlockPosition:   protocol.BlockPos{0, -1, 0},
-			BlockFace:       255, // self-use (blocking)
-			HotBarSlot:      safecast.To[int32](shieldSlot),
-			HeldItem:        protocol.ItemInstance{Stack: inv[shieldSlot]},
-			Position:        cm.bot.GetCoords(),
-			ClickedPosition: mgl32.Vec3{0, 0, 0},
-		},
+	equipper, canOffhand := cm.bot.(offhandEquipper)
+	if !canOffhand {
+		cm.logger.Warn("Cannot raise shield: the body cannot move items to the off hand")
+		return false
 	}
-	_ = cm.bot.WritePacket(tx)
+	if err := equipper.EquipToOffhand(uint32(shieldSlot)); err != nil {
+		cm.logger.Warn("Failed to move shield to off hand", "slot", shieldSlot, "error", err)
+		return false
+	}
 
+	if holder, ok := cm.bot.(sneakHolder); ok {
+		holder.SetSneakHeld(true)
+	}
 	cm.mu.Lock()
 	cm.shieldUp = true
 	cm.mu.Unlock()
-
-	cm.logger.Info("Shield raised")
+	cm.logger.Info("Shield raised", "offhand_slot", 40, "crouch", true)
 	return true
 }
 
-// LowerShield stops blocking
+// LowerShield drops the blocking state: crouch released. The shield stays in
+// the off hand — moving it back costs a transaction and the next raise would
+// only pay it again.
 func (cm *CombatManager) LowerShield() {
+	if holder, ok := cm.bot.(sneakHolder); ok {
+		holder.SetSneakHeld(false)
+	}
 	cm.mu.Lock()
+	wasUp := cm.shieldUp
 	cm.shieldUp = false
 	cm.mu.Unlock()
-
-	// Release shield by stopping use (send stop break as a general stop action)
-	_ = cm.bot.WritePacket(&packet.PlayerAction{
-		EntityRuntimeID: cm.bot.GetEntityRuntimeID(),
-		ActionType:      protocol.PlayerActionAbortBreak,
-	})
-
-	cm.logger.Debug("Shield lowered")
+	if wasUp {
+		cm.logger.Info("Shield lowered")
+	}
 }
 
 // HasShield checks if a shield is available in inventory

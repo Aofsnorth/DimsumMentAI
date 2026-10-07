@@ -22,7 +22,10 @@ func wear(b *fakeBot, slot uint32, networkID int32, name string) {
 }
 
 // TestAutoArmorWearsBetterHelmet is the behaviour itself: the bot picks up a
-// diamond helmet while wearing leather, and the next tick puts it on.
+// diamond helmet while wearing leather, and the next tick puts it on. The
+// wear goes through the armor-container path — the hotbar select this test
+// used to assert cannot wear a piece at all, which is why "pasang armor"
+// showed nothing on the body.
 func TestAutoArmorWearsBetterHelmet(t *testing.T) {
 	t.Parallel()
 
@@ -33,11 +36,11 @@ func TestAutoArmorWearsBetterHelmet(t *testing.T) {
 	m := newTestManager(b)
 	m.TickAutoArmor()
 
-	if len(b.equipped) == 0 {
-		t.Fatal("tickAutoArmor equipped nothing despite a strictly better helmet in the inventory")
+	if len(b.armorWorn) == 0 {
+		t.Fatal("tickAutoArmor wore nothing despite a strictly better helmet in the inventory")
 	}
-	if b.equipped[0] != 3 {
-		t.Errorf("equipped slot %d, want 3 (the diamond helmet)", b.equipped[0])
+	if b.armorWorn[0].carried != 3 || b.armorWorn[0].armorSlot != 0 {
+		t.Errorf("wore %v, want the diamond helmet (slot 3) on the helmet armor slot 0", b.armorWorn[0])
 	}
 }
 
@@ -52,11 +55,11 @@ func TestAutoArmorFillsEmptySlot(t *testing.T) {
 	m := newTestManager(b)
 	m.TickAutoArmor()
 
-	if len(b.equipped) == 0 {
-		t.Fatal("tickAutoArmor equipped nothing while carrying a chestplate and wearing none")
+	if len(b.armorWorn) == 0 {
+		t.Fatal("tickAutoArmor wore nothing while carrying a chestplate and wearing none")
 	}
-	if b.equipped[0] != 12 {
-		t.Errorf("equipped slot %d, want 12", b.equipped[0])
+	if b.armorWorn[0].carried != 12 || b.armorWorn[0].armorSlot != 1 {
+		t.Errorf("wore %v, want slot 12 on the chestplate armor slot 1", b.armorWorn[0])
 	}
 }
 

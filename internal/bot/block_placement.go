@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"bedrock-ai/internal/bot/placement"
+	"bedrock-ai/internal/bot/survival"
 
 	"github.com/go-gl/mathgl/mgl32"
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
@@ -133,7 +134,22 @@ func (b *Bot) heldItemInstance() (uint32, protocol.ItemInstance, bool) {
 	if !ok || stack.Count == 0 {
 		return slot, protocol.ItemInstance{}, false
 	}
-	return slot, protocol.ItemInstance{StackNetworkID: b.StackNetworkIDs[slot], Stack: stack}, true
+	// The stack is reduced to type and count, as on every other item path: a
+	// server-side stack carries NBT and a block runtime ID, and echoing those
+	// back is what the host refuses (see survival.WireItemStack). The
+	// StackNetworkID is what identifies the stack and is kept.
+	//
+	// Geyser only. A BDS session expects the full stack back and reads the
+	// echoed NBT and block runtime ID as part of the interaction, so stripping
+	// them there would change behaviour that is already verified working.
+	wire := stack
+	if b.GeyserCompat {
+		wire = survival.WireItemStack(stack)
+	}
+	return slot, protocol.ItemInstance{
+		StackNetworkID: b.StackNetworkIDs[slot],
+		Stack:          wire,
+	}, true
 }
 
 func BuildPlacementPackets(entityRuntimeID uint64, request placement.Request, heldSlot uint32, heldItem protocol.ItemInstance, playerPosition mgl32.Vec3, supportNetworkID uint32) (*packet.PlayerAction, *packet.InventoryTransaction, *packet.PlayerAction) {

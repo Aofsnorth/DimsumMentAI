@@ -124,7 +124,14 @@ func ApplySelfMovePlayer(b *bot.Bot, mode byte, newPos mgl32.Vec3) bool {
 		// Geyser delivers that as a MovePlayer reset, not a correction packet.
 		NoteServerSupport(b, b.Pos.Y(), newPos.Y())
 	}
-	if ack || b.MovementState == "idle" {
+	// During a live knockback the server has assigned this body motion and a
+	// real client integrates it — rising on the hop, sliding on the push. The
+	// echo still reflects where the server saw us a couple of ticks ago, so
+	// adopting it (and zeroing the hop velocity it came with) is what erased
+	// every "kok ga kena knockback" before the slide could ever be seen:
+	// claimed, overwritten within 200ms, corrected back to the stale spot.
+	// Once the carried motion has decayed, the echo is authority again.
+	if ack || (b.MovementState == "idle" && b.KnockbackX == 0 && b.KnockbackZ == 0) {
 		b.Pos = newPos
 		b.VelY = 0.0
 	}

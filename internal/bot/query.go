@@ -2,6 +2,7 @@ package bot
 
 import (
 	"fmt"
+	"log/slog"
 	"math"
 	"strings"
 	"time"
@@ -34,6 +35,95 @@ func (b *Bot) FindPlayer(username string) (uint64, mgl32.Vec3, bool) {
 // FindKnownPlayer looks up a candidate player name or formatted name (e.g. "MEMBER Synterix", "[VIP] Synterix")
 // against tracked player entity IDs and server PlayerList UUIDs.
 // It returns the canonical tracked username and true if matched.
+// IsBotName reports whether a name refers to this bot.
+//
+// A relayed whisper names its recipient in the banner, and the server's own name
+// for the bot is not the configured one: it is whatever the PlayerList handed
+// back, which is why this cannot be a string comparison against one field. The
+// leading dot is dropped on both sides because servers differ on whether a name
+// carries it, and the AI aliases count because the bot answers to them.
+func (b *Bot) IsBotName(name string) bool {
+	if b == nil {
+		return false
+	}
+	candidate := normalizeBotNameCandidate(name)
+	if candidate == "" {
+		return false
+	}
+
+	b.Mu.Lock()
+	defer b.Mu.Unlock()
+	candidates := make([]string, 0, 4+len(b.TagAliases)+len(b.AiCfg.TagAliases))
+	candidates = append(candidates, b.Name, b.ConfiguredName, b.serverAssignedName)
+	candidates = append(candidates, b.TagAliases...)
+	candidates = append(candidates, b.AiCfg.TagAliases...)
+	for _, c := range candidates {
+		if normalizeBotNameCandidate(c) == candidate {
+			return true
+		}
+	}
+	return false
+}
+
+// NoteServerAssignedName records the name the server actually greets this bot
+// by, which is not always the configured one.
+//
+// The PlayerList entry that would carry it is matched by UUID and entity ID, and
+// a server that sends neither (Floodgate-style name swaps hand back an entry the
+// bot cannot recognise as its own) leaves the bot believing it is still called
+// its configured name. The visible failure is that the bot does not recognise
+// its own chat: the echoed reply arrives attributed to a stranger and the bot
+// treats a player's message as its own.
+//
+// The echo is the reliable signal, because it is the server stamping the name on
+// a line the bot is known to have just sent.
+func (b *Bot) NoteServerAssignedName(name string) {
+	if b == nil {
+		return
+	}
+	trimmed := strings.TrimSpace(name)
+	if trimmed == "" {
+		return
+	}
+	b.Mu.Lock()
+	changed := b.serverAssignedName != trimmed
+	if changed {
+		b.serverAssignedName = trimmed
+	}
+	b.Mu.Unlock()
+	if changed && b.Logger != nil {
+		b.Logger.Info("learned server-assigned bot name from own chat echo",
+			slog.String("name", trimmed))
+	}
+}
+
+// IsOwnChatSource reports whether a chat line's source is this bot speaking.
+//
+// It has to consult the server-assigned name as well as the configured one:
+// comparing against the configured name alone misses every reply on a server
+// that greets the bot under a different one, and the bot then answers itself.
+func (b *Bot) IsOwnChatSource(name string) bool {
+	if b == nil {
+		return false
+	}
+	candidate := normalizeBotNameCandidate(name)
+	if candidate == "" {
+		return false
+	}
+	b.Mu.Lock()
+	defer b.Mu.Unlock()
+	for _, c := range []string{b.Name, b.ConfiguredName, b.serverAssignedName} {
+		if normalizeBotNameCandidate(c) == candidate {
+			return true
+		}
+	}
+	return false
+}
+
+func normalizeBotNameCandidate(name string) string {
+	return strings.ToLower(strings.TrimPrefix(strings.TrimSpace(name), "."))
+}
+
 func (b *Bot) FindKnownPlayer(query string) (string, bool) {
 	b.Mu.Lock()
 	defer b.Mu.Unlock()
@@ -457,6 +547,67 @@ func (b *Bot) SetSprintHint(hop bool) {
 	v := true
 	b.sprintHint = &v
 	b.sprintHop = hop
+}
+
+// NearestTrackedPlayer reports the closest tracked player to an origin point.
+//
+// Players are not actors: handleAddPlayer files them in PlayerPositions and
+// never touches b.Actors, so anything scanning GetEntities for a player type
+// structurally finds none — which is how the self-defence reflex sat silent
+// through an entire duel. This is the one read that looks where players
+// actually live.
+func (b *Bot) NearestTrackedPlayer(origin mgl32.Vec3, maxDist float32) (name string, id uint64, pos mgl32.Vec3, ok bool) {
+	type candidate struct {
+		name string
+		id   uint64
+		pos  mgl32.Vec3
+	}
+
+	b.Mu.Lock()
+	candidates := make([]candidate, 0, len(b.PlayerUsernames))
+	for pid, pname := range b.PlayerUsernames {
+		if strings.TrimSpace(pname) == "" {
+			continue
+		}
+		ppos, tracked := b.PlayerPositions[pid]
+		if !tracked {
+			continue
+		}
+		candidates = append(candidates, candidate{name: pname, id: pid, pos: ppos})
+	}
+	b.Mu.Unlock()
+
+	best := float32(maxDist)
+	found := false
+	for _, c := range candidates {
+		// Outside the lock: IsOwnChatSource takes b.Mu itself, and this mutex
+		// is not reentrant.
+		if b.IsOwnChatSource(c.name) {
+			continue
+		}
+		d := origin.Sub(c.pos).Len()
+		if d <= best {
+			best, name, id, pos, found = d, c.name, c.id, c.pos, true
+		}
+	}
+	return name, id, pos, found
+}
+
+// SetSneakHeld raises or drops the combat shield hold. It is a combat-owned
+// state, not an emote: the shield only blocks while the input stream claims a
+// crouch, so this flag is what turns "the bot has a shield" into "the bot is
+// blocking" on the wire.
+func (b *Bot) SetSneakHeld(held bool) {
+	b.Mu.Lock()
+	defer b.Mu.Unlock()
+	b.SneakHeld = held
+}
+
+// SneakHeld reports whether the shield hold is currently raised.
+func (b *Bot) SneakHeldState() bool {
+	b.Mu.Lock()
+	defer b.Mu.Unlock()
+	return b.SneakHeld
 }
 
 // ClearSprintHint drops the latched travel style back to the movement rules'

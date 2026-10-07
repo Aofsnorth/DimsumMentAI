@@ -291,8 +291,11 @@ func reportActionStatusAsync(b *Bot, user string, status event.ActionStatus) {
 	}
 
 	if message != "" {
-		b.Logger.Info("action status reply sending", slog.String("reply", message))
-		b.SendSafeChat(message)
+		b.Logger.Info("action status reply sending",
+			slog.String("reply", message),
+			slog.String("to", user),
+			slog.Bool("whisper", b.WhisperPartner() != ""))
+		b.SendReply(user, message)
 	}
 }
 

@@ -73,10 +73,15 @@ func (cm *CombatManager) Tick(ctx context.Context) {
 		return
 	}
 
-	// Mob-specific movement comes before the weapon decision: a tactic that
-	// ends the fight (the creeper flee) must win over everything else in the
-	// tick.
+	// A duel is a different conversation from a mob fight. The player target
+	// gets the circle: back off when pushed inside it, close when left out of
+	// it, strafe the band in between. The band only applies at melee range —
+	// closing from far away is what a duel wants anyway.
+	pvp := target.Type == "player"
 	plan := MobMovePlan(normalizedMobName(target), HorizontalDistance(botPos, target.Position), cm.bot.Appetite())
+	if pvp {
+		plan = PvPPlan(HorizontalDistance(botPos, target.Position))
+	}
 	if plan.Flee {
 		// Put something between the body and the blast before leaving, if there
 		// is time and a block to put. This is the composed answer rather than
@@ -120,6 +125,12 @@ func (cm *CombatManager) Tick(ctx context.Context) {
 	// creeper that backs off gets met with a bow instead of the sword it was
 	// holding two seconds ago.
 	situation := cm.situation(dist)
+	situation.PvP = pvp
+	cm.mu.Lock()
+	situation.SwingsLanded = cm.swingsInFight
+	cm.mu.Unlock()
+	situation.SwingReady = HorizontalDistance(botPos, target.Position) <= fairReach &&
+		time.Since(cm.lastAttack) >= meleeCooldown
 	choice := ChooseWeapon(cm.slotNames(), situation)
 	if choice.Kind == WeaponNone {
 		cm.logger.Warn("Combat with nothing to fight with")
@@ -154,6 +165,16 @@ func (cm *CombatManager) Tick(ctx context.Context) {
 	cm.swingAt(target)
 }
 
+// The two numbers a fair fighter lives inside. fairReach is the reach a
+// survival Bedrock client plays at — measured across the ground, the way a
+// duel actually happens — and swings past it are the thing anticheats and
+// opponents both read as reach hacks. meleeCooldown keeps the swing rate at
+// a hand a human could actually click: two a second.
+const (
+	fairReach     float32       = 3.0
+	meleeCooldown time.Duration = 500 * time.Millisecond
+)
+
 // swingAt is the melee half of a tick: the range check, the cooldown, the sight
 // check, the hit, and the durability that has to be paid for it.
 //
@@ -162,10 +183,10 @@ func (cm *CombatManager) Tick(ctx context.Context) {
 // second call site runs it at a different rate, and then the bot is swinging
 // faster than the server will answer.
 func (cm *CombatManager) swingAt(target *entity.Info) {
-	if cm.distance(cm.bot.GetCoords(), target.Position) > 3.5 {
+	if HorizontalDistance(cm.bot.GetCoords(), target.Position) > fairReach {
 		return
 	}
-	if time.Since(cm.lastAttack) < 500*time.Millisecond {
+	if time.Since(cm.lastAttack) < meleeCooldown {
 		return
 	}
 	if !cm.hasLineOfSight(target) {
@@ -174,6 +195,9 @@ func (cm *CombatManager) swingAt(target *entity.Info) {
 	}
 	cm.attack(target.ID, target.Position)
 	cm.lastAttack = time.Now()
+	cm.mu.Lock()
+	cm.swingsInFight++
+	cm.mu.Unlock()
 	// Every swing costs the held tool a point of life. Counting it here is the
 	// only place durability is actually consumed, which is what makes the count
 	// mean anything.

@@ -11,6 +11,7 @@ import (
 	"bedrock-ai/internal/event"
 
 	"bedrock-ai/internal/bot/affordance"
+
 	"github.com/go-gl/mathgl/mgl32"
 
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
@@ -67,6 +68,10 @@ type CombatManager struct {
 	shieldUp     bool
 	mu           sync.Mutex
 	lastAttack   time.Time
+	// swingsInFight counts the swings this engagement has spent. A player
+	// target that soaks several without dying is armoured, and that count is
+	// what moves the doctrine from sword to axe.
+	swingsInFight int
 	// Shot is the state of the ranged shot currently in flight: the draw is
 	// held across several ticks before the release goes out.
 	Shot Shot
@@ -121,6 +126,18 @@ func (cm *CombatManager) PvpTargetForTest() string {
 	return cm.pvpTarget
 }
 
+// TargetIDForTest reports the entity the manager is currently fighting, so a
+// test can prove the guard picked the nearer-to-the-player mob and not just any
+// hostile. ok is false while nothing is engaged.
+func (cm *CombatManager) TargetIDForTest() (uint64, bool) {
+	cm.mu.Lock()
+	defer cm.mu.Unlock()
+	if !cm.inCombat {
+		return 0, false
+	}
+	return cm.targetID, true
+}
+
 // SetShotDrawStartForTest backdates the in-flight draw under the manager lock, so
 // a test can reach the release half of the draw/hold/release state machine
 // without sleeping out the real 1.1 s draw.
@@ -148,6 +165,7 @@ func (cm *CombatManager) EngageTarget(id uint64) {
 	cm.targetID = id
 	cm.pvpTarget = ""
 	cm.inCombat = true
+	cm.swingsInFight = 0
 	cm.logger.Info("Engaging combat target", "name", info.Name, "id", id, "type", info.Type)
 
 	go cm.equipBestWeapon()
@@ -166,6 +184,7 @@ func (cm *CombatManager) EngagePlayer(username string) bool {
 	cm.targetID = id
 	cm.pvpTarget = username
 	cm.inCombat = true
+	cm.swingsInFight = 0
 	cm.logger.Info("Engaging PVP target", "username", username, "id", id)
 	go cm.equipBestWeapon()
 	return true
@@ -181,5 +200,6 @@ func (cm *CombatManager) Disengage() {
 	cm.inCombat = false
 	cm.targetID = 0
 	cm.pvpTarget = ""
+	cm.swingsInFight = 0
 	cm.bot.StopMovement()
 }

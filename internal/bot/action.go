@@ -1,7 +1,9 @@
 package bot
 
 import (
+	"context"
 	"fmt"
+	"math"
 	"strings"
 	"time"
 
@@ -122,8 +124,10 @@ func (b *Bot) FollowPlayer(username string) {
 	}
 }
 
-// Stop halts all bot movements
+// Stop halts all bot movements and cancels any long-running job in flight.
 func (b *Bot) Stop() {
+	b.CancelActivity()
+
 	b.Mu.Lock()
 	defer b.Mu.Unlock()
 	b.MovementState = "idle"
@@ -131,7 +135,60 @@ func (b *Bot) Stop() {
 	b.TargetPlayerName = ""
 	b.LookTargetName = ""
 	b.LookTargetUntil = time.Time{}
-	b.Logger.Debug("Bot movement stopped")
+	b.ForceWalkUntil = time.Time{}
+	if b.Logger != nil {
+		b.Logger.Debug("Bot movement stopped")
+	}
+}
+
+// ForceWalk pushes the body straight along yaw for seconds, with no path and
+// no pathfinder. It is the low-level primitive for "maju" when A* refuses to
+// route — a blocked bridge, terrain it cannot model — and it deliberately
+// replaces whatever route was running: negotiating with the refusal that
+// motivated the push would just reproduce it.
+func (b *Bot) ForceWalk(yaw float32, seconds float32) {
+	if seconds <= 0 {
+		seconds = 2
+	}
+	radians := float64(yaw+90) * math.Pi / 180
+	dir := mgl32.Vec2{float32(math.Cos(radians)), float32(math.Sin(radians))}
+	b.Mu.Lock()
+	b.ForceWalkDir = dir
+	b.ForceWalkUntil = time.Now().Add(time.Duration(seconds * float32(time.Second)))
+	b.CurrentPath = nil
+	b.PathIndex = 0
+	b.MovementState = "idle"
+	b.Mu.Unlock()
+	if b.Logger != nil {
+		b.Logger.Info("force walk started", "yaw", yaw, "seconds", seconds, "dir", dir)
+	}
+}
+
+// ActivityContext returns the context that bounds the bot's current job.
+//
+// Long-running work started from an action must derive its context from here
+// rather than from context.Background(). A background context can never be
+// cancelled, so a job handed one keeps running after the player says stop: the
+// chop loop re-navigates, the bot answers "okay, stopping" and walks off to
+// fell another tree anyway. Deriving from here is what makes the stop real.
+func (b *Bot) ActivityContext() context.Context {
+	b.activityMu.Lock()
+	defer b.activityMu.Unlock()
+	if b.activityCtx == nil {
+		b.activityCtx, b.activityCancel = context.WithCancel(context.Background())
+	}
+	return b.activityCtx
+}
+
+// CancelActivity stops the current job and opens a fresh one, so work started
+// after the stop is not born already cancelled.
+func (b *Bot) CancelActivity() {
+	b.activityMu.Lock()
+	if b.activityCancel != nil {
+		b.activityCancel()
+	}
+	b.activityCtx, b.activityCancel = context.WithCancel(context.Background())
+	b.activityMu.Unlock()
 }
 
 // SnapshotJourney captures the movement intent so a detour can put it back.

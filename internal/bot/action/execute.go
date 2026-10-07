@@ -135,10 +135,14 @@ func gatherHandler(defaultItem string) ActionHandler {
 			count += before
 		}
 		go func() {
+			// Derived from the bot's activity context, not context.Background():
+			// a gather the player cannot stop is a gather that keeps felling trees
+			// after they said stop.
+			ctx := b.ActivityContext()
 			if IsWoodLike(itemName) {
-				b.Gatherer.GatherWoodType(context.Background(), itemName, count)
+				b.Gatherer.GatherWoodType(ctx, itemName, count)
 			} else {
-				b.Gatherer.GatherBlock(context.Background(), itemName, count)
+				b.Gatherer.GatherBlock(ctx, itemName, count)
 			}
 			ReportInventoryDelta(b, user, "gather", itemName, before, count)
 		}()
@@ -151,7 +155,7 @@ func gatherHandler(defaultItem string) ActionHandler {
 func lootHandler(radius float32, msg string) ActionHandler {
 	return func(b *bot.Bot, _, user string) {
 		go func() {
-			collected := b.Gatherer.CollectAllDrops(context.Background(), radius)
+			collected := b.Gatherer.CollectAllDrops(b.ActivityContext(), radius)
 			b.Logger.Debug(msg, "collected", collected)
 			action := "loot"
 			if collected == 0 {
@@ -201,7 +205,7 @@ func harvestCrops(b *bot.Bot, param, user string) {
 func goFish(b *bot.Bot, param, user string) {
 	count := ParseCount(param, 5)
 	go func() {
-		caught := b.Fisher.GoFish(context.Background(), count)
+		caught := b.Fisher.GoFish(b.ActivityContext(), count)
 		b.Logger.Debug("fishing complete", "caught", caught)
 		reportCountOutcome(b, user, "fish", "fish", caught, "tidak dapat ikan")
 	}()
@@ -277,6 +281,20 @@ func handleShoot(b *bot.Bot, user string) {
 	}
 }
 
+// isEmptyHandWord reports whether an equip request is really asking for an
+// empty hand. Players say it several ways, and the model relays whichever one it
+// picked, so the check is on the words rather than on one canonical item name.
+func isEmptyHandWord(item string) bool {
+	n := strings.ToLower(strings.TrimSpace(item))
+	n = strings.TrimPrefix(n, "minecraft:")
+	switch n {
+	case "", "air", "nothing", "none", "empty", "empty_hand", "empty hand",
+		"hand", "bare hand", "barehand", "fist", "tangan kosong", "kosong":
+		return true
+	}
+	return false
+}
+
 // interactHandler clicks whatever the request points at. The parameter is loose
 // on purpose: a player name, a thing type ("npc", "sign", "the one in front of
 // you"), or empty for whatever the bot is facing.
@@ -299,18 +317,37 @@ func interactHandler(b *bot.Bot, param, user string) {
 	}
 
 	if _, err := b.Interactor.Resolve(interact.ParseRequest(param)); err != nil {
-		ReportStatus(b, user, event.ActionStatus{
-			Action:  "interact",
-			Item:    param,
-			Success: false,
-			Error:   err.Error(),
-		})
-		return
+		// Nothing in click reach is not the same as nothing there. The player is
+		// looking at the thing they are asking about and the host's own range
+		// check would have dropped a click sent from here anyway, so walk up to it
+		// and try once more before reporting a failure the player will not
+		// believe. Failing the action here is what produced "nggak ada 'tombol' di
+		// dekat sini" for a button standing five metres away.
+		req := interact.ParseRequest(param)
+		req.Requester = user
+		if !b.Interactor.Approach(b.ActivityContext(), req) {
+			ReportStatus(b, user, event.ActionStatus{
+				Action:  "interact",
+				Item:    param,
+				Success: false,
+				Error:   err.Error(),
+			})
+			return
+		}
+		if _, walkErr := b.Interactor.Resolve(req); walkErr != nil {
+			ReportStatus(b, user, event.ActionStatus{
+				Action:  "interact",
+				Item:    param,
+				Success: false,
+				Error:   walkErr.Error(),
+			})
+			return
+		}
 	}
 	// A click is made standing still. A leftover follow/walk would keep pulling
 	// the bot toward the player while it aims at the NPC.
 	b.StopMovement()
-	go b.Interactor.Interact(context.Background(), user, param)
+	go b.Interactor.Interact(b.ActivityContext(), user, param)
 }
 
 // joinHandler moves the bot to a different server by ending the current
@@ -456,6 +493,36 @@ var ActionHandlers = map[string]ActionHandler{
 		ReportStatus(b, user, event.ActionStatus{Action: "follow", Item: target, Success: true})
 	},
 	"goto": func(b *bot.Bot, param, user string) { goToCoords(b, param, user) },
+	"walk": handleWalk,
+	// force_walk is the raw push: walk straight along the current yaw with no
+	// pathfinding. It exists for the case that makes A* give up entirely —
+	// terrain it cannot model, a blocked bridge — where the honest answer to
+	// "maju terus" is to push forward, not to stand still.
+	"force_walk": func(b *bot.Bot, param, user string) {
+		secs := ParseCount(param, 2)
+		if secs > 12 {
+			secs = 12
+		}
+		go func() {
+			b.ForceWalk(b.GetYaw(), float32(secs))
+			time.Sleep(time.Duration(secs) * time.Second)
+			ReportStatus(b, user, event.ActionStatus{Action: "force_walk", Success: true})
+		}()
+	},
+	// "run" latches the travel style the movement tick reads while walking a
+	// path: sprint plus the bunny-hop. It is how "lari" / "lari lompat"
+	// becomes a real gait instead of the model merely saying it will run.
+	"run": func(b *bot.Bot, _, user string) {
+		b.SetSprintHint(true)
+		ReportStatus(b, user, event.ActionStatus{Action: "run", Success: true})
+	},
+	// "stroll" is the opposite latch: an ordinary walk, no sprint, for "jalan
+	// pelan" / "jalan aja". Clearing the hint hands the choice back to the
+	// movement rules, which is also what arrival does.
+	"stroll": func(b *bot.Bot, _, user string) {
+		b.ClearSprintHint()
+		ReportStatus(b, user, event.ActionStatus{Action: "stroll", Success: true})
+	},
 	"stop": func(b *bot.Bot, _, user string) {
 		b.Stop()
 		if b.CombatMgr != nil {
@@ -520,6 +587,27 @@ var ActionHandlers = map[string]ActionHandler{
 				Success: false,
 				Error:   "butuh nama barang, contoh: equip:diamond_sword",
 			})
+			return
+		}
+		// "Pegang tangan kosong" is not a request to find an item called air.
+		// A Bedrock hand always shows a slot's content, so holding nothing means
+		// selecting an empty slot — which is a different action with a different
+		// failure mode, and it was being answered with "item air not found in
+		// inventory".
+		if isEmptyHandWord(itemName) {
+			go func() {
+				if err := b.UnequipItem(); err != nil {
+					b.Logger.Warn("unequip action failed", "error", err)
+					ReportStatus(b, user, event.ActionStatus{
+						Action:  "equip",
+						Item:    "empty hand",
+						Success: false,
+						Error:   err.Error(),
+					})
+					return
+				}
+				ReportStatus(b, user, event.ActionStatus{Action: "equip", Item: "empty hand", Success: true})
+			}()
 			return
 		}
 		go func() {
@@ -724,26 +812,26 @@ var ActionHandlers = map[string]ActionHandler{
 	"breed": func(b *bot.Bot, param, user string) {
 		animalType := NormalizeItemName(param)
 		go func() {
-			ok := b.HusbandryMgr.BreedAnimals(context.Background(), animalType)
+			ok := b.HusbandryMgr.BreedAnimals(b.ActivityContext(), animalType)
 			reportBoolOutcome(b, user, "breed", animalType, ok, "tidak ada pasangan yang bisa dikawinkan")
 		}()
 	},
 	"feed": func(b *bot.Bot, param, user string) {
 		animalType := NormalizeItemName(param)
 		go func() {
-			ok := b.HusbandryMgr.FeedAnimal(context.Background(), animalType)
+			ok := b.HusbandryMgr.FeedAnimal(b.ActivityContext(), animalType)
 			reportBoolOutcome(b, user, "feed", animalType, ok, "tidak ada hewan yang bisa diberi makan")
 		}()
 	},
 	"milk": func(b *bot.Bot, _, user string) {
 		go func() {
-			ok := b.HusbandryMgr.MilkCow(context.Background())
+			ok := b.HusbandryMgr.MilkCow(b.ActivityContext())
 			reportBoolOutcome(b, user, "milk", "milk", ok, "tidak ada sapi yang bisa diperas")
 		}()
 	},
 	"shear": func(b *bot.Bot, _, user string) {
 		go func() {
-			ok := b.HusbandryMgr.ShearSheep(context.Background())
+			ok := b.HusbandryMgr.ShearSheep(b.ActivityContext())
 			reportBoolOutcome(b, user, "shear", "sheep", ok, "tidak ada domba yang bisa dicukur")
 		}()
 	},
@@ -752,16 +840,16 @@ var ActionHandlers = map[string]ActionHandler{
 		go func() {
 			var ok bool
 			if animalType == "cat" || animalType == "ocelot" {
-				ok = b.HusbandryMgr.TameCat(context.Background())
+				ok = b.HusbandryMgr.TameCat(b.ActivityContext())
 			} else {
-				ok = b.HusbandryMgr.TameWolf(context.Background())
+				ok = b.HusbandryMgr.TameWolf(b.ActivityContext())
 			}
 			reportBoolOutcome(b, user, "tame", animalType, ok, "tidak ada hewan jinak yang bisa dijinakkan")
 		}()
 	},
 	"sleep": func(b *bot.Bot, _, user string) {
 		go func() {
-			ok := b.SurvivalMgr.SleepInBed(context.Background())
+			ok := b.SurvivalMgr.SleepInBed(b.ActivityContext())
 			reportBoolOutcome(b, user, "sleep", "", ok, "tidak bisa tidur, butuh malam dan kasur")
 		}()
 	},
@@ -779,7 +867,7 @@ var ActionHandlers = map[string]ActionHandler{
 	},
 	"bed": func(b *bot.Bot, _, user string) {
 		go func() {
-			ok := b.SurvivalMgr.SleepInBed(context.Background())
+			ok := b.SurvivalMgr.SleepInBed(b.ActivityContext())
 			reportBoolOutcome(b, user, "sleep", "", ok, "tidak bisa tidur, butuh malam dan kasur")
 		}()
 	},
@@ -795,7 +883,7 @@ var ActionHandlers = map[string]ActionHandler{
 				})
 				return
 			}
-			ok = b.Interactor.MountEntity(context.Background(), interact.Target{ID: target.ID, Pos: target.Position, Name: target.Name})
+			ok = b.Interactor.MountEntity(b.ActivityContext(), interact.Target{ID: target.ID, Pos: target.Position, Name: target.Name})
 			reportBoolOutcome(b, user, "mount", target.Name, ok, "gagal naik ke "+target.Name)
 		}()
 	},
@@ -815,7 +903,7 @@ var ActionHandlers = map[string]ActionHandler{
 				})
 				return
 			}
-			ok = b.Interactor.MountEntity(context.Background(), interact.Target{ID: target.ID, Pos: target.Position, Name: target.Name})
+			ok = b.Interactor.MountEntity(b.ActivityContext(), interact.Target{ID: target.ID, Pos: target.Position, Name: target.Name})
 			reportBoolOutcome(b, user, "ride", target.Name, ok, "gagal naik ke "+target.Name)
 		}()
 	},
@@ -830,14 +918,14 @@ var ActionHandlers = map[string]ActionHandler{
 			// not return a count, so the step confirms the outcome by
 			// measuring the torches that are now held.
 			before := CountInventoryItems(b.GetInventorySlots(), b.GetItemNames(), "torch")
-			b.SurvivalMgr.AutoPlaceTorches(context.Background())
+			b.SurvivalMgr.AutoPlaceTorches(b.ActivityContext())
 			ReportInventoryDelta(b, user, "torch", "torch", before, 0)
 		}()
 	},
 	"placetorch": func(b *bot.Bot, _, user string) {
 		go func() {
 			before := CountInventoryItems(b.GetInventorySlots(), b.GetItemNames(), "torch")
-			b.SurvivalMgr.AutoPlaceTorches(context.Background())
+			b.SurvivalMgr.AutoPlaceTorches(b.ActivityContext())
 			ReportInventoryDelta(b, user, "torch", "torch", before, 0)
 		}()
 	},
@@ -891,6 +979,21 @@ var ActionHandlers = map[string]ActionHandler{
 			ReportStatus(b, user, event.ActionStatus{Action: "toggle", Item: "auto-armor", Success: true})
 		}
 	},
+	// "armor" is the immediate wear, distinct from the autoarmor toggle: the
+	// model was already emitting autoarmor for "pakai armor", which only
+	// flipped a switch and reported "udah aktif" while the body stayed bare.
+	// The swap itself is server-confirmed and slow (200ms per piece), so it
+	// runs on its own goroutine like the other wearing actions.
+	"armor": func(b *bot.Bot, _, user string) {
+		go func() {
+			count := b.SurvivalMgr.EquipBestArmor()
+			if count > 0 {
+				ReportStatus(b, user, event.ActionStatus{Action: "armor", Count: count, Success: true})
+				return
+			}
+			ReportStatus(b, user, event.ActionStatus{Action: "armor", Success: false, Error: "nggak ada armor yang bisa dipakai"})
+		}()
+	},
 	"autotool": func(b *bot.Bot, _, user string) {
 		ReportStatus(b, user, event.ActionStatus{Action: "toggle", Item: "auto-tool", Success: true})
 	},
@@ -902,7 +1005,7 @@ var ActionHandlers = map[string]ActionHandler{
 			// The explorer reports its own progress to chat, which a waiting
 			// step cannot see. It returns the number of blocks it covered, so
 			// the step reports that: standing still is not exploring.
-			covered := b.Explorer.ExploreRandom(context.Background(), time.Duration(duration)*time.Second)
+			covered := b.Explorer.ExploreRandom(b.ActivityContext(), time.Duration(duration)*time.Second)
 			reportCountOutcome(b, user, "explore", "explore", covered, "tidak bergerak saat menjelajah")
 		}()
 	},
@@ -917,19 +1020,19 @@ var ActionHandlers = map[string]ActionHandler{
 			_, _ = fmt.Sscanf(parts[1], "%d", &dist)
 		}
 		go func() {
-			covered := b.Explorer.ExploreDirection(context.Background(), direction, dist)
+			covered := b.Explorer.ExploreDirection(b.ActivityContext(), direction, dist)
 			reportCountOutcome(b, user, "exploredir", direction, covered, "tidak bergerak saat menjelajah")
 		}()
 	},
 	"returnhome": func(b *bot.Bot, _, user string) {
 		go func() {
-			ok := b.Explorer.ReturnToOrigin(context.Background())
+			ok := b.Explorer.ReturnToOrigin(b.ActivityContext())
 			reportBoolOutcome(b, user, "returnhome", "", ok, "gagal kembali ke titik awal")
 		}()
 	},
 	"shelter": func(b *bot.Bot, _, user string) {
 		go func() {
-			ok := b.SurvivalMgr.BuildEmergencyShelter(context.Background())
+			ok := b.SurvivalMgr.BuildEmergencyShelter(b.ActivityContext())
 			reportBoolOutcome(b, user, "shelter", "", ok, "gagal membuat tempat berlindung")
 		}()
 	},
@@ -943,13 +1046,13 @@ var ActionHandlers = map[string]ActionHandler{
 	},
 	"deathpoint": func(b *bot.Bot, _, user string) {
 		go func() {
-			ok := b.SurvivalMgr.RecoverFromDeath(context.Background())
+			ok := b.SurvivalMgr.RecoverFromDeath(b.ActivityContext())
 			reportBoolOutcome(b, user, "recover", "", ok, "gagal mengambil barang di titik kematian")
 		}()
 	},
 	"recover": func(b *bot.Bot, _, user string) {
 		go func() {
-			ok := b.SurvivalMgr.RecoverFromDeath(context.Background())
+			ok := b.SurvivalMgr.RecoverFromDeath(b.ActivityContext())
 			reportBoolOutcome(b, user, "recover", "", ok, "gagal mengambil barang di titik kematian")
 		}()
 	},

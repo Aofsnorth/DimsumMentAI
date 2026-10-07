@@ -60,7 +60,7 @@ func handleEpisodeCommand(b *bot.Bot, evt event.ChatEvent, msg string) bool {
 			if b.EndEpisodeFunc != nil {
 				b.EndEpisodeFunc("operator stopped it")
 			}
-			b.SendSafeChat("Oke, rekaman berhenti.")
+			replyViaAI(b, evt.SourceName, msg, "The episode recording was stopped at the operator's request.")
 			return true
 		}
 	}
@@ -80,7 +80,10 @@ func handleEpisodeCommand(b *bot.Bot, evt event.ChatEvent, msg string) bool {
 		slog.Int("episode", number),
 		slog.Duration("budget", budget),
 		slog.String("objective", objective))
-	b.SendSafeChat(fmt.Sprintf("Oke. Episode %d dimulai — %s. Punya %s.", number, objective, speakDuration(budget)))
+	replyViaAI(b, evt.SourceName, msg, fmt.Sprintf(
+		"Episode %d started. Objective: %q. Time budget: %s. "+
+			"State these facts accurately and do not invent any others.",
+		number, objective, speakDuration(budget)))
 	return true
 }
 

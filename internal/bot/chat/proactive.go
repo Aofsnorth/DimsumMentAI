@@ -209,7 +209,7 @@ func dispatchProactiveResponse(b *bot.Bot, targetPlayer, reply string) {
 
 	if parsed.CleanReply != "" {
 		b.Logger.Info("proactive reply sending", slog.String("reply", parsed.CleanReply))
-		b.SendSafeChat(parsed.CleanReply)
+		b.SendReply(targetPlayer, parsed.CleanReply)
 	}
 
 	if len(parsed.Actions) > 0 {

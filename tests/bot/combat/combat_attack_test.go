@@ -50,6 +50,12 @@ type combatFakeBot struct {
 	solidity entity.WorldModel
 	blocks   fakeBlockReader
 	packets  []packet.Packet
+	aiEvents []string
+	// inventory/itemNames back the two accessor methods: nil is the honest
+	// empty bag the older tests assume, and the shield/weapon tests stage
+	// items here without building a second fake.
+	inventory map[uint32]protocol.ItemStack
+	itemNames map[int32]string
 }
 
 func newCombatFakeBot(origin mgl32.Vec3, loaded, solid func(x, y, z int32) bool) *combatFakeBot {
@@ -83,13 +89,25 @@ func (f *combatFakeBot) WritePacket(pk packet.Packet) error {
 	f.packets = append(f.packets, pk)
 	return nil
 }
-func (f *combatFakeBot) NavigateTo(pos mgl32.Vec3)                                 {}
-func (f *combatFakeBot) StopMovement()                                             {}
-func (f *combatFakeBot) LookAt(pos mgl32.Vec3)                                     {}
-func (f *combatFakeBot) InjectAIEvent(msg string)                                  {}
-func (f *combatFakeBot) GetHeldItemSlot() uint32                                   { return 0 }
-func (f *combatFakeBot) GetInventorySlots() map[uint32]protocol.ItemStack          { return nil }
-func (f *combatFakeBot) GetItemNames() map[int32]string                            { return nil }
+func (f *combatFakeBot) NavigateTo(pos mgl32.Vec3) {}
+func (f *combatFakeBot) StopMovement()             {}
+func (f *combatFakeBot) LookAt(pos mgl32.Vec3)     {}
+func (f *combatFakeBot) InjectAIEvent(msg string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.aiEvents = append(f.aiEvents, msg)
+}
+func (f *combatFakeBot) GetHeldItemSlot() uint32 { return 0 }
+func (f *combatFakeBot) GetInventorySlots() map[uint32]protocol.ItemStack {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.inventory
+}
+func (f *combatFakeBot) GetItemNames() map[int32]string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.itemNames
+}
 func (f *combatFakeBot) EquipItem(slot uint32) error                               { return nil }
 func (f *combatFakeBot) SendChat(msg string)                                       {}
 func (f *combatFakeBot) ReportActionStatus(user string, status event.ActionStatus) {}

@@ -206,6 +206,17 @@ func EntityNameMatches(ent *entity.Info, canonical string) bool {
 	}
 	if canonical == "npc" {
 		aliases = append(aliases, "armor_stand", "armor stand", "stand")
+		// A server NPC is usually a player-type entity whose name is nothing but
+		// formatting codes — Geyser relays the Java-side Citizens entity that way,
+		// and the floating text above it is a separate armor stand. A real player
+		// has a real name, so one that normalises to nothing is the NPC.
+		//
+		// Missing this sent "klik npc" at the hologram three blocks in the air:
+		// the click landed, the host accepted it, and nothing happened, because
+		// text is not a hitbox anyone binds a command to.
+		if Normalise(ent.Type) == "player" && Normalise(ent.Name) == "" {
+			return true
+		}
 	} else if canonical == "armor_stand" {
 		aliases = append(aliases, "npc")
 	}

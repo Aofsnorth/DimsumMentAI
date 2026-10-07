@@ -39,6 +39,22 @@ type fakeBot struct {
 	// the way movement.LookAt does on the real bot.
 	aimYaw   float32
 	aimPitch float32
+	// approachCalls records every NavigateToBlock request, and
+	// navigateArrives decides whether one reports arrival.
+	approachCalls   []protocol.BlockPos
+	navigateArrives bool
+}
+
+// NavigateToBlock records the walk request. Tests set navigateArrives to make
+// the bot "arrive"; by default the walk fails, because a test that did not ask
+// for a walk should not silently pass through one.
+func (f *fakeBot) NavigateToBlock(x, y, z int32, _ float32) bool {
+	f.approachCalls = append(f.approachCalls, protocol.BlockPos{x, y, z})
+	if !f.navigateArrives {
+		return false
+	}
+	f.pos = mgl32.Vec3{float32(x) + 0.5, float32(y), float32(z) + 0.5}
+	return true
 }
 
 func newFakeBot() *fakeBot {
@@ -266,6 +282,61 @@ func TestResolveFallsBackToEntityWhenNoBlockExists(t *testing.T) {
 	}
 	if target.Kind != interact.KindEntity || target.ID != 22 {
 		t.Fatalf("resolved %+v, want the join stand entity 22", target)
+	}
+}
+
+// TestResolveNpcTargetsThePhysicalNPCUnderTheHologram is what a join lobby
+// actually looks like to this bot: the NPC is a player-type entity whose name is
+// nothing but formatting codes, and the floating text above it is a separate
+// armour stand three blocks in the air at the same horizontal spot.
+//
+// Resolving "klik npc" to the stand is how the click could land, be accepted by
+// the host, and still do nothing — text is not a hitbox anyone binds a command
+// to. The lowest entity in the stack is the one standing on the ground.
+func TestResolveNpcTargetsThePhysicalNPCUnderTheHologram(t *testing.T) {
+	t.Parallel()
+
+	b := newFakeBot()
+	addEntity(b, 6, "minecraft:armor_stand", "§r§e§lTerra Realms S2", -0.5, 66.93, 1.5)
+	addEntity(b, 9, "minecraft:player", "§4§8§a§f§6§4§3§c", -0.5, 64, 1.5)
+
+	target, err := newTestInteractor(b).Resolve(interact.ParseRequest("npc"))
+	if err != nil {
+		t.Fatalf("Resolve(npc) error = %v", err)
+	}
+	if target.Kind != interact.KindEntity || target.ID != 9 {
+		t.Fatalf("resolved %+v, want the physical NPC entity 9 under the hologram", target)
+	}
+}
+
+// TestResolveNpcStillFindsTheStandWhenItIsAlone keeps the armour-stand reading
+// of "npc" working for the servers that use a bare stand as the whole NPC.
+func TestResolveNpcStillFindsTheStandWhenItIsAlone(t *testing.T) {
+	t.Parallel()
+
+	b := newFakeBot()
+	addEntity(b, 22, "minecraft:armor_stand", "Join Server", 0.5, 64, 2.5)
+
+	target, err := newTestInteractor(b).Resolve(interact.ParseRequest("npc"))
+	if err != nil {
+		t.Fatalf("Resolve(npc) error = %v", err)
+	}
+	if target.Kind != interact.KindEntity || target.ID != 22 {
+		t.Fatalf("resolved %+v, want the join stand entity 22", target)
+	}
+}
+
+// TestResolveNpcDoesNotTargetARealPlayer is the boundary that makes the
+// nameless-player heuristic safe: a player with an actual name is a person, not
+// a server NPC, and clicking them is not what "klik npc" means.
+func TestResolveNpcDoesNotTargetARealPlayer(t *testing.T) {
+	t.Parallel()
+
+	b := newFakeBot()
+	addEntity(b, 4, "minecraft:player", "Synterix", -0.5, 64, 1.5)
+
+	if _, err := newTestInteractor(b).Resolve(interact.ParseRequest("npc")); err == nil {
+		t.Fatal("resolved a real player as the npc")
 	}
 }
 

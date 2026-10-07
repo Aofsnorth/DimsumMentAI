@@ -26,7 +26,22 @@ func (tc *TickContext) runPhysicsAndCollisions() {
 // single-player host corrects position roughly every 6 ticks, so this covers
 // several corrections while still expiring quickly if the bot is in genuine
 // mid-air after a jump.
-const serverAnchorWindow = 400 * time.Millisecond
+//
+// It must also cover the slower cadence: a Geyser minigame host echoes the
+// idle body about once a second (measured live: corrections exactly 1.000s
+// apart), and with a 400ms window the anchor expired 600ms before every
+// echo — gravity won the gap, the body sank two blocks below the server's
+// truth, and every position claim it made from down there was rejected and
+// rubber-banded. A body that cannot hold its Y cannot hold anything else,
+// knockback included.
+const serverAnchorWindow = 1200 * time.Millisecond
+
+// anchorFlightSkin is how far above the server-confirmed Y a body may sit
+// before the anchor refuses to pin it down. Anything past this while not
+// grounded is a jump apex or a knockback rise — flight, which has its own
+// physics — while a body at or below the confirmed Y is the decode-gap sag
+// the anchor was written to hold.
+const anchorFlightSkin float32 = 0.2
 
 // ApplyServerPositionAnchor holds a stationary bot at the last Y the server
 // confirmed, instead of letting gravity pull it down when the local world model
@@ -44,6 +59,22 @@ const serverAnchorWindow = 400 * time.Millisecond
 // ladder: those states have their own vertical model and must not be pinned.
 func (tc *TickContext) ApplyServerPositionAnchor() {
 	if tc.IsGrounded || tc.IsOnLadder || tc.ShouldJump || tc.IsParkourJump {
+		return
+	}
+	// A body the server just set in motion — the hop a PvP hit carries — has
+	// its own vertical arc to finish. Pinning it mid-rise cancels the hop the
+	// server is simulating on its side, and the divergence comes back as a
+	// correction that erases the whole knockback.
+	if absFloat32(tc.VelY) > 0.05 {
+		return
+	}
+	// The velocity guard above has one hole: the apex, where a rise crosses
+	// zero. There the old behaviour yanked the body straight back down to the
+	// confirmed Y mid-jump — the rise ended at the apex and the claim said
+	// floor, which rendered as a fraction-block hop under heavy gravity.
+	// Being ABOVE the confirmed Y is flight, not a decode gap; being BELOW it
+	// is the sag this anchor exists for, and that direction keeps the pin.
+	if tc.serverAnchorDelta() > anchorFlightSkin {
 		return
 	}
 	if tc.HasHorizontalMove || tc.HasPath {

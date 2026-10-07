@@ -66,24 +66,63 @@ func handleUpdateAttributesPacket(b *bot.Bot, pk packet.Packet) bool {
 
 func handleRespawn(b *bot.Bot, pk packet.Packet) bool {
 	p := pk.(*packet.Respawn)
+
+	// SearchingForSpawn is the packet a *death* starts with, and its Position
+	// is where the body died — or the void. Adopting it would put the bot
+	// straight back into the hole it had just died in, so only the later
+	// states, which carry a real spawn point, move the body.
+	adoptPos := p.State != packet.RespawnStateSearchingForSpawn
+
 	b.Mu.Lock()
-	b.Pos = p.Position.Sub(mgl32.Vec3{0, 1.62, 0})
-	b.TeleportAckPending = true
-	b.TeleportAckPos = b.Pos
+	if adoptPos {
+		b.Pos = p.Position.Sub(mgl32.Vec3{0, 1.62, 0})
+		b.TeleportAckPending = true
+		b.TeleportAckPos = b.Pos
+	}
+	feet := b.Pos
 	b.Logger.Info("self respawn position",
 		slog.Any("raw", p.Position),
-		slog.Any("feet", b.Pos),
+		slog.Any("feet", feet),
 		slog.Uint64("state", uint64(p.State)),
+		slog.Bool("adopted_position", adoptPos),
 	)
 	b.Logger.Debug("bot respawned/teleported by server",
-		slog.Float64("x", float64(b.Pos.X())),
-		slog.Float64("y", float64(b.Pos.Y())),
-		slog.Float64("z", float64(b.Pos.Z())),
+		slog.Float64("x", float64(feet.X())),
+		slog.Float64("y", float64(feet.Y())),
+		slog.Float64("z", float64(feet.Z())),
 		slog.Uint64("state", uint64(p.State)),
 	)
 	b.Mu.Unlock()
 
-	if p.State == packet.RespawnStateReadyToSpawn {
+	// Respawning is a handshake the client drives, and only the last step was
+	// ever implemented — the one a login produces. A death begins with the
+	// other packet, which arrived, was logged, and was then ignored. The bot
+	// sat on the death screen forever with nothing to click.
+	switch p.State {
+	case packet.RespawnStateSearchingForSpawn:
+		// Step 1: the player died. Say the client is ready to be told where to
+		// spawn, and record where the body is so item recovery has somewhere to
+		// walk back to.
+		if b.SurvivalMgr != nil {
+			b.SurvivalMgr.MarkDeath(feet)
+			b.SurvivalMgr.NoteRespawnInFlight()
+			// The health stream often stops on the death screen, so the retry
+			// loop must be armed from this packet — the authoritative death
+			// signal — rather than waiting for a zero reading that may never
+			// come.
+			b.SurvivalMgr.NoteDied(feet)
+		}
+		_ = b.WritePacket(&packet.Respawn{
+			State:           packet.RespawnStateReadyToSpawn,
+			Position:        p.Position,
+			EntityRuntimeID: b.GetEntityRuntimeID(),
+		})
+	case packet.RespawnStateReadyToSpawn:
+		// Step 3: the host has sent the spawn point. This is also the packet a
+		// login produces, so it keeps behaving exactly as it already did.
+		if b.SurvivalMgr != nil {
+			b.SurvivalMgr.NoteRespawned()
+		}
 		_ = b.WritePacket(&packet.Respawn{
 			State:           packet.RespawnStateClientReadyToSpawn,
 			Position:        p.Position,
@@ -354,6 +393,14 @@ func handleSetActorMotion(b *bot.Bot, pk packet.Packet) bool {
 	b.Mu.Lock()
 	if p.EntityRuntimeID == b.Conn.GameData().EntityRuntimeID {
 		b.VelY = p.Velocity.Y()
+		// The horizontal half is what a PvP hit actually is. A body that keeps
+		// its X/Z through a SetActorMotion never slides when hit — from the
+		// outside that is indistinguishable from an anti-knockback cheat, and
+		// the user was right to call it out ("kok ga kena knockback"). The
+		// movement tick folds this into the claimed position and bleeds it off
+		// Bedrock-style, exactly like the vanilla client does.
+		b.KnockbackX = p.Velocity.X()
+		b.KnockbackZ = p.Velocity.Z()
 		b.IsGrounded = false
 		b.Logger.Info("Bot motion set by SetActorMotion", "velocity", p.Velocity)
 	}

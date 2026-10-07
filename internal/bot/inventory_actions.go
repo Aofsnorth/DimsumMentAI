@@ -61,7 +61,7 @@ func (b *Bot) DropItem(name string, count int) error {
 		return fmt.Errorf("drop %q from inventory slot %d: %w", name, targetSlot, err)
 	}
 	if geyser {
-		return b.dropViaCursor(name, targetSlot, item, dropped)
+		return b.dropViaHeldSlot(name, targetSlot, item, dropped)
 	}
 
 	// Face-direction swing for viewers, then the authoritative drop request.
@@ -84,10 +84,71 @@ func (b *Bot) DropItem(name string, count int) error {
 	return nil
 }
 
+// dropViaHeldSlot drops with the PlayerAction DropItem the real client sends
+// when you press Q.
+//
+// The cursor path was built because Geyser never answered a direct slot drop,
+// and it does answer take and cursor-drop — but an accepted answer is not a
+// dropped item. The live run showed the host reply OK to both steps and then
+// re-sync slot 0 with the pickaxe still sitting in it: the request was read, the
+// inventory was untouched. Q is the one thing every host has to honour, it needs
+// no inventory screen to be open, and it drops from the held slot, so the stack
+// is selected into the hand first when it is not already there.
+func (b *Bot) dropViaHeldSlot(name string, slot uint32, item protocol.ItemInstance, dropped uint16) error {
+	b.Mu.Lock()
+	held := b.HeldSlot
+	b.Mu.Unlock()
+
+	if held != slot {
+		// Q drops whatever the hand is holding, so the stack has to be in the
+		// hand first. The stack is the server's own view of the slot, so the
+		// selection packet carries the truth rather than an empty hand.
+		b.Mu.Lock()
+		b.HeldSlot = slot
+		b.Mu.Unlock()
+		if err := b.Conn.WritePacket(&packet.MobEquipment{
+			EntityRuntimeID: b.Conn.GameData().EntityRuntimeID,
+			NewItem:         item,
+			InventorySlot:   byte(slot),
+			HotBarSlot:      byte(slot),
+			WindowID:        0,
+		}); err != nil {
+			return fmt.Errorf("drop %q: select slot %d: %w", name, slot, err)
+		}
+	}
+
+	// Face-direction swing for viewers, paired with each Q, the way the client
+	// renders a throw.
+	swing := BuildDropSwing(b.Conn.GameData().EntityRuntimeID)
+	runtimeID := b.Conn.GameData().EntityRuntimeID
+	for i := uint16(0); i < dropped; i++ {
+		if err := b.Conn.WritePacket(&packet.PlayerAction{
+			EntityRuntimeID: runtimeID,
+			ActionType:      protocol.PlayerActionDropItem,
+		}); err != nil {
+			return fmt.Errorf("drop %d %q: send drop action: %w", dropped, name, err)
+		}
+		_ = b.Conn.WritePacket(swing)
+		if i+1 < dropped {
+			time.Sleep(dropItemGap)
+		}
+	}
+	b.Logger.Info("dropped via held slot (geyser)", "item", name, "slot", slot, "count", dropped)
+	return nil
+}
+
+// dropItemGap separates consecutive Q presses. Dropping a stack is not one
+// packet carrying a count, it is one packet per item, and sending them back to
+// back is how a host processes the first and drops the rest on the floor.
+const dropItemGap = 120 * time.Millisecond
+
 // dropViaCursor drops through the cursor: take the stack to the cursor, then
 // drop it from there. Geyser never answered the direct slot drop (the request
 // sat unanswered until the 5s timeout and nothing appeared in the world), but it
 // does answer take and cursor-drop, the two steps the vanilla screen sends.
+//
+// Kept as a fallback because it is the only other path known to at least be
+// accepted, but it is no longer the Geyser default: see dropViaHeldSlot.
 func (b *Bot) dropViaCursor(name string, slot uint32, item protocol.ItemInstance, dropped uint16) error {
 	if err := b.openPersonalInventory(); err != nil {
 		return fmt.Errorf("drop %q: %w", name, err)
@@ -407,6 +468,216 @@ func (b *Bot) equipViaStackRequest(slot uint32) error {
 		HotBarSlot:      byte(target),
 		WindowID:        0,
 	})
+}
+
+// wornArmorSlotBase is the global inventory slot the worn helmet occupies.
+// The armor container maps to global slots 36-39 (network/player:
+// ContainerSlotOffset). Declared here rather than imported from the survival
+// package because the slot mapping belongs to the inventory layer; survival
+// only reads it.
+const wornArmorSlotBase uint32 = 36
+
+// EquipToOffhand moves an inventory slot into the off-hand container with
+// server confirmation, swapping with whatever is already there. The off hand
+// is the only place a shield blocks from: Bedrock renders and resolves
+// blocking off the off-hand slot, so a shield in the hotbar is a shield that
+// does nothing.
+//
+// The wire shape is the proven take-to-cursor + place-from-cursor pair the
+// hotbar equip uses, with the destination container changed to the off hand;
+// when the off hand already holds something the whole move is a single swap.
+// Local state changes only after the server accepted.
+func (b *Bot) EquipToOffhand(slot uint32) error {
+	b.Mu.Lock()
+	item, ok := b.InventoryMap[slot]
+	if !ok || item.Count == 0 {
+		b.Mu.Unlock()
+		return fmt.Errorf("slot %d empty", slot)
+	}
+	itemStackID := b.StackNetworkIDs[slot]
+	offhandItem := b.InventoryMap[40]
+	offhandStackID := b.StackNetworkIDs[40]
+	name := b.ItemNames[item.NetworkID]
+	b.Mu.Unlock()
+
+	if err := b.openPersonalInventory(); err != nil {
+		return err
+	}
+	defer b.closePersonalInventory()
+
+	source := PlayerStackRequestSlot(slot, itemStackID)
+	dest := protocol.StackRequestSlotInfo{
+		Container:      protocol.FullContainerName{ContainerID: protocol.ContainerOffhand},
+		Slot:           0,
+		StackNetworkID: offhandStackID,
+	}
+	b.Logger.Info("equip to offhand via stack request", "item", name, "from_slot", slot, "swap", offhandItem.Count > 0)
+
+	var newOffhandID, newSourceID int32
+	if offhandItem.Count > 0 {
+		reqID, ch := b.beginStackRequest(0)
+		res, err := b.sendStackRequest(reqID, ch, []protocol.StackRequestAction{
+			&protocol.SwapStackRequestAction{Source: source, Destination: dest},
+		}, name)
+		if err != nil {
+			return fmt.Errorf("equip %q to offhand: swap: %w", name, err)
+		}
+		newOffhandID = res.stackNetworkID(dest.Container.ContainerID, dest.Slot)
+		newSourceID = res.stackNetworkID(source.Container.ContainerID, source.Slot)
+	} else {
+		takeID, takeCh := b.beginStackRequest(0)
+		takeRes, err := b.sendStackRequest(takeID, takeCh, []protocol.StackRequestAction{BuildTakeToCursorAction(source, int(item.Count))}, name)
+		if err != nil {
+			return fmt.Errorf("equip %q to offhand: move to cursor: %w", name, err)
+		}
+		cursorID := takeRes.stackNetworkID(protocol.ContainerCursor, 0)
+		if cursorID == 0 {
+			cursorID = takeID
+		}
+		placeID, placeCh := b.beginStackRequest(item.NetworkID)
+		placeRes, err := b.sendStackRequest(placeID, placeCh, []protocol.StackRequestAction{
+			buildPlaceFromCursorAction(cursorID, dest, int(item.Count)),
+		}, name)
+		if err != nil {
+			_ = b.returnCursorToInventory(cursorID, slot, int(item.Count), item.NetworkID, name)
+			return fmt.Errorf("equip %q to offhand: place: %w", name, err)
+		}
+		newOffhandID = placeRes.stackNetworkID(dest.Container.ContainerID, dest.Slot)
+		if newOffhandID == 0 {
+			newOffhandID = placeID
+		}
+	}
+
+	// Same shape as the hotbar equip: the response handler rewrites counts and
+	// stack IDs but keeps item types in place, and a move means both ends of
+	// it changed.
+	b.Mu.Lock()
+	b.InventoryMap[40] = item
+	if newOffhandID == 0 {
+		newOffhandID = itemStackID
+	}
+	if newOffhandID != 0 {
+		b.StackNetworkIDs[40] = newOffhandID
+	} else {
+		delete(b.StackNetworkIDs, 40)
+	}
+	if offhandItem.Count > 0 {
+		b.InventoryMap[slot] = offhandItem
+		if newSourceID == 0 {
+			newSourceID = offhandStackID
+		}
+		if newSourceID != 0 {
+			b.StackNetworkIDs[slot] = newSourceID
+		} else {
+			delete(b.StackNetworkIDs, slot)
+		}
+	} else {
+		delete(b.InventoryMap, slot)
+		delete(b.StackNetworkIDs, slot)
+	}
+	b.Mu.Unlock()
+
+	return nil
+}
+
+// EquipArmorToSlot moves an inventory slot onto one of the four worn armor
+// pieces with server confirmation. Bedrock resolves worn armor through the
+// armor container (ContainerArmor, slots 0-3), so the hotbar-select packet
+// EquipItem sends can never wear a piece — it only changes what the hand
+// holds, which is exactly why "pasang armor" never showed on the body.
+//
+// Same wire shape as EquipToOffhand: a single swap when something is already
+// worn there, take-to-cursor + place-from-cursor otherwise. Local state
+// changes only after the server accepted.
+func (b *Bot) EquipArmorToSlot(slot uint32, armorSlot byte) error {
+	b.Mu.Lock()
+	item, ok := b.InventoryMap[slot]
+	if !ok || item.Count == 0 {
+		b.Mu.Unlock()
+		return fmt.Errorf("slot %d empty", slot)
+	}
+	itemStackID := b.StackNetworkIDs[slot]
+	wornGlobal := wornArmorSlotBase + uint32(armorSlot)
+	wornItem := b.InventoryMap[wornGlobal]
+	wornStackID := b.StackNetworkIDs[wornGlobal]
+	name := b.ItemNames[item.NetworkID]
+	b.Mu.Unlock()
+
+	if err := b.openPersonalInventory(); err != nil {
+		return err
+	}
+	defer b.closePersonalInventory()
+
+	source := PlayerStackRequestSlot(slot, itemStackID)
+	dest := protocol.StackRequestSlotInfo{
+		Container:      protocol.FullContainerName{ContainerID: protocol.ContainerArmor},
+		Slot:           armorSlot,
+		StackNetworkID: wornStackID,
+	}
+	b.Logger.Info("equip armor via stack request", "item", name, "from_slot", slot, "armor_slot", armorSlot, "swap", wornItem.Count > 0)
+
+	var newWornID, newSourceID int32
+	if wornItem.Count > 0 {
+		reqID, ch := b.beginStackRequest(0)
+		res, err := b.sendStackRequest(reqID, ch, []protocol.StackRequestAction{
+			&protocol.SwapStackRequestAction{Source: source, Destination: dest},
+		}, name)
+		if err != nil {
+			return fmt.Errorf("equip %q to armor slot %d: swap: %w", name, armorSlot, err)
+		}
+		newWornID = res.stackNetworkID(dest.Container.ContainerID, dest.Slot)
+		newSourceID = res.stackNetworkID(source.Container.ContainerID, source.Slot)
+	} else {
+		takeID, takeCh := b.beginStackRequest(0)
+		takeRes, err := b.sendStackRequest(takeID, takeCh, []protocol.StackRequestAction{BuildTakeToCursorAction(source, int(item.Count))}, name)
+		if err != nil {
+			return fmt.Errorf("equip %q to armor slot %d: move to cursor: %w", name, armorSlot, err)
+		}
+		cursorID := takeRes.stackNetworkID(protocol.ContainerCursor, 0)
+		if cursorID == 0 {
+			cursorID = takeID
+		}
+		placeID, placeCh := b.beginStackRequest(item.NetworkID)
+		placeRes, err := b.sendStackRequest(placeID, placeCh, []protocol.StackRequestAction{
+			buildPlaceFromCursorAction(cursorID, dest, int(item.Count)),
+		}, name)
+		if err != nil {
+			_ = b.returnCursorToInventory(cursorID, slot, int(item.Count), item.NetworkID, name)
+			return fmt.Errorf("equip %q to armor slot %d: place: %w", name, armorSlot, err)
+		}
+		newWornID = placeRes.stackNetworkID(dest.Container.ContainerID, dest.Slot)
+		if newWornID == 0 {
+			newWornID = placeID
+		}
+	}
+
+	b.Mu.Lock()
+	b.InventoryMap[wornGlobal] = item
+	if newWornID == 0 {
+		newWornID = itemStackID
+	}
+	if newWornID != 0 {
+		b.StackNetworkIDs[wornGlobal] = newWornID
+	} else {
+		delete(b.StackNetworkIDs, wornGlobal)
+	}
+	if wornItem.Count > 0 {
+		b.InventoryMap[slot] = wornItem
+		if newSourceID == 0 {
+			newSourceID = wornStackID
+		}
+		if newSourceID != 0 {
+			b.StackNetworkIDs[slot] = newSourceID
+		} else {
+			delete(b.StackNetworkIDs, slot)
+		}
+	} else {
+		delete(b.InventoryMap, slot)
+		delete(b.StackNetworkIDs, slot)
+	}
+	b.Mu.Unlock()
+
+	return nil
 }
 
 // craftStaging keeps the authoritative grid stack IDs for personal and table

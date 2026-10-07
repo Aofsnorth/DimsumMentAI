@@ -32,7 +32,7 @@ func dispatchChatResponse(b *bot.Bot, user, msg, systemPrompt, reply string) (to
 		return false
 	}
 
-	sendMainChatReply(b, parsed)
+	sendMainChatReply(b, user, parsed)
 
 	if handlePlanResponse(b, user, parsed) {
 		return true
@@ -69,10 +69,17 @@ func handleSilentActionResponse(b *bot.Bot, user, systemPrompt string, parsed ai
 }
 
 // sendMainChatReply sends the visible chat reply to the server.
-func sendMainChatReply(b *bot.Bot, parsed ai.ParsedReply) {
+//
+// It goes to the player, not to the channel: a player who whispered gets a
+// whisper back, because the server relays ordinary chat to everyone and the
+// whole point of whispering was that it would not be.
+func sendMainChatReply(b *bot.Bot, user string, parsed ai.ParsedReply) {
 	if parsed.CleanReply != "" {
-		b.Logger.Info("chat reply sending", slog.String("reply", parsed.CleanReply))
-		b.SendSafeChat(parsed.CleanReply)
+		b.Logger.Info("chat reply sending",
+			slog.String("reply", parsed.CleanReply),
+			slog.String("to", user),
+			slog.Bool("whisper", b.WhisperPartner() != ""))
+		b.SendReply(user, parsed.CleanReply)
 		return
 	}
 	b.Logger.Info("chat: AI returned no visible reply text")
@@ -153,7 +160,7 @@ func handleSilentResponse(b *bot.Bot, sourceName string, systemPrompt string, ac
 			parsed2 := ai.Parse(reply2)
 			if parsed2.CleanReply != "" {
 				b.Logger.Info("chat reply sending (status follow-up)", slog.String("reply", parsed2.CleanReply))
-				b.SendSafeChat(parsed2.CleanReply)
+				b.SendReply(sourceName, parsed2.CleanReply)
 			}
 		} else if label == "inventory" {
 			newInvSummary := b.GetInventorySummary()
@@ -173,7 +180,7 @@ func handleSilentResponse(b *bot.Bot, sourceName string, systemPrompt string, ac
 			parsed2 := ai.Parse(reply2)
 			if parsed2.CleanReply != "" {
 				b.Logger.Info("chat reply sending (inventory follow-up)", slog.String("reply", parsed2.CleanReply))
-				b.SendSafeChat(parsed2.CleanReply)
+				b.SendReply(sourceName, parsed2.CleanReply)
 			}
 		}
 	}
@@ -239,7 +246,7 @@ func scheduleFollowup(b *bot.Bot, user string, delaySec int) {
 		parsed := ai.Parse(reply)
 		if parsed.CleanReply != "" {
 			b.Logger.Info("chat reply sending (follow-up)", slog.String("reply", parsed.CleanReply))
-			b.SendSafeChat(parsed.CleanReply)
+			b.SendReply(user, parsed.CleanReply)
 		}
 
 		// Execute any actions from the follow-up.

@@ -158,6 +158,31 @@ func (m *Manager) armorUpgradeAvailable() bool {
 	return false
 }
 
+// armorEquipper is the optional view of the bot that can wear a piece onto an
+// armor slot through the server-confirmed path. It is an assertion rather
+// than a method on the survival Bot interface for the same reason the
+// durability tracker is: the test doubles implement that interface, and
+// pushing an armor method through all of them buys nothing.
+type armorEquipper interface {
+	EquipArmorToSlot(slot uint32, armorSlot byte) error
+}
+
+// equipArmorPiece wears the piece in slot onto the given armor slot index
+// (0-3, as listed in armorSlots) through the best available path.
+//
+// The server-confirmed armor swap is the only one that works: Bedrock
+// resolves worn armor through the armor container, and the hotbar-select
+// packet EquipItem sends only ever changes what the hand holds — which is
+// why "pasang armor" showed nothing on the body. A bot without the armor
+// path falls back to the hotbar select, which at least moves the piece into
+// reach of the armor UI the way the old behaviour did.
+func (m *Manager) equipArmorPiece(armorIndex int, slot uint32) error {
+	if eq, ok := m.bot.(armorEquipper); ok {
+		return eq.EquipArmorToSlot(slot, byte(armorSlots[armorIndex].slotID))
+	}
+	return m.bot.EquipItem(slot)
+}
+
 // TickAutoArmor is the acting half of auto-armor: it equips every piece that
 // beats what is worn. Exported so the decision and the action can be driven
 // independently from an external test.
@@ -172,7 +197,7 @@ func (m *Manager) TickAutoArmor() {
 			continue
 		}
 		m.logger.Info("Auto-armor: upgrading", "type", armorSlots[i].name, "slot", slot)
-		if err := m.bot.EquipItem(slot); err != nil {
+		if err := m.equipArmorPiece(i, slot); err != nil {
 			m.logger.Warn("Auto-armor: failed to equip", "type", armorSlots[i].name, "slot", slot, "err", err)
 			continue
 		}
@@ -182,61 +207,33 @@ func (m *Manager) TickAutoArmor() {
 	}
 }
 
-// EquipBestArmor equips the best available armor pieces
+// EquipBestArmor wears the best carried piece onto every armor slot that an
+// upgrade improves, and reports how many pieces it put on. "Pakai armor"
+// showed nothing in game because this walked its own duplicate scan and then
+// sent hotbar-select packets, which cannot wear armor at all; the decision
+// now runs through the same worn-tier comparison the auto path uses, so the
+// action and the automation can never disagree about what "best" means.
 func (m *Manager) EquipBestArmor() int {
-	inv := m.bot.GetInventorySlots()
-	names := m.bot.GetItemNames()
 	equipped := 0
-
-	for _, armorSlot := range armorSlots {
-		bestSlot := uint32(0)
-		bestTier := -1
-		found := false
-
-		for slot, item := range inv {
-			if item.Count <= 0 {
-				continue
-			}
-			name := strings.ToLower(names[item.NetworkID])
-			name = strings.TrimPrefix(name, "minecraft:")
-
-			// Check if this item matches the armor type
-			isArmorType := false
-			for _, kw := range armorSlot.keywords {
-				if strings.Contains(name, kw) {
-					isArmorType = true
-					break
-				}
-			}
-			if !isArmorType {
-				continue
-			}
-
-			// Determine tier
-			for tierIdx, tierName := range armorTierPriority {
-				if strings.Contains(name, tierName) {
-					tierScore := len(armorTierPriority) - tierIdx
-					if tierScore > bestTier {
-						bestTier = tierScore
-						bestSlot = slot
-						found = true
-					}
-					break
-				}
-			}
+	for i := range armorSlots {
+		worn := m.WornTier(i)
+		slot, best := m.bestArmorCandidate(i)
+		if best <= worn {
+			continue
 		}
-
-		if found {
-			// Equip via armor swap packet (slot 36-39 are armor slots in Bedrock)
-			m.logger.Info("Auto-armor: equipping", "type", armorSlot.name, "slot", bestSlot)
-			_ = m.bot.EquipItem(bestSlot)
-			equipped++
-			time.Sleep(200 * time.Millisecond)
+		m.logger.Info("Armor: equipping", "type", armorSlots[i].name, "slot", slot)
+		if err := m.equipArmorPiece(i, slot); err != nil {
+			m.logger.Warn("Armor: failed to equip", "type", armorSlots[i].name, "slot", slot, "err", err)
+			continue
 		}
+		equipped++
+		// Server-confirmed swaps are not instant, and two equips in the same
+		// tick race on the same inventory state.
+		time.Sleep(200 * time.Millisecond)
 	}
 
 	if equipped > 0 {
-		m.logger.Info("Auto-armor complete", "pieces_equipped", equipped)
+		m.logger.Info("Armor complete", "pieces_equipped", equipped)
 	}
 	return equipped
 }

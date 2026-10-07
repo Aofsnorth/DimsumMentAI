@@ -56,3 +56,41 @@ func IsTaggedInBotForTest(msg string, b *bot.Bot) bool {
 func ShouldProcessChatForTest(b *bot.Bot, evt event.ChatEvent, msg, botName string) bool {
 	return shouldProcessChat(b, evt, msg, botName)
 }
+
+// HandleWhitelistCommandForTest exposes the in-game whitelist command, so a
+// test can drive the grant end to end — including the main-player guard —
+// without a live connection. A nil AiClient makes the reply a no-op, which is
+// what a test wants: the state change is what is under test.
+func HandleWhitelistCommandForTest(b *bot.Bot, evt event.ChatEvent, msg string) bool {
+	return handleWhitelistCommand(b, evt, msg)
+}
+
+// ParseWhitelistIntentForTest exposes the whitelist phrase parser.
+func ParseWhitelistIntentForTest(msg string) (name string, remove bool, ok bool) {
+	return parseWhitelistIntent(msg)
+}
+
+// ParseStagedCommandForTest exposes the staged-routine parser, so a test can
+// assert the exact step sequence and counts without executing anything.
+func ParseStagedCommandForTest(msg string) (steps []action.Step, summary string, ok bool) {
+	return parseStagedCommand(msg)
+}
+
+// HandleGuardCommandForTest exposes the in-game guardian toggle, so a test can
+// drive the enable/disable end to end — including the main-player guard —
+// without a live connection. A nil AiClient makes the reply a no-op, which is
+// what a test wants: the state change is what is under test.
+func HandleGuardCommandForTest(b *bot.Bot, evt event.ChatEvent, msg string) bool {
+	return handleGuardCommand(b, evt, msg)
+}
+
+// ParseGuardIntentForTest exposes the guard phrase parser.
+func ParseGuardIntentForTest(msg string) (enable bool, ok bool) {
+	return parseGuardIntent(msg)
+}
+
+// StateReplyTextForTest exposes the model's half of a state-change reply, so a
+// test can assert what would be sent without a live connection.
+func StateReplyTextForTest(b *bot.Bot, user, playerMsg, change string) string {
+	return stateReplyText(b, user, playerMsg, change)
+}

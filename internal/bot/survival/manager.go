@@ -76,6 +76,20 @@ type Manager struct {
 	hasDiedRecently bool
 	deathTime       time.Time
 
+	// Respawn state. Kept apart from the death-recovery fields above on
+	// purpose: a bot that has respawned still owes itself a walk back to its
+	// own corpse, so clearing one must not clear the other.
+	//
+	// zeroHealthAt is when health first read zero and deadSince is when the
+	// death was confirmed. The gap between them is the debounce that keeps a
+	// single dropped attribute packet from respawning a live bot.
+	dead          bool
+	deadSince     time.Time
+	deadPos       mgl32.Vec3
+	zeroHealthAt  time.Time
+	lastRespawnAt time.Time
+	respawnTries  int
+
 	// Shelter
 	isSheltering bool
 

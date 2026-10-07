@@ -30,6 +30,10 @@ Do not use for block placement (see `gophertunnel-placement-debug`), crafting re
 
 ## Common Pitfalls
 
+- **Name normalisation is rune-based, never byte-based.** `stripFormattingCodes` in `internal/bot/interact/interactor.go` must iterate `[]rune` and match the rune `'§'` (U+00A7). A byte-wise `s[i] == '§'` compares one byte against the two-byte UTF-8 sequence (0xC2 0xA7) and NEVER matches — every §-coded name stays unnormalised. Symptoms: `"klik npc"` resolves to the floating-text armor stand instead of the nameless player-type NPC beneath it (`EntityNameMatches`'s "player whose name normalises to empty" branch never fires), and nickname matching via `interact.Normalise` fails. The Go source file itself is UTF-8, so this bug compiles cleanly and passes tests that only use ASCII names.
+- A server NPC is a `minecraft:player` entity whose display name is only formatting codes; the floating text above it is a separate `armor_stand` at the same X/Z, 2–3 blocks higher. When several matches cluster horizontally (< 1.0 m), click the LOWEST Y in the cluster — text is not a hitbox anyone binds a command to.
+- `resolveNamedEntity`/`Approach` walk with radius 10.0 but `Resolve` reach-filters at `entityReach = 4.5`: a census that lists the target while Resolve says "not found" means out of reach — walk closer (`Approach`) and re-Resolve instead of widening reach (Geyser silently drops clicks sent from beyond its Java-side range).
+
 - Feet position in the transaction while `PlayerAuthInput` carries eye position — a 1.62-block disagreement between the two views of the player.
 - Forgetting `BlockRuntimeID` on hash-ID hosts: it must be the hash from `WorldCache.GetBlockNetworkID`, not the dragonfly local RID, and not zero.
 - Double-firing both transports unconditionally: a lever/door toggles twice and appears unchanged.

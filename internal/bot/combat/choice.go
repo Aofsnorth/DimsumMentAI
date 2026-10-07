@@ -80,6 +80,19 @@ type Situation struct {
 	// use of the next second.
 	Health    int
 	MaxHealth int
+	// PvP marks the target as a player rather than a mob. The doctrine differs:
+	// players block, strafe and wear armour, so the fight alternates between
+	// guarding and committing instead of just closing and swinging.
+	PvP bool
+	// SwingsLanded is how many swings this fight has already spent. A player
+	// target that has soaked several sword hits without dying is wearing
+	// armour, and armour moves the per-hit answer from sword to axe.
+	SwingsLanded int
+	// SwingReady says the next swing is due now: target inside reach, cooldown
+	// elapsed. A shield held up through the swing window trades the one hit
+	// that matters for protection against nothing, so the guard drops exactly
+	// when the attack is due and comes back up after.
+	SwingReady bool
 }
 
 // WeaponChoice is what to hold and why.
@@ -110,6 +123,9 @@ const (
 	// is better off committing to the hit than to the guard, because nothing it
 	// does at one health is going to be subtle.
 	lowHealthFraction = 0.4
+	// pvpAxeAfterSwings is how many sword hits a player target may soak before
+	// the doctrine reads armour and reaches for the axe instead.
+	pvpAxeAfterSwings = 3
 )
 
 // weaponTiers is the best-to-worst order within each kind.
@@ -150,6 +166,13 @@ func chooseKind(s Situation) (WeaponKind, string) {
 		// takes them one at a time and the first one you kill is the one that
 		// was hitting you.
 		return WeaponAxe, "more than one hostile in melee: an axe sweeps the group"
+
+	case s.PvP && s.SwingsLanded >= pvpAxeAfterSwings:
+		// A player still standing after several sword hits is wearing armour,
+		// and armour is exactly what an axe is for: per hit it out-damages the
+		// sword by a tier. This is the fair answer to an armoured duelist — a
+		// better weapon, not a better exploit.
+		return WeaponAxe, "player target soaked several hits: likely armoured, an axe hits harder"
 
 	default:
 		return WeaponSword, "one target at sword range"
@@ -291,6 +314,14 @@ func PlanShield(inventory map[uint32]string, s Situation, currentlyUp bool) Shie
 	desperate := s.MaxHealth > 0 && float64(s.Health) <= float64(s.MaxHealth)*lowHealthFraction
 
 	switch {
+	case desperate && currentlyUp:
+		return ShieldLower
+	case s.SwingReady:
+		// The attack window. A guard held through it means the bot blocks and
+		// never hits — the bot that blocked everything and won nothing. The
+		// crouch drops for the swing and applyShield raises it again on the
+		// next tick once the cooldown restarts.
+		return ShieldLower
 	case threatened && !desperate:
 		return ShieldRaise
 	case currentlyUp && (!threatened || desperate):

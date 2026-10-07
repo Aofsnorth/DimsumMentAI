@@ -137,13 +137,20 @@ type Bot struct {
 	AutonomyContextFunc func() string
 	// OneBlockFunc reports how the brain reads the world, so a caller outside
 	// the brain can ask the same question it asks itself.
-	OneBlockFunc      func(nearBlocks string) string
-	Conn              *minecraft.Conn
-	Dialer            DialerFunc
-	Registry          *handler.Registry
-	Bus               *event.Bus
-	Name              string
-	ConfiguredName    string   // configured name from yaml (preserved even if server PlayerList renames bot)
+	OneBlockFunc       func(nearBlocks string) string
+	Conn               *minecraft.Conn
+	Dialer             DialerFunc
+	Registry           *handler.Registry
+	Bus                *event.Bus
+	Name               string
+	ConfiguredName     string // configured name from yaml (preserved even if server PlayerList renames bot)
+	serverAssignedName string // name the server actually greets the bot by, learned from its own chat echo
+	// activityCtx bounds every long-running job the bot starts on its own
+	// initiative — gathering, building, fishing. Stop cancels it, which is the
+	// only way a "stop" from the player actually reaches work already in flight.
+	activityMu        sync.Mutex
+	activityCtx       context.Context
+	activityCancel    context.CancelFunc
 	TagAliases        []string // custom aliases/nicknames the bot responds to when tagged
 	ServerHost        string
 	VenityCompat      bool // play.venity.net hub: aggressive chunk flood + ~30s session checks
@@ -220,10 +227,20 @@ type Bot struct {
 	CommandPrefixOrder string
 	Language           string
 	StatePath          string
-	Memory             *memory.Store // curated long-term facts + named places (MinePal-style memory)
-	Debug              bool
-	ProtoSkin          protocol.Skin
-	PlayerUUID         uuid.UUID
+
+	// The in-game player whitelist: who may talk to the bot besides the linked
+	// main players. whitelistPath empty keeps the list in memory only, which is
+	// what tests want; see internal/bot/whitelist.go.
+	WhitelistPath   string
+	whitelist       map[string]string // lowercase name → canonical name
+	whitelistPath   string
+	whitelistLoaded bool
+	whitelistMu     sync.Mutex
+
+	Memory     *memory.Store // curated long-term facts + named places (MinePal-style memory)
+	Debug      bool
+	ProtoSkin  protocol.Skin
+	PlayerUUID uuid.UUID
 
 	// AI and configuration
 	AiClient  *ai.NvidiaClient
@@ -322,8 +339,15 @@ type Bot struct {
 	ImplicitFollowOff map[string]bool
 	LookTargetName    string
 	LookTargetUntil   time.Time
-	IsOnLadder        bool // shared ladder state between movement and network systems
-	IsGrounded        bool
+	// whisperPartner is the player the bot is currently in a private
+	// conversation with, and whisperPartnerAt is when that started. A reply has to
+	// go back the way it came: answering a whisper in public chat is what makes a
+	// player stop using whispers at all, because the thing they meant to say to
+	// one person is now on the server.
+	whisperPartner   string
+	whisperPartnerAt time.Time
+	IsOnLadder       bool // shared ladder state between movement and network systems
+	IsGrounded       bool
 	// emoteJumpSpent bounds an emote "jump" to one physical hop: the first
 	// grounded tick inside the emote's 80-tick window buys the impulse and the
 	// rest of the window is visual only. Without it the physics re-buys the
@@ -331,6 +355,25 @@ type Bot struct {
 	// a held jump key and climbs the air. Exported for the movement packet
 	// writer and its tests; treat it as movement-internal.
 	EmoteJumpSpent bool
+	// SneakHeld is the combat shield hold: with a shield in the off hand, a
+	// real Bedrock player raises it by crouching, and the server only counts
+	// blocks from a body that is actually sneaking. The movement tick ORs this
+	// into the input flags while it is set, which is the same packet a
+	// sneaking player sends — not a blocking animation hack.
+	SneakHeld bool
+	// knockback is the horizontal motion the server assigned to this body via
+	// SetActorMotion — what a PvP hit sends. Only VelY used to survive the
+	// handler, so a hit logged its velocity and moved nothing: "kok ga kena
+	// knockback". The movement tick folds this into the claimed position and
+	// bleeds it off Bedrock-style each tick.
+	KnockbackX float32
+	KnockbackZ float32
+	// ForceWalk is the raw, pathfinding-free push: a world-space direction and
+	// a deadline. A* refusing to route — a blocked bridge, terrain it cannot
+	// model — is exactly the case this exists for, so it deliberately clears
+	// the active route instead of negotiating with it.
+	ForceWalkDir   mgl32.Vec2
+	ForceWalkUntil time.Time
 	// jumpRequestedAt latches a request to leave the ground, for the movement
 	// loop to collect. See jump.go — the jump emote is not a jump, and the
 	// scaffolder cannot make one without the loop's help.
@@ -738,6 +781,7 @@ func newBot(opts ...Option) (*Bot, error) {
 		TargetTolerance:     2.0,
 		Language:            "Indonesian",
 		StatePath:           "data/bot_state.json",
+		whitelistPath:       DefaultWhitelistPath,
 		InventoryMap:        make(map[uint32]protocol.ItemStack),
 		StackNetworkIDs:     make(map[uint32]int32),
 		ItemNames:           make(map[int32]string),

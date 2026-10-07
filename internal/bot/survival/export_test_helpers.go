@@ -1,6 +1,10 @@
 package survival
 
-import "time"
+import (
+	"time"
+
+	"github.com/go-gl/mathgl/mgl32"
+)
 
 // Test-support accessors.
 //
@@ -41,4 +45,16 @@ func (m *Manager) MarkDeathAt(at time.Time) {
 	m.mu.Lock()
 	m.deathTime = at
 	m.mu.Unlock()
+}
+
+// ObserveHealthAt feeds a health reading stamped at an arbitrary time, so a
+// test can age a death past the confirm delay without sleeping through it.
+func (m *Manager) ObserveHealthAt(hp int, feet mgl32.Vec3, at time.Time) {
+	m.observeHealthAt(hp, feet, at)
+}
+
+// TickRespawnAt runs the respawn retry as though it were called at an arbitrary
+// time, which is how a test checks the cadence without sleeping.
+func (m *Manager) TickRespawnAt(at time.Time) {
+	m.tickRespawnAt(at)
 }

@@ -118,8 +118,14 @@ func ExecuteAndWaitWithTimeout(b *bot.Bot, label, param, user string, timeout ti
 
 func waitForActionSettled(b *bot.Bot, label string) {
 	switch label {
-	case "come", "goto":
+	case "come", "goto", "walk", "force_walk":
 		waitForMovementIdle(b, 65*time.Second)
+	case "emote":
+		// A staged routine reads as one motion: the next clause must not start
+		// mid-hop or mid-spin. The emote window is ticked down by the movement
+		// loop, so its end is observable; the timeout only bounds the wait for
+		// a loop that is not running.
+		waitForEmoteSettled(b, 5*time.Second)
 	case "gather", "mine", "automine", "loot", "clear", "scan":
 		waitForGatheringIdle(b, 90*time.Second)
 	case "craft":
@@ -128,6 +134,22 @@ func waitForActionSettled(b *bot.Bot, label string) {
 		time.Sleep(600 * time.Millisecond)
 	default:
 		time.Sleep(250 * time.Millisecond)
+	}
+}
+
+// waitForEmoteSettled waits for the active emote window to end (EmoteTicks
+// reaches zero, driven by the movement loop's applyEmote), so a staged routine
+// does not start its next clause while the body is still hopping or spinning.
+func waitForEmoteSettled(b *bot.Bot, timeout time.Duration) {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		b.Mu.Lock()
+		ticks := b.EmoteTicks
+		b.Mu.Unlock()
+		if ticks == 0 {
+			return
+		}
+		time.Sleep(100 * time.Millisecond)
 	}
 }
 

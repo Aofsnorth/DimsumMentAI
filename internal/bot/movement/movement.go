@@ -355,6 +355,14 @@ func SendInputLoop(ctx context.Context, b *bot.Bot, gd minecraft.GameData) {
 			tc.FeetY = int32(math.Floor(float64(tc.CurrPos.Y())))
 			tc.FeetZ = int32(math.Floor(float64(tc.CurrPos.Z())))
 
+			// Respawn is driven here rather than in the autonomy brain because
+			// this is the one loop that runs no matter what the bot is doing —
+			// and a dead bot is precisely the case where nothing else is
+			// running. Cheap: a mutex and a timestamp check at 1Hz.
+			if tick%20 == 0 && b.SurvivalMgr != nil {
+				b.SurvivalMgr.TickRespawn()
+			}
+
 			if tick%40 == 0 && tc.MState == "walk_to" {
 				b.Mu.Lock()
 				idx, plen, grounded := b.PathIndex, len(b.CurrentPath), b.IsGrounded
@@ -420,12 +428,27 @@ func SendInputLoop(ctx context.Context, b *bot.Bot, gd minecraft.GameData) {
 				tc.MoveVec = mgl32.Vec2{}
 				tc.MoveDelta = mgl32.Vec3{0, -0.0784, 0}
 			} else if !venityIdle {
-				tc.performActiveSteering()
+				// A ForceWalk window owns the body outright: it is the raw push a
+				// player ordered when A* refused to route, and letting the regular
+				// steering re-assert its route mid-push is how the push turns back
+				// into the standstill it exists to fix.
+				if !tc.applyForceWalk() {
+					tc.performActiveSteering()
+				}
+				// Bought here — before the physics it feeds, inside the branch
+				// that runs it — so the emote hop can never reach the wire as a
+				// flag without the impulse behind it.
+				tc.buyEmoteJump()
 				tc.runPhysicsAndCollisions()
 			}
 			tc.updateLookDirection()
 			smoothLookYaw = tc.SmoothedLookYaw
 			smoothLookPitch = tc.SmoothedLookPitch
+			// Server-assigned motion (a PvP hit) folds into the claim here, after
+			// physics has settled the body and before the position goes out: the
+			// slide is inside the very next PlayerAuthInput, which is what makes
+			// the knockback real on the wire.
+			tc.applyKnockback()
 			tc.calculateMovementSpeedAndPosition()
 			if !tc.writePlayerAuthInputPacket() {
 				connErr = true

@@ -80,6 +80,30 @@ Do not use for crafting recipe rejection, pathfinding target selection, generic 
    - The probe observes `1 -> 0` or `2 -> 1` through Luna's `MobEquipment` packets.
 
 
+## Geyser: crafting table placement times out after a successful equip
+
+Signature: `equip via stack request (geyser) item=minecraft:crafting_table ... status=0`,
+then `placing block slot=0 item_network_id=-967 stack_network_id=19`, then
+`server did not confirm block placement ... context deadline exceeded`. The
+equip succeeded, so `EquipItem` is not the problem.
+
+Cause: `heldItemInstance` built `HeldItem` from the raw server-side stack. A
+stack the server sent carries NBT (`GeyserHash`, display names) and a block
+runtime ID; echoing those back in a client-sent item packet is what this host
+refuses. It answers with silence rather than an error, so the bot sees a
+timeout, not a rejection — and the goroutine dump is clean, which rules out a
+bot-side deadlock and points at the host ignoring the transaction.
+
+Fix: reduce the stack with `survival.WireItemStack` in `heldItemInstance`, gated
+on `GeyserCompat` so BDS keeps the full stack (it reads the echoed NBT and block
+runtime ID as part of the interaction). Keep `StackNetworkID` — it is what
+identifies which stack is being placed. Tests:
+`tests/bot/placement_wire_test.go`.
+
+Note `item_network_id` being negative is normal: gophertunnel reads it as an
+`int16` (see `Reader.ItemInstance`), so a Java-side item ID arrives signed. It
+is not itself a bug and not worth chasing.
+
 ## Geyser: bot "holds" an item but placement times out (EquipItem)
 
 Signature: `placing block slot=8 stack_network_id=35`, then ~100ms later

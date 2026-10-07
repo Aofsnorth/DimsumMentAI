@@ -12,6 +12,14 @@ type ChatEvent struct {
 	Message    string
 	SourceName string
 	TextType   byte
+	// Whisper is true when this line reached the bot as a private message.
+	//
+	// It is set from the relayed text form rather than from TextType: the server
+	// forwards a whisper to a Bedrock client as an ordinary system message with
+	// the participants in the body ("MSG (Synterix ➺ Bot) halo") and an empty
+	// source, so the packet carries no whisper flag to read. Replies have to go
+	// back the same way they came, which this flag is what makes possible.
+	Whisper bool
 }
 
 type DisconnectEvent struct {

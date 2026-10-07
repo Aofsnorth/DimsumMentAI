@@ -304,6 +304,17 @@ func handleUpdateAttributes(b *bot.Bot, p *packet.UpdateAttributes) {
 		}
 		b.Mu.Unlock()
 
+		// A player just swung: the self-defence engage is a combat decision and
+		// runs off the bot lock — EngagePlayer reads entities and takes the
+		// combat manager's own mutex, and nesting that inside b.Mu is the
+		// deadlock shape this handler has already been bitten by once.
+		if b.Health < prevHealth && b.Health > 0 && b.ThreatDet != nil {
+			b.Mu.Lock()
+			feet := b.Pos
+			b.Mu.Unlock()
+			b.ThreatDet.OnDamaged(feet)
+		}
+
 		// The survival manager keeps its own copy of the hunger level, and
 		// nothing ever told it about these updates. It therefore stayed at the
 		// 20 it was constructed with, so auto-eat never fired on real hunger and
@@ -316,6 +327,17 @@ func handleUpdateAttributes(b *bot.Bot, p *packet.UpdateAttributes) {
 		}
 		if hungerSeen && b.SurvivalMgr != nil {
 			b.SurvivalMgr.SetHunger(hunger)
+		}
+		// Health is the only death signal on a host that reports a death without
+		// ever sending Respawn SearchingForSpawn, and it is fed here for the same
+		// reason hunger is: nothing else told the survival manager about it.
+		// ObserveHealth takes the manager's own lock, and the death position is
+		// copied here off b.Mu, so neither lock ever nests inside the other.
+		if b.SurvivalMgr != nil {
+			b.Mu.Lock()
+			feet := b.Pos
+			b.Mu.Unlock()
+			b.SurvivalMgr.ObserveHealth(health, feet)
 		}
 	}
 }

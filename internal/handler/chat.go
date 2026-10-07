@@ -22,6 +22,12 @@ type PlayerResolver interface {
 	FindKnownPlayer(query string) (string, bool)
 }
 
+// BotNamer reports whether a name refers to this bot. A relayed whisper names
+// its recipient, and only the bot knows its own current in-game name.
+type BotNamer interface {
+	IsBotName(name string) bool
+}
+
 type ChatHandler struct {
 	logger *slog.Logger
 	bus    *event.Bus
@@ -64,11 +70,22 @@ func (h *ChatHandler) Handle(_ context.Context, pk packet.Packet) error {
 	cleanSource := StripColorCodes(sourceName)
 	cleanMessage := StripColorCodes(message)
 
-	if cleanSource == "" && cleanMessage != "" {
-		var resolver func(string) (string, bool)
-		if pr, ok := h.bot.(PlayerResolver); ok {
-			resolver = pr.FindKnownPlayer
-		}
+	var resolver func(string) (string, bool)
+	if pr, ok := h.bot.(PlayerResolver); ok {
+		resolver = pr.FindKnownPlayer
+	}
+
+	// A whisper reaches a Bedrock client as a plain system message with both
+	// participants written into the body and no source name, so it is checked
+	// before the generic sender extraction: that one would read the arrow in
+	// "Synterix ➺ .ShigaLucifer" as a chat separator and attribute the message to
+	// a player called "✉⬇ MSG (Synterix".
+	whisper := false
+	if sender, recipient, body, ok := ExtractWhisper(cleanMessage, resolver); ok && h.isBotRecipient(recipient) {
+		cleanSource = sender
+		cleanMessage = body
+		whisper = true
+	} else if cleanSource == "" && cleanMessage != "" {
 		if sender, parsedMsg, ok := ExtractChatSenderAndMessage(cleanMessage, resolver); ok {
 			cleanSource = sender
 			cleanMessage = parsedMsg
@@ -90,9 +107,27 @@ func (h *ChatHandler) Handle(_ context.Context, pk packet.Packet) error {
 		Message:    cleanMessage,
 		SourceName: cleanSource,
 		TextType:   p.TextType,
+		Whisper:    whisper,
 	})
 
 	return nil
+}
+
+// isBotRecipient reports whether a relayed whisper was addressed to this bot.
+//
+// The banner names both participants, and the same banner is used for a whisper
+// between two other players. Answering one of those would put the bot into a
+// conversation it was never part of, so the recipient has to be checked.
+func (h *ChatHandler) isBotRecipient(name string) bool {
+	if name == "" {
+		return false
+	}
+	if nr, ok := h.bot.(BotNamer); ok {
+		return nr.IsBotName(name)
+	}
+	// Without a name source there is nothing to compare against, so a relayed
+	// whisper is left alone rather than guessed at.
+	return false
 }
 
 func isRoutableChatText(textType byte) bool {
@@ -102,6 +137,122 @@ func isRoutableChatText(textType byte) bool {
 		packet.TextTypeAnnouncement,
 		packet.TextTypeRaw,
 		packet.TextTypeSystem:
+		return true
+	default:
+		return false
+	}
+}
+
+// whisperArrowRunes are the arrow characters servers use between the two
+// participants of a relayed whisper.
+const whisperArrowRunes = "➺➤➔►▶»›->→"
+
+// ExtractWhisper recognises the form a server sends a private message to a
+// Bedrock client in: an icon, a label, then "(sender ➺ recipient) body" — for
+// example "✉⬇ MSG (Synterix ➺ .ShigaLucifer) halo".
+//
+// The whisper arrives as an ordinary system message with an empty source name,
+// so without this the line is dropped: there is no sender to match against the
+// linked-player list, and the log shows the whole banner as ignored chat.
+//
+// It reports the sender and the body. Whether the recipient is actually this bot
+// is not decided here — the caller knows the bot's own name, and this function
+// deliberately does not assume one, because a whisper between two other players
+// also relays through the same banner and must not be answered as if it were
+// addressed to the bot.
+func ExtractWhisper(cleanMessage string, resolver func(string) (string, bool)) (sender, recipient, body string, ok bool) {
+	clean := strings.TrimSpace(StripColorCodes(cleanMessage))
+	if clean == "" {
+		return "", "", "", false
+	}
+
+	open := strings.Index(clean, "(")
+	if open < 0 || open > 24 {
+		// The banner is a fixed shape; a "(" far into the line is ordinary prose.
+		return "", "", "", false
+	}
+	shut := strings.Index(clean[open:], ")")
+	if shut < 0 {
+		return "", "", "", false
+	}
+	shut += open
+
+	left, right, found := splitWhisperArrow(clean[open+1 : shut])
+	if !found {
+		return "", "", "", false
+	}
+
+	// The label before the parenthesis has to look like a message banner, and a
+	// space has to separate the body from the closing parenthesis. Together they
+	// keep "Halo (Synterix ➺ Papua)Apa kabar?" from being read as a whisper: the
+	// shape matches, but there is no label and no gap before the body.
+	if !looksLikeWhisperBanner(clean[:open]) {
+		return "", "", "", false
+	}
+	if !strings.HasPrefix(clean[shut+1:], " ") {
+		return "", "", "", false
+	}
+
+	candidate := strings.Trim(strings.TrimSpace(left), " |»>#*")
+	if candidate == "" {
+		return "", "", "", false
+	}
+
+	canonical := candidate
+	if resolved, isKnown := callResolver(resolver, candidate); isKnown {
+		canonical = resolved
+	} else if !isValidMinecraftUsername(candidate) || isSystemSender(candidate) {
+		return "", "", "", false
+	}
+
+	to := strings.Trim(strings.TrimSpace(right), " |»>#*")
+	body = strings.TrimSpace(clean[shut+1:])
+	if to == "" || body == "" {
+		return "", "", "", false
+	}
+	return canonical, to, body, true
+}
+
+func callResolver(resolver func(string) (string, bool), name string) (string, bool) {
+	if resolver == nil {
+		return "", false
+	}
+	return resolver(name)
+}
+
+// splitWhisperArrow divides "sender ➺ recipient" on its arrow. "->" is two
+// runes and is consumed as one, so neither half is left looking like a name.
+func splitWhisperArrow(inside string) (left, right string, ok bool) {
+	runes := []rune(inside)
+	for i, r := range runes {
+		if !strings.ContainsRune(whisperArrowRunes, r) {
+			continue
+		}
+		l := strings.TrimSpace(string(runes[:i]))
+		rest := i + 1
+		if r == '-' && rest < len(runes) && runes[rest] == '>' {
+			rest++
+		}
+		rr := strings.TrimSpace(string(runes[rest:]))
+		if l == "" || rr == "" {
+			return "", "", false
+		}
+		return l, rr, true
+	}
+	return "", "", false
+}
+
+// whisperBannerRunes is the icon-and-label shape seen in front of the
+// parenthesis on a relayed whisper ("✉⬇ MSG ", "✉ MSG", "MSG ").
+func looksLikeWhisperBanner(prefix string) bool {
+	trimmed := strings.TrimSpace(prefix)
+	if trimmed == "" {
+		return false
+	}
+	fields := strings.Fields(trimmed)
+	last := strings.ToUpper(strings.TrimSpace(fields[len(fields)-1]))
+	switch last {
+	case "MSG", "MESSAGE", "DM", "PRIVATE", "WHISPER", "TELL", "CHAT", "W":
 		return true
 	default:
 		return false

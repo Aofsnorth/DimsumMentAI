@@ -4,6 +4,7 @@
 package movement
 
 import (
+	"bedrock-ai/internal/bot"
 	"bedrock-ai/internal/debuglog"
 	"math"
 	"time"
@@ -119,22 +120,16 @@ func (tc *TickContext) applyEmote() (emoteJump, emoteSneak bool) {
 	}
 
 	tc.B.EmoteTicks--
-	isPathfindingState := tc.MState == "follow" || tc.MState == "walk_to"
+	// Only the input-flag emotes live here. The look emotes (spin, wiggle,
+	// lookaround, nod, shake) are stepped by applyLookEmote in
+	// updateLookDirection — applying them here too rotated the body twice per
+	// tick, and before the fix the packet-time mutation was the ONLY one,
+	// which the eased look erased before it could ever be seen.
 	switch tc.B.EmoteState {
 	case "jump":
 		emoteJump = true
 	case "sneak":
 		emoteSneak = true
-	case "spin":
-		tc.handleEmoteSpin(isPathfindingState)
-	case "wiggle":
-		tc.handleEmoteWiggle(isPathfindingState)
-	case "lookaround":
-		tc.handleEmoteLookAround(isPathfindingState)
-	case "nod":
-		tc.handleEmoteNod(isPathfindingState)
-	case "shake":
-		tc.handleEmoteShake(isPathfindingState)
 	}
 
 	if tc.B.EmoteTicks == 0 {
@@ -245,13 +240,13 @@ func (tc *TickContext) buildInputData(emoteJump, emoteSneak bool) protocol.Input
 	if tc.shouldSetHorizontalCollision() {
 		inputData.Set(packet.InputFlagHorizontalCollision)
 	}
-	// The emote is visual only: the renderer springs whether or not the physics
-	// agrees. The server counts input without a ground tick behind it as an
-	// unsupported jump, patches the prediction gap on the next correction, and
-	// the body visibly hops a second time on the landing the client renders.
-	// One physical hop per emote, with a bounded lifetime, so a waved emote
-	// flag can never hold the input key down and stack predictions on the sky.
-	if tc.ShouldJump || physicalJumpForThisTick(tc, emoteJump) {
+	// The wire only ever claims a jump the physics actually integrated:
+	// ShouldJump is owned by the pre-physics buyers (requested, sprint hop,
+	// emote), the airborne physics branch clears it, and buildInputData runs
+	// last. A flag high with no impulse behind it is the truncated hop the
+	// packet-time emote purchase used to produce: the server bought a jump the
+	// bot's own claims denied.
+	if tc.ShouldJump {
 		inputData.Set(packet.InputFlagJumping)
 		inputData.Set(packet.InputFlagJumpDown)
 	}
@@ -340,6 +335,30 @@ func (tc *TickContext) planSwim() {
 	tc.SwimPlanned = true
 }
 
+// jumpableNow reports whether the body may be given a jump this tick.
+//
+// IsGrounded is the primary signal, but this server reports a body standing
+// perfectly still as airborne — grounded=false with vel_y exactly zero, tick
+// after tick, which is why "lompat" produced a reply and no hop. A body that is
+// not moving vertically is not falling, so giving it a jump cannot produce the
+// Jumping+VerticalCollision pair the server reads as an unsupported jump: that
+// pair needs real downward motion to be true. Guarding on it is what kept a
+// grounded-in-practice bot from ever leaving the floor.
+//
+// velY is the tick's own copy of the vertical velocity — seeded from the bot's
+// previous-tick velocity when the context is built — and NOT the bot field:
+// the bot field is only a stale mirror of it, and reading that mirror instead
+// is how a body rising at 0.42 blocks/tick with an all-zero bot mirror looked
+// jumpable.
+func jumpableNow(b *bot.Bot, velY float32) bool {
+	if b == nil {
+		return false
+	}
+	b.Mu.Lock()
+	defer b.Mu.Unlock()
+	return b.IsGrounded || velY == 0
+}
+
 // groundedForPacket answers the question the wire asks: did the body have the
 // ground under it last tick. The live TickContext field is written by the
 // physics phase that runs later in this same tick, so a waved emote flag can
@@ -357,25 +376,43 @@ func groundedForPacket(tc *TickContext) bool {
 	return tc.B.IsGrounded
 }
 
-// physicalJumpForThisTick turns an emote wave into at most one physical hop
-// with a bounded lifetime. A "jump" emote wave is 80 ticks of flag-high;
-// without a lifetime the physics would re-buy the impulse on every landing
-// inside the window, which is how the emote's held key became climbing the
-// air whenever the body touched down mid-emote.
-func physicalJumpForThisTick(tc *TickContext, emoteJump bool) bool {
-	if !emoteJump || tc == nil || tc.B == nil {
-		return false
+// buyEmoteJump turns an active "jump" emote into this tick's jump request.
+//
+// This runs BEFORE the physics phase, in the same branch that integrates it,
+// because where the hop is bought decides whether the jump is a real one. The
+// previous version bought the hop at packet time — after runPhysicsAndCollisions
+// had already integrated the tick — so InputFlagJumping went out while the
+// position claims on the very same packet never left the floor. The server
+// bought the jump and arced the body up; the bot's own claims stayed at ground
+// level; and every tick the two views pulled the body apart. The player watched
+// the bot rise a fraction of a block and fall back: "bisa lompat tapi pendek
+// bgt, ngak normal".
+//
+// The latch bounds the emote to one hop. An emote wave is ~80 ticks of active
+// state, and without the latch every grounded tick inside the window re-buys
+// the impulse — a held jump key on the wire, which is the "lompat di udara naik
+// terus lagi" the one-hop latch exists to prevent. A body that is airborne when
+// the emote starts stays latched but unspent: the gate refuses here without
+// spending, the same way takeRequestedJump leaves its request latched for the
+// landing tick to honour.
+func (tc *TickContext) buyEmoteJump() {
+	if tc == nil || tc.B == nil {
+		return
 	}
 	tc.B.Mu.Lock()
-	defer tc.B.Mu.Unlock()
-	if !tc.B.IsGrounded {
-		return false
+	active := tc.B.EmoteState == "jump" && tc.B.EmoteTicks > 0
+	// Same gate as takeRequestedJump: the previous tick's grounded answer, or a
+	// body hanging at vertical rest, which is how this server reports standing.
+	mayJump := active && !tc.B.EmoteJumpSpent && (tc.B.IsGrounded || tc.VelY == 0)
+	if mayJump {
+		tc.B.EmoteJumpSpent = true
 	}
-	if tc.B.EmoteJumpSpent {
-		return false
+	tc.B.Mu.Unlock()
+	if !mayJump {
+		return
 	}
-	tc.B.EmoteJumpSpent = true
-	return true
+	tc.ShouldJump = true
+	tc.JumpReason = "emote"
 }
 
 // takeRequestedJump turns a latched jump request into this tick's jump.
@@ -397,13 +434,13 @@ func (tc *TickContext) takeRequestedJump() {
 	// grounded flag is only filled in by UpdateGroundedState, which runs in the
 	// physics phase AFTER this. Reading it here always saw false, so every
 	// scaffold jump request was consumed and silently dropped — the body never
-	// left the ground and the block was never placed. b.IsGrounded is the flag
-	// the previous tick's physics synced, which is the freshest truth available
-	// at this point in the tick.
-	tc.B.Mu.Lock()
-	grounded := tc.B.IsGrounded
-	tc.B.Mu.Unlock()
-	if !grounded {
+	// left the ground and the block was never placed. The previous tick's
+	// grounded answer is the freshest truth available at this point in the
+	// tick, and a body hanging at vertical rest — which is how this server
+	// reports a standing one — is jumpable too; tc.VelY still carries the
+	// previous tick's velocity at this point, which is exactly why the gate
+	// reads the tick's copy and not the bot's stale mirror.
+	if !jumpableNow(tc.B, tc.VelY) {
 		// Leave the request latched so a one-tick grounding gap does not eat it;
 		// it expires by TTL if nobody can honour it.
 		return
@@ -441,6 +478,12 @@ func (tc *TickContext) shouldSetHorizontalCollision() bool {
 
 func (tc *TickContext) shouldSetSneak(emoteSneak bool) bool {
 	if emoteSneak {
+		return true
+	}
+	// The shield hold is the combat crouch: with a shield in the off hand the
+	// server only counts blocks from a sneaking body, so the hold ORs straight
+	// over everything else, the way a player holding the crouch key would.
+	if tc.B != nil && tc.B.SneakHeldState() {
 		return true
 	}
 	if !tc.IsOnLadder {

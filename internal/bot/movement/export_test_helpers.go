@@ -209,6 +209,14 @@ func (tc *TickContext) SetSyncedGroundedForTest(grounded bool) {
 
 // TakeRequestedJumpForTest runs the one and only place a latched jump request
 // can become a jump.
+// BuyEmoteJumpForTest runs the pre-physics emote purchase — the step that
+// turns an active "jump" emote into tc.ShouldJump before the physics phase
+// integrates it. Tests stage the tick's velocity on tc.VelY, which is what
+// the gate reads, the same value the real tick seeds from the bot.
+func (tc *TickContext) BuyEmoteJumpForTest() {
+	tc.buyEmoteJump()
+}
+
 // ResetEmoteJumpForTest clears the one-hop latch so a test can stage a fresh
 // emote window on a grounded body.
 func (tc *TickContext) ResetEmoteJumpForTest() {
@@ -279,6 +287,20 @@ func ApplyBodyClearanceForTest(b *bot.Bot, pos mgl32.Vec3) {
 
 // PathLevelYForTest exposes pathLevelY.
 func PathLevelYForTest(b *bot.Bot, pos mgl32.Vec3) int32 { return pathLevelY(b, pos) }
+
+// ApplyKnockbackForTest folds one tick of server-assigned motion, the way the
+// movement loop does between physics and the position claim.
+func (tc *TickContext) ApplyKnockbackForTest() bool { return tc.applyKnockback() }
+
+// ApplyForceWalkForTest claims one tick of the raw push, so a test can see
+// the body's state while a ForceWalk window is open without running the
+// whole input loop.
+func (tc *TickContext) ApplyForceWalkForTest() bool { return tc.applyForceWalk() }
+
+// ApplyLookEmoteForTest runs one tick of the look-emote owner, so a test can
+// prove a spin actually turns the head and holds it there instead of being
+// eased back to the idle gaze.
+func (tc *TickContext) ApplyLookEmoteForTest() bool { return tc.applyLookEmote() }
 
 // ApplyStepUpAssistForTest exposes applyStepUpAssist.
 func (tc *TickContext) ApplyStepUpAssistForTest(pos mgl32.Vec3) mgl32.Vec3 {

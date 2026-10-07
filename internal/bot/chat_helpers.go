@@ -11,6 +11,9 @@ import (
 func (b *Bot) TrackBotMessage(text string) {
 	b.Mu.Lock()
 	defer b.Mu.Unlock()
+	if b.RecentBotMessages == nil {
+		b.RecentBotMessages = make(map[string]time.Time)
+	}
 	b.RecentBotMessages[strings.ToLower(strings.TrimSpace(text))] = time.Now()
 }
 

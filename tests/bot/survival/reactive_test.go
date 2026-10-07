@@ -34,6 +34,14 @@ type fakeBot struct {
 	// held is the selected hotbar slot; EquipItem of a main-inventory slot
 	// swaps the stack into it, like the real bot does.
 	held uint32
+	// armorWorn records every (carried slot, armor slot) pair passed to
+	// EquipArmorToSlot, in order — the server-confirmed wear path.
+	armorWorn []armorWear
+}
+
+type armorWear struct {
+	carried   uint32
+	armorSlot uint32
 }
 
 func newFakeBot() *fakeBot {
@@ -64,7 +72,17 @@ func (f *fakeBot) EquipItem(slot uint32) error {
 	}
 	return nil
 }
-func (f *fakeBot) UnequipItem() error                                { return nil }
+func (f *fakeBot) UnequipItem() error { return nil }
+
+// EquipArmorToSlot is the server-confirmed wear path. It records the pair and
+// swaps the stacks, so the fake's inventory reads like the server's after the
+// swap — the worn slot holds the piece, the carried slot holds what was worn.
+func (f *fakeBot) EquipArmorToSlot(slot uint32, armorSlot byte) error {
+	f.armorWorn = append(f.armorWorn, armorWear{carried: slot, armorSlot: uint32(armorSlot)})
+	worn := uint32(36) + uint32(armorSlot)
+	f.inventory[worn], f.inventory[slot] = f.inventory[slot], f.inventory[worn]
+	return nil
+}
 func (f *fakeBot) SendChat(msg string)                               {}
 func (f *fakeBot) ReportActionStatus(u string, s event.ActionStatus) {}
 func (f *fakeBot) GetEntityRuntimeID() uint64                        { return 1 }

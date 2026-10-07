@@ -31,7 +31,62 @@ const (
 func (tc *TickContext) updateLookDirection() {
 	tc.updateActivelyClimbing()
 	WantsToMove := tc.resolveTargetLook()
+	if tc.applyLookEmote() {
+		return
+	}
 	tc.applyEasedLookDirection(WantsToMove)
+}
+
+// applyLookEmote advances a look emote one step and hands the result straight
+// to the wire state, reporting whether it owns the head this tick.
+//
+// The look emotes (spin, wiggle, lookaround, nod, shake) used to mutate
+// tc.Yaw/tc.Pitch at packet time — after the eased look had already been
+// written — and the next tick the ease pulled the body straight back toward
+// the idle gaze. The wire saw an 18° spike followed by an ease-back, which is
+// a shiver, not a spin: the player watched "muter 10 kali" and the bot stood
+// still. Owning the whole look pipeline for the tick — body, head, target and
+// smoothed state all written to the spun angle — is what makes the rotation
+// visible and keeps it from fighting the idle gaze on the next tick.
+func (tc *TickContext) applyLookEmote() bool {
+	tc.B.Mu.Lock()
+	state := tc.B.EmoteState
+	ticks := tc.B.EmoteTicks
+	tc.B.Mu.Unlock()
+	if ticks <= 0 {
+		return false
+	}
+	// Same guard the emote handlers have always had: a body walking a route
+	// keeps its head for steering.
+	if tc.MState == "follow" || tc.MState == "walk_to" || tc.MState == "force_walk" {
+		return false
+	}
+	switch state {
+	case "spin", "wiggle", "lookaround", "nod", "shake":
+		// The step functions read EmoteTicks modulo their rhythm; hold the bot
+		// lock across the step the way the packet-time path used to.
+		tc.B.Mu.Lock()
+		switch state {
+		case "spin":
+			tc.handleEmoteSpin(false)
+		case "wiggle":
+			tc.handleEmoteWiggle(false)
+		case "lookaround":
+			tc.handleEmoteLookAround(false)
+		case "nod":
+			tc.handleEmoteNod(false)
+		case "shake":
+			tc.handleEmoteShake(false)
+		}
+		tc.B.Mu.Unlock()
+		tc.TargetYaw, tc.TargetPitch = tc.Yaw, tc.Pitch
+		tc.HeadYaw = tc.Yaw
+		tc.SmoothedLookYaw, tc.SmoothedLookPitch = tc.Yaw, tc.Pitch
+		return true
+	default:
+		// jump/sneak are input flags, applied at packet time by applyEmote.
+		return false
+	}
 }
 
 func (tc *TickContext) updateActivelyClimbing() {

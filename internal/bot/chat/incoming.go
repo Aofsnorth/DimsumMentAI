@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"sort"
 	"strings"
 	"time"
 
@@ -14,6 +15,8 @@ import (
 	"bedrock-ai/internal/bot/perception"
 	"bedrock-ai/internal/event"
 	"bedrock-ai/internal/handler"
+
+	"github.com/go-gl/mathgl/mgl32"
 )
 
 // HandleIncomingChat handles messages from players and queries the LLM when
@@ -55,6 +58,17 @@ func HandleIncomingChat(ctx context.Context, b *bot.Bot, evt event.ChatEvent) {
 	b.LastChatPartner = evt.SourceName
 	b.Mu.Unlock()
 
+	// A whisper opens a private conversation, and the reply has to go back the
+	// same way. Recording it here — before any filter — is deliberate: a message
+	// that is not tagged, or from somebody who is not linked, still means the
+	// channel is private, and answering the next one in public would be the leak.
+	if evt.Whisper {
+		b.NoteWhisperFrom(evt.SourceName)
+	} else if b.WhisperPartner() != "" {
+		// They answered in public, so the conversation is public again.
+		b.ClearWhisperWith(evt.SourceName)
+	}
+
 	if strings.HasPrefix(msg, "!") {
 		HandleAdminCommand(b, msg, evt.SourceName)
 		return
@@ -70,6 +84,26 @@ func HandleIncomingChat(ctx context.Context, b *bot.Bot, evt event.ChatEvent) {
 	// must work even on a bot that cannot chat — that configuration is exactly
 	// the one where somebody drops the bot in a world and walks away.
 	if handled := handleEpisodeCommand(b, evt, msg); handled {
+		return
+	}
+
+	// The in-game access grant runs before the intent matchers and the AI: a
+	// whitelist request is a configuration change, not a conversation.
+	if handleWhitelistCommand(b, evt, msg) {
+		return
+	}
+
+	// A staged routine ("lompat, jalan 1 block, muter sebanyak 5 kali") is
+	// sequenced in code: the model narrates it, but the arithmetic of stages
+	// and counts is not its job to re-emit tag by tag.
+	if handleStagedCommand(b, evt, msg) {
+		return
+	}
+
+	// The guardian toggle ("kalo ada mob jahat, bunuh aja ya") is a behaviour
+	// switch on the threat detector, not a conversation: the model can describe
+	// the reflex but cannot reach inside it.
+	if handleGuardCommand(b, evt, msg) {
 		return
 	}
 
@@ -92,10 +126,15 @@ func HandleIncomingChat(ctx context.Context, b *bot.Bot, evt event.ChatEvent) {
 	// plain-language form is the one that will arrive; "!nofollow" is a command
 	// nobody would think to use unless they had read the source.
 	if isStopFollowingIntent(msg) {
+		// Stop has to cancel the running job, not just the legs. The gather loop
+		// is driven by a context, and handing it context.Background() — as the
+		// action handlers used to — makes it uncancellable: the bot says
+		// "okay, stopping", then keeps re-navigating to the next tree.
 		b.Stop()
 		b.DisableImplicitFollow(evt.SourceName)
 		b.Logger.Info("chat: following stopped by request", slog.String("from", evt.SourceName))
-		b.SendSafeChat("Siap, aku berhenti ikutin.")
+		replyViaAI(b, evt.SourceName, msg,
+			"You stopped following the player and are no longer moving after them.")
 		return
 	}
 
@@ -104,7 +143,8 @@ func HandleIncomingChat(ctx context.Context, b *bot.Bot, evt event.ChatEvent) {
 			b.CombatMgr.Disengage()
 		}
 		b.Logger.Info("chat: combat stopped by request", slog.String("from", evt.SourceName))
-		b.SendSafeChat("Siap, aku berhenti menyerang.")
+		replyViaAI(b, evt.SourceName, msg,
+			"You stopped attacking and are no longer engaging in combat.")
 		return
 	}
 
@@ -194,31 +234,43 @@ func noteImplicitFollow(b *bot.Bot, who string) {
 // shouldProcessChat applies filters for bot echoes, player whitelist, tagging,
 // and distance before a message is sent to the LLM.
 func shouldProcessChat(b *bot.Bot, evt event.ChatEvent, msg, botName string) bool {
-	if strings.EqualFold(evt.SourceName, botName) {
-		b.Logger.Info("chat ignored: own message", slog.String("source", evt.SourceName))
+	// An echo is the server handing back a line the bot just sent, stamped with
+	// the name the server knows it by. That is the moment to learn the name: the
+	// PlayerList entry that would carry it is matched by UUID and entity ID, and a
+	// server that sends neither leaves the bot still believing in its configured
+	// name. Without this, the bot never recognises its own reply and treats a
+	// player's message as its own.
+	if b.IsBotEcho(msg) {
+		b.NoteServerAssignedName(evt.SourceName)
+		b.Logger.Info("chat ignored: bot echo detected")
 		return false
 	}
-	if b.IsBotEcho(msg) {
-		b.Logger.Info("chat ignored: bot echo detected")
+	if b.IsOwnChatSource(evt.SourceName) {
+		b.Logger.Info("chat ignored: own message", slog.String("source", evt.SourceName))
 		return false
 	}
 
 	if b.AiCfg.RespondOnlyToLinkedPlayer {
 		mainPlayers := b.AiCfg.GetMainPlayers()
-		if len(mainPlayers) > 0 {
-			if !b.AiCfg.IsMainPlayer(evt.SourceName) {
-				b.Logger.Info("chat ignored: not linked main player",
-					slog.String("source", evt.SourceName),
-					slog.String("main_players", strings.Join(mainPlayers, ", ")),
-				)
-				return false
-			}
+		if len(mainPlayers) > 0 &&
+			!b.AiCfg.IsMainPlayer(evt.SourceName) &&
+			!b.IsWhitelistedPlayer(evt.SourceName) {
+			b.Logger.Info("chat ignored: not linked main player",
+				slog.String("source", evt.SourceName),
+				slog.String("main_players", strings.Join(mainPlayers, ", ")),
+			)
+			return false
 		}
 	}
 
 	isTagged := isTaggedInBot(msg, b)
 
-	if b.AiCfg.RespondOnlyWhenTagged {
+	// A whisper is already addressed to this bot by name — the server put the
+	// bot's own name in the recipient field and only delivered the line to it.
+	// Requiring the name to appear again inside the message means asking somebody
+	// to write "Luna" into a DM they already sent to Luna, which is the reply a
+	// player stops sending.
+	if b.AiCfg.RespondOnlyWhenTagged && !evt.Whisper {
 		if !isTagged {
 			b.Logger.Info("chat ignored: bot not tagged in message",
 				slog.String("msg", msg),
@@ -409,6 +461,7 @@ func buildChatContext(b *bot.Bot, sourceName, msg, botName string) string {
 	}
 
 	visibleMobs := VisibleMobsSummary(b, 32, 8)
+	nearbyPlayers := NearbyPlayersSummary(b, 24.0, 8)
 	// Grounded block sight: without it the model answers "no button here"
 	// while staring at one. Line-of-sight only, so no xray.
 	visibleBlocks := perception.BlocksSummary(b, 12.0, 6)
@@ -435,6 +488,13 @@ func buildChatContext(b *bot.Bot, sourceName, msg, botName string) string {
 
 	systemPrompt += "\n\n[GROUNDED PERCEPTION] Visible mobs (line-of-sight, non-item): " + visibleMobs + "."
 	systemPrompt += "\nVisible blocks nearby (line-of-sight, clickable ones can be used with interact): " + visibleBlocks + "."
+	// Players are the one thing this context used to be blind to entirely, and
+	// the blind spot produced a confident lie: the bot told the player "there is
+	// nobody near me" while three players stood in the entity census.
+	systemPrompt += "\n\n[NEARBY PLAYERS] Real players close enough to walk over to: " + nearbyPlayers +
+		". A player is a player, whatever they are standing next to; an armor stand with a" +
+		" name on it is a hologram or an NPC, not a player. \"no line of sight\" means a wall" +
+		" is in the way — you know they are there but cannot see or click them yet."
 
 	// Append current plan/todo state so the LLM is always aware of any
 	// in-progress multi-step task, even when a new chat message arrives
@@ -481,13 +541,97 @@ func VisibleMobsSummary(b *bot.Bot, maxDistance float32, limit int) string {
 	}
 	parts := make([]string, 0, min(limit, len(visible)))
 	for _, info := range visible {
-		name := entity.NormalizeName(info.Name)
-		if name == "" || name != entity.NormalizeName(info.Type) {
-			if typ := entity.NormalizeName(info.Type); typ != "" {
-				name = typ
-			}
+		parts = append(parts, fmt.Sprintf("%s (%.0fm)", describeActor(*info), origin.Sub(info.Position).Len()))
+		if len(parts) >= limit {
+			break
 		}
-		parts = append(parts, fmt.Sprintf("%s (%.0fm)", name, origin.Sub(info.Position).Len()))
+	}
+	return strings.Join(parts, ", ")
+}
+
+// describeActor renders one actor for a prompt, keeping the display name.
+//
+// The previous form printed the type whenever the type and the name differed,
+// which is to say for every actor that has a nickname — and a nickname is the
+// entire useful part. A join portal, a hologram text line and pixel-art filler
+// are all minecraft:armor_stand, so the bot's own "in sight" list was several
+// copies of the word "armor_stand" with the one piece of information a player
+// would have used to tell them apart thrown away.
+func describeActor(info entity.Info) string {
+	typ := entity.NormalizeName(info.Type)
+	name := entity.NormalizeName(info.Name)
+	if name == "" || name == typ {
+		return typ
+	}
+	return fmt.Sprintf("%s (%s)", name, typ)
+}
+
+// nearbyEyeHeight and nearbyTargetHeight are the two ends of the sight ray used
+// for the player line, matching the eye and torso heights entity.IsVisibleMob
+// uses for mobs so the two lists cannot disagree about who is behind a wall.
+const (
+	nearbyEyeHeight    = 1.62
+	nearbyTargetHeight = 1.2
+)
+
+// NearbyPlayersSummary lists the real players around the bot, nearest first.
+//
+// Players were missing from the chat context altogether, and not by accident of
+// formatting: handleAddPlayer files them in PlayerPositions and never touches
+// b.Actors, while entity.IsMob rejects the "player" type outright. So the
+// grounded mob list could only ever contain non-players, and the model was
+// asked to answer "who is near me" from a list that structurally could not
+// contain a player.
+//
+// Proximity, not visibility, is the question here — the bot needs to know it can
+// walk over to someone — so line of sight is reported per player rather than
+// used to filter, because a player behind a wall is still someone the player
+// asking can go and see.
+func NearbyPlayersSummary(b *bot.Bot, maxDistance float32, limit int) string {
+	type person struct {
+		info entity.Info
+		dist float32
+	}
+
+	b.Mu.Lock()
+	origin := b.Pos
+	seen := make(map[uint64]entity.Info, len(b.PlayerUsernames))
+	for id, name := range b.PlayerUsernames {
+		pos, ok := b.PlayerPositions[id]
+		if !ok || strings.TrimSpace(name) == "" {
+			continue
+		}
+		seen[id] = entity.Info{ID: id, Type: "minecraft:player", Name: name, Position: pos}
+	}
+	b.Mu.Unlock()
+
+	var people []person
+	for _, info := range seen {
+		// Filtered outside the lock: IsOwnChatSource takes b.Mu itself, and a
+		// sync.Mutex is not reentrant.
+		if b.IsOwnChatSource(info.Name) {
+			continue
+		}
+		dist := origin.Sub(info.Position).Len()
+		if maxDistance > 0 && dist > maxDistance {
+			continue
+		}
+		people = append(people, person{info: info, dist: dist})
+	}
+	if len(people) == 0 {
+		return "none"
+	}
+	sort.SliceStable(people, func(a, c int) bool { return people[a].dist < people[c].dist })
+
+	parts := make([]string, 0, min(limit, len(people)))
+	for _, p := range people {
+		entry := fmt.Sprintf("%s (%.0fm)", p.info.Name, p.dist)
+		if !entity.HasLineOfSight(b.WorldModel, b,
+			origin.Add(mgl32.Vec3{0, nearbyEyeHeight, 0}),
+			p.info.Position.Add(mgl32.Vec3{0, nearbyTargetHeight, 0})) {
+			entry += ", no line of sight"
+		}
+		parts = append(parts, entry)
 		if len(parts) >= limit {
 			break
 		}

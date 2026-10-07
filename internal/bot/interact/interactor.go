@@ -63,6 +63,11 @@ type Bot interface {
 	// QueueItemInteractionData embeds a use-item transaction in the next
 	// PlayerAuthInput, the way 1.21.100+ touch clients send block clicks.
 	QueueItemInteractionData(data protocol.UseItemTransactionData) error
+	// NavigateToBlock walks the bot to a cell and reports whether it arrived.
+	// Resolve is reach-filtered, so a target the player can plainly see can
+	// still be too far to click; walking the last few metres is the difference
+	// between "klik button ini" working and being refused.
+	NavigateToBlock(x, y, z int32, tolerance float32) bool
 }
 
 const (
@@ -82,6 +87,17 @@ const (
 
 	// searchRadius is how far around the bot a named block is looked for.
 	searchRadius = 6
+
+	// approachRadius is how far away a target may be and still be worth walking
+	// to. Deliberately far wider than entityReach: walking is cheap and free,
+	// whereas the alternative is refusing an action on something the player is
+	// looking straight at.
+	approachRadius = 10.0
+
+	// approachTolerance is how close the bot must get to the target's cell, in
+	// blocks. Comfortably inside entityReach so the retry after arrival really
+	// is in reach rather than one step short of it.
+	approachTolerance = 1.5
 
 	// settleDelay is the pause between the click and its inline fallback, and
 	// between aiming and interacting for entity clicks.
@@ -542,6 +558,141 @@ func (i *Interactor) heldItem() (protocol.ItemInstance, int32) {
 	return protocol.ItemInstance{Stack: stack}, int32(slot)
 }
 
+// Approach walks the bot within click reach of the nearest thing the request
+// names, and reports whether it got there.
+//
+// Resolve answers only for what is already in reach, which is the right answer
+// to "can I click this from where I am standing" and the wrong answer to "klik
+// button ini" when the button is four metres away. The bot printed a census
+// listing the target and then answered that nothing was there, because nothing
+// was within 4.5m.
+//
+// Widening entityReach instead would trade a wrong answer for a silently
+// dropped click: a Geyser host runs its own interaction range check on the
+// Java side, so a click sent from too far is discarded without a word. Walking
+// up to the thing is what a player does, and it is the only fix that can
+// actually land the click.
+func (i *Interactor) Approach(ctx context.Context, request Request) bool {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return false
+	}
+	target, feet, ok := i.findApproachable(request)
+	if !ok {
+		return false
+	}
+	cell := [3]int32{
+		int32(math.Floor(float64(feet.X()))),
+		int32(math.Floor(float64(feet.Y()))),
+		int32(math.Floor(float64(feet.Z()))),
+	}
+	i.logger.Info("interact approaching out-of-reach target",
+		"id", target.ID, "type", target.Name, "pos", feet)
+	if !i.bot.NavigateToBlock(cell[0], cell[1], cell[2], approachTolerance) {
+		i.logger.Info("interact approach did not arrive", "pos", feet)
+		return false
+	}
+	return ctx.Err() == nil
+}
+
+// findApproachable picks the thing worth walking to: the nearest match for the
+// request inside approachRadius, with Resolve's reach filter lifted.
+//
+// It mirrors Resolve's own precedence rather than inventing one, so walking up
+// and retrying cannot change which thing was meant. The in-front cone is
+// deliberately *not* applied for the entity scan: the bot is about to turn
+// round and walk over there, so which way it happened to be facing says nothing
+// about which of two candidates the player meant. It is kept only to break ties
+// when several equally-near things match.
+func (i *Interactor) findApproachable(request Request) (Target, mgl32.Vec3, bool) {
+	botPos := i.bot.GetCoords()
+	blocks := OnlyVisible(i.bot, botPos, scanBlockTargets(i.bot, botPos, int32(approachRadius), request))
+
+	if request.Block != "" {
+		if t, ok := pickNearestBlock(blocks, func(b Target) bool {
+			return BlockNameMatches(b.Name, request.Block)
+		}, botPos, approachRadius); ok {
+			return t, blockFeet(t), true
+		}
+	}
+	if request.Entity != "" {
+		if t, feet, ok := i.nearestMatchingEntity(request.Entity, botPos, request.Requester); ok {
+			return t, feet, true
+		}
+	}
+	// "Whatever is in front of you" with nothing named: same order Resolve uses,
+	// an entity before a block, since server figures are entities far more often.
+	if request.Block == "" && request.Entity == "" {
+		if t, feet, ok := i.nearestMatchingEntity("", botPos, ""); ok {
+			return t, feet, true
+		}
+		if t, ok := pickNearestBlock(blocks, func(b Target) bool {
+			return IsInteractiveBlockName(b.Name)
+		}, botPos, approachRadius); ok {
+			return t, blockFeet(t), true
+		}
+	}
+	return Target{}, mgl32.Vec3{}, false
+}
+
+// nearestMatchingEntity finds the closest interactable entity matching
+// canonical, or any interactable entity when canonical is empty. Reach is not
+// checked — that is the whole point of the caller — but the requester is still
+// skipped, because a player never means themselves.
+func (i *Interactor) nearestMatchingEntity(canonical string, botPos mgl32.Vec3, requester string) (Target, mgl32.Vec3, bool) {
+	var best Target
+	var bestFeet mgl32.Vec3
+	bestDist := float32(math.MaxFloat32)
+	found := false
+
+	consider := func(id uint64, info *entity.Info) {
+		if !isInteractableEntity(info) {
+			return
+		}
+		if canonical != "" && !EntityNameMatches(info, canonical) {
+			return
+		}
+		if requester != "" {
+			if id == 0 {
+				return
+			}
+			if strings.EqualFold(info.Name, requester) {
+				return
+			}
+		}
+		dist := origin3Distance(botPos, info.Position)
+		if dist > approachRadius || dist >= bestDist {
+			return
+		}
+		best = Target{Kind: KindEntity, ID: id, Name: info.Type, Pos: aimPoint(info.Position)}
+		bestFeet = info.Position
+		bestDist = dist
+		found = true
+	}
+
+	for id, ent := range i.bot.GetEntities() {
+		consider(id, ent)
+	}
+	for id, pEnt := range i.bot.GetPlayerList() {
+		pe := pEnt
+		consider(id, &pe)
+	}
+	return best, bestFeet, found
+}
+
+// blockFeet is the standing height of a block cell, which is what NavigateToBlock
+// wants: blockAim is the middle of the block and would walk the bot into a
+// stairwell of clicks one level too high.
+func blockFeet(t Target) mgl32.Vec3 {
+	return mgl32.Vec3{float32(t.Block.X()) + 0.5, float32(t.Block.Y()), float32(t.Block.Z()) + 0.5}
+}
+
+func origin3Distance(from, to mgl32.Vec3) float32 {
+	return from.Sub(to).Len()
+}
+
 // Resolve turns a request into a concrete target.
 //
 // A block reading is tried before an entity one because the words overlap ("a
@@ -960,12 +1111,20 @@ func Normalise(name string) string {
 
 func stripFormattingCodes(s string) string {
 	var b strings.Builder
-	for i := 0; i < len(s); i++ {
-		if s[i] == '§' && i+1 < len(s) {
+	runes := []rune(s)
+	for i := 0; i < len(runes); i++ {
+		if runes[i] == '§' {
+			// '§' opens a formatting code; the character that follows is
+			// formatting too. The byte-wise version this replaced compared one
+			// byte against the two-byte UTF-8 '§' and never matched, so every
+			// §-coded name stayed unnormalised — a server NPC whose name is
+			// nothing but codes never normalised to empty, "klik npc" kept
+			// resolving to the floating text above it, and the click landed on
+			// a hitbox nobody bound a command to.
 			i++
 			continue
 		}
-		b.WriteByte(s[i])
+		b.WriteRune(runes[i])
 	}
 	return b.String()
 }
