@@ -63,6 +63,11 @@ func (tc *TickContext) applyKnockback() bool {
 	tc.B.Mu.Unlock()
 
 	tc.CurrPos = mgl32.Vec3{tc.CurrPos.X() + kbX, tc.CurrPos.Y(), tc.CurrPos.Z() + kbZ}
+	tc.B.Logger.Info("knockback folded",
+		"vx", kbX, "vz", kbZ,
+		"from_x", tc.CurrPos.X()-kbX, "from_z", tc.CurrPos.Z()-kbZ,
+		"to_x", tc.CurrPos.X(), "to_z", tc.CurrPos.Z(),
+		"grounded", tc.IsGrounded)
 
 	decay := airKnockbackFriction
 	if tc.IsGrounded {

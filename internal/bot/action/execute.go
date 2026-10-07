@@ -401,28 +401,125 @@ func commandHandler(b *bot.Bot, param, user string) {
 // commandOutputTimeout is how long the action waits for the server's reply.
 const commandOutputTimeout = 2 * time.Second
 
-func reportCommandResult(b *bot.Bot, command, user string) {
+// stripFormatting removes Minecraft § formatting codes, which servers bake
+// into command replies ("§rCorrect usage: /pvp") and which would otherwise
+// confuse the usage parser.
+func stripFormatting(s string) string {
+	var res strings.Builder
+	runes := []rune(s)
+	for i := 0; i < len(runes); i++ {
+		if runes[i] == '§' {
+			if i+1 < len(runes) {
+				i++
+			}
+			continue
+		}
+		res.WriteRune(runes[i])
+	}
+	return res.String()
+}
+
+// parseUsageRejection reports whether the server's reply is a usage
+// rejection, and the canonical command line it names ("Correct usage: /pvp"
+// → "/pvp"). A canonical form containing placeholders ("/login <password>")
+// is reported as a rejection but NOT retryable: its arguments are things the
+// bot cannot invent, so the requirement has to go back to the model.
+func parseUsageRejection(output string) (canonical string, rejected, retryable bool) {
+	clean := strings.ToLower(stripFormatting(output))
+	idx := strings.Index(clean, "usage")
+	if idx < 0 {
+		if strings.Contains(clean, "unknown command") {
+			return "", true, false
+		}
+		return "", false, false
+	}
+	rest := strings.TrimSpace(output[idx+len("usage"):])
+	rest = strings.TrimPrefix(rest, ":")
+	rest = strings.TrimSpace(stripFormatting(rest))
+	if rest == "" {
+		return "", true, false
+	}
+	if !strings.HasPrefix(rest, "/") {
+		rest = "/" + rest
+	}
+	if strings.ContainsAny(rest, "<[{") {
+		return rest, true, false
+	}
+	return rest, true, true
+}
+
+// bareCommandOf strips the arguments from a command line ("/pvp Luna" →
+// "/pvp"). It is the shape a usage line usually asks for when a model
+// appended a vocative — "ketik /pvp Luna" names the bot, not an argument.
+func bareCommandOf(line string) string {
+	parts := strings.Fields(strings.TrimPrefix(strings.TrimSpace(line), "/"))
+	if len(parts) == 0 {
+		return ""
+	}
+	return "/" + parts[0]
+}
+
+// awaitCommandOutput polls for the server's reply to the command just sent.
+func awaitCommandOutput(b *bot.Bot) (string, bool) {
 	deadline := time.Now().Add(commandOutputTimeout)
 	for time.Now().Before(deadline) {
 		if output, ok := b.LastCommandOutput(); ok {
-			ReportStatus(b, user, event.ActionStatus{
-				Action:  "cmd",
-				Item:    command,
-				Success: true,
-				Error:   "",
-				Count:   0,
-			})
-			b.Logger.Info("server command output", slog.String("command", command), slog.String("output", output))
-			return
+			return output, true
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
-	ReportStatus(b, user, event.ActionStatus{
-		Action:  "cmd",
-		Item:    command,
-		Success: true,
-		Error:   "",
-	})
+	return "", false
+}
+
+// reportCommandResult reports what the server actually said, and when the
+// reply is a usage rejection with a no-argument canonical form, runs that
+// corrected form once before reporting. The /pvp duel flow lived or died on
+// this: the model read "Ketik /pvp Luna" with the name as a vocative and
+// sent "/pvp Luna", the server answered "Correct usage: /pvp", and the old
+// reporter called that a success — so the duel never started and the chat
+// claimed it had.
+func reportCommandResult(b *bot.Bot, command, user string) {
+	output, ok := awaitCommandOutput(b)
+	if !ok {
+		// A silent server on a command that usually answers means it ran; keep
+		// the legacy semantics rather than failing every quiet command.
+		ReportStatus(b, user, event.ActionStatus{Action: "cmd", Item: command, Success: true})
+		return
+	}
+	b.Logger.Info("server command output", slog.String("command", command), slog.String("output", output))
+
+	canonical, rejected, retryable := parseUsageRejection(output)
+	if !rejected {
+		ReportStatus(b, user, event.ActionStatus{Action: "cmd", Item: command, Success: true})
+		return
+	}
+
+	// Retry only the exact correction the server named, and only when the
+	// sent line actually carried arguments to drop. Retrying an identical
+	// line would just echo the same rejection.
+	if retryable && canonical != "" && canonical == bareCommandOf(command) && strings.TrimSpace(command) != canonical {
+		b.Logger.Info("server rejected the command's arguments; retrying the canonical form",
+			slog.String("sent", command), slog.String("canonical", canonical))
+		if err := b.SendCommand(canonical); err != nil {
+			ReportStatus(b, user, event.ActionStatus{Action: "cmd", Item: canonical, Success: false, Error: err.Error()})
+			return
+		}
+		retryOutput, got := awaitCommandOutput(b)
+		if got {
+			b.Logger.Info("server command output (retry)", slog.String("command", canonical), slog.String("output", retryOutput))
+			if _, rejectedAgain, _ := parseUsageRejection(retryOutput); rejectedAgain {
+				ReportStatus(b, user, event.ActionStatus{Action: "cmd", Item: canonical, Success: false, Error: retryOutput})
+				return
+			}
+		}
+		ReportStatus(b, user, event.ActionStatus{Action: "cmd", Item: canonical, Success: true})
+		return
+	}
+
+	// A rejection the bot cannot self-correct goes back as a failure carrying
+	// the server's own words, so the model narrates the real requirement
+	// instead of claiming the command ran.
+	ReportStatus(b, user, event.ActionStatus{Action: "cmd", Item: command, Success: false, Error: output})
 }
 
 // ActionHandlers maps action labels to their handler functions.

@@ -229,7 +229,20 @@ func handleCorrectPrediction(b *bot.Bot, p *packet.CorrectPlayerMovePrediction) 
 			b.PathIndex = 0
 		}
 
-		if b.MovementState != "idle" {
+		// A correction landing mid-knockback is the one log line that decides
+		// where a missing knockback lives: a corrected position near the PRE-hit
+		// spot means the server refused the slide itself, while one near the
+		// slid spot means it confirms it. It used to log only for a walking
+		// body — which is to say, never during the idle duels where the
+		// knockback kept disappearing without a trace.
+		if b.KnockbackX != 0 || b.KnockbackZ != 0 {
+			b.Logger.Info("server corrected position while knockback live",
+				slog.Any("local", b.Pos),
+				slog.Any("server", correctedPos),
+				slog.Float64("carried_kb_x", float64(b.KnockbackX)),
+				slog.Float64("carried_kb_z", float64(b.KnockbackZ)),
+			)
+		} else if b.MovementState != "idle" {
 			b.Logger.Info("server corrected position",
 				slog.Any("local", b.Pos),
 				slog.Any("server", correctedPos),
@@ -239,7 +252,11 @@ func handleCorrectPrediction(b *bot.Bot, p *packet.CorrectPlayerMovePrediction) 
 		NoteServerSupport(b, b.Pos.Y(), correctedPos.Y())
 
 		b.Pos = correctedPos
-		if !b.IsOnLadder {
+		// The vertical half of a knockback is the server's own assignment; its
+		// correction arriving mid-hop does not retract that assignment, and
+		// zeroing the hop here is how the rise kept dying before it cleared a
+		// half block.
+		if !b.IsOnLadder && b.KnockbackX == 0 && b.KnockbackZ == 0 {
 			b.VelY = 0.0
 		}
 		// The server owns the authoritative position. Remember the Y it just

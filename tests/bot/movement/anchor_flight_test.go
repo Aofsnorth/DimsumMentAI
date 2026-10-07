@@ -18,7 +18,7 @@ import (
 	"github.com/go-gl/mathgl/mgl32"
 )
 
-func newAnchorTestBot() *bot.Bot {
+func newAnchorFlightBot() *bot.Bot {
 	return &bot.Bot{
 		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 		Name:   "TestBot",
@@ -35,7 +35,7 @@ func freshAnchor(b *bot.Bot, y float32) {
 // let gravity finish the arc the server is also simulating.
 func TestAnchorDoesNotPinAJumpApex(t *testing.T) {
 	t.Parallel()
-	b := newAnchorTestBot()
+	b := newAnchorFlightBot()
 	freshAnchor(b, 100.0)
 
 	apex := &movement.TickContext{
@@ -62,7 +62,7 @@ func TestAnchorDoesNotPinAJumpApex(t *testing.T) {
 // chunks). That direction keeps the pin.
 func TestAnchorStillHoldsASaggingBody(t *testing.T) {
 	t.Parallel()
-	b := newAnchorTestBot()
+	b := newAnchorFlightBot()
 	freshAnchor(b, 100.0)
 
 	sagging := &movement.TickContext{
@@ -87,7 +87,7 @@ func TestAnchorStillHoldsASaggingBody(t *testing.T) {
 // confirmed Y over a floor the model cannot see — stays held.
 func TestAnchorHoldsBodyAtConfirmedY(t *testing.T) {
 	t.Parallel()
-	b := newAnchorTestBot()
+	b := newAnchorFlightBot()
 	freshAnchor(b, 100.0)
 
 	idle := &movement.TickContext{
