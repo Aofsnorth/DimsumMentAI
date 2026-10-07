@@ -18,7 +18,11 @@ const (
 	directSteerFollowRadius = 16.0
 )
 
-func (tc *TickContext) updateDistanceToPlayer() {
+// UpdateDistanceToPlayer refreshes DistToPlayer, the input of the follow
+// walk/stop latch. It must run every tick before UpdateShouldMoveState: left at
+// its zero value the latch reads "already next to the player" and a following
+// bot plans a route but never takes a step.
+func (tc *TickContext) UpdateDistanceToPlayer() {
 	tc.DistToPlayer = 999.0
 	if tc.MState == "follow" && tc.TPlayer != "" {
 		if _, pPos, ok := tc.B.FindPlayer(tc.TPlayer); ok {

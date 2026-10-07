@@ -484,6 +484,17 @@ func boolState(props map[string]any, key string) (value bool, ok bool) {
 	return false, false
 }
 
+// IsCarpetAt reports whether the cell holds a carpet (a 1/16-block-high floor
+// covering the movement model treats as passable).
+func (wc *WorldCache) IsCarpetAt(x, y, z int32) bool {
+	rid, loaded := wc.GetBlockRID(x, y, z)
+	if !loaded {
+		return false
+	}
+	name, ok := wc.BlockName(rid)
+	return ok && strings.Contains(name, "carpet")
+}
+
 // TopOffsetAt returns the walkable surface height of the block at (x, y, z)
 // relative to the cell's bottom, defaulting to a full block. Air and unloaded
 // cells also report 1.0: neither is a partial floor, and defaulting keeps the

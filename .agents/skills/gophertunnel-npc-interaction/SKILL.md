@@ -46,6 +46,20 @@ Bedrock and Geyser/Paper servers handle entity clicks differently:
 5. Optional dialogue request:
    - If NPC type, send `packet.NPCRequest` (`NPCRequestActionExecuteAction`).
 
+6. Left-click (attack) fallback:
+   - `UseItemOnEntityTransactionData` with `ActionType: protocol.UseItemOnEntityActionAttack`, sent only when `isNPCClickTarget` is true: an `armor_stand`, or a player entity flagged `Bot.IsServerNPC(id)`. NEVER attack a real player. Java NPC plugins behind Geyser often bind to left click.
+
+### 2b. Skinned NPCs behind Geyser: keep them tracked (nexusone hub)
+Symptom: click does nothing; `interact entity census` shows only hologram armor stands (named, multi-line) plus the requester, no `minecraft:player` NPC; `interact target not found`.
+- Geyser spawns a skinned NPC with `AddPlayer`, then sends `PlayerList` remove for its UUID. The old handler wiped the entity on that remove, so the NPC vanished. Now `PlayerList` remove only drops the UUID mapping and sets `Bot.PlayerHidden[runtimeID]` (via `PlayerIDUUIDs`); `RemoveActor` ends tracking.
+- Several NPCs share a username (often empty). `PlayerEntityIDs` is name-keyed, last-writer-wins, so `GetPlayerList` iterates `PlayerPositions`/`PlayerUsernames` by runtime ID instead.
+- `resolveInFront` skips the requester (the user standing next to the bot) by design, and drops candidates outside `FrontConeDegrees`; a hologram 3 m up can fall outside the cone, which is why NPC under the same x/z (lowest Y of the cluster) must be tracked to be picked.
+- `logEntityCensus` (Info, radius 20, skips bare armor stands whose name == type) is the evidence tool; Info logs `tracked player spawned`, `player list entry removed`, `tracked player left view distance` show the NPC lifecycle.
+- If no `tracked player spawned` appears for the NPC, it is not AddPlayer: check `AddActor` types next.
+
+### 2c. Bot walks to the requester while told to click the NPC in front
+Symptom: "klik NPC didepanmu Luna" -> log shows `recalculating path ... movement_state=follow` toward the requester right before `interacting`, though the click itself hit the right NPC (`entity 6`). Cause was not the resolver: `noteImplicitFollow` (chat/incoming.go) ran after every reply and called `FollowPlayer` because the async plan had not made `IsBusy()` true yet. Fix: `dispatchChatResponse` returns `tookTask` (plan or >=1 action step) and the implicit follow is skipped then. Any new action that runs where the bot stands must rely on this, not on `IsBusy()`.
+
 ### 3. Server Transfer & Dimension Teleport Handling
 - On server transfer (`packet.Transfer`): extract `Address` and `Port`, call `b.RequestJoin(addr)`.
 - On dimension change (`packet.ChangeDimension`): update `ChunkDimension`, `Dimension`, `Pos`, reset `Actors`, and send `PlayerAction` with `PlayerActionDimensionChangeDone`.
@@ -60,4 +74,5 @@ Bedrock and Geyser/Paper servers handle entity clicks differently:
 1. `go test ./tests/bot/interact/...` — pins hologram stacking resolution, torso aim point, and UseItemOnEntity packet emission.
 2. `go test ./tests/bot/action/...` — pins combat disengagement via actions and parameters.
 3. `go test ./tests/bot/chat/...` — pins natural chat intents ("berhenti attack", "stop attack", "jangan serang").
-4. `go test ./tests/bot/network/player/...` — pins Transfer, ChangeDimension, and Respawn packet handlers.
+4. `go test ./tests/bot/network/player/...` — pins Transfer, ChangeDimension, and Respawn packet handlers, and `npc_tracking_test.go` (PlayerList remove keeps a server NPC, same-username NPCs all listed, real players are not NPCs).
+5. Live: ask the user to run the bot, say "Sini Luna" then "klik npc didepanmu Luna", and paste the log. Never connect the bot yourself.

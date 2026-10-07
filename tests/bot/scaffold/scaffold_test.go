@@ -513,3 +513,13 @@ func TestBodyBlocksCellUsesTheRealBodyWidth(t *testing.T) {
 		t.Error("a body below the cell was called blocking")
 	}
 }
+
+func TestTowerHeadroomIsTheCellTwoAboveTheFeet(t *testing.T) {
+	t.Parallel()
+
+	got := scaffold.TowerHeadroom(mgl32.Vec3{-1515.5, 118, -8.7})
+	want := protocol.BlockPos{-1516, 120, -9}
+	if got != want {
+		t.Fatalf("TowerHeadroom = %v, want %v (the leaf cell that stopped the jump)", got, want)
+	}
+}

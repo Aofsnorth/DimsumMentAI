@@ -20,6 +20,7 @@ import (
 	"bedrock-ai/internal/blockcell"
 	"bedrock-ai/internal/bot"
 	"bedrock-ai/internal/bot/entity"
+	"bedrock-ai/internal/bot/pathfinder"
 
 	"github.com/go-gl/mathgl/mgl32"
 )
@@ -85,7 +86,11 @@ func SenseLedge(world entity.WorldModel, from mgl32.Vec3, yaw float32) LedgeAhea
 		x := feetX + int32(math.Round(float64(dirX*float32(step))))
 		z := feetZ + int32(math.Round(float64(dirZ*float32(step))))
 
-		if world.IsSolid(x, feetY-1, z) {
+		// Ground is a solid cell under the feet, or a solid cell AT the feet
+		// level: a slab the body stands on sits in the feet cell, and a floating
+		// slab platform has nothing below it. Reading only the cell below made
+		// every slab-on-air platform look like a ten-block cliff.
+		if world.IsSolid(x, feetY-1, z) || world.IsSolid(x, feetY, z) {
 			// Ground continues. Keep scanning for the first block that does not.
 			ledge.Distance = float32(step)
 			ledge.Known = true
@@ -144,6 +149,14 @@ func (tc *TickContext) stopsAtLedge() bool {
 		return false
 	}
 
+	// A drop several blocks ahead is not a reason to stand still: ground
+	// continues under the next step, so the body keeps walking and the gate
+	// fires on the last block of ground. Refusing from afar froze the bot on
+	// planned walk links that merely run along a distant cliff.
+	if ledge.Distance >= 1 {
+		return false
+	}
+
 	// INFO, and deliberately so.
 	//
 	// This gate was silent, which is the same defect the narration suppression
@@ -156,6 +169,20 @@ func (tc *TickContext) stopsAtLedge() bool {
 	// would bury everything else in the log.
 	tc.noteLedgeRefusal(ledge)
 	return true
+}
+
+// plannedFallAhead reports whether the node the bot is walking to is a fall
+// link, i.e. the drop in front of it was chosen by the pathfinder.
+func (tc *TickContext) plannedFallAhead() bool {
+	if tc == nil || tc.B == nil {
+		return false
+	}
+	tc.B.Mu.Lock()
+	defer tc.B.Mu.Unlock()
+	if tc.B.PathIndex < 0 || tc.B.PathIndex >= len(tc.B.CurrentPath) {
+		return false
+	}
+	return tc.B.CurrentPath[tc.B.PathIndex].LinkType == pathfinder.LinkFall
 }
 
 // lastLedgeNote remembers which ledge was last reported, so the refusal is

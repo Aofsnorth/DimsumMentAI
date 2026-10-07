@@ -2,7 +2,10 @@
 package player
 
 import (
+	"fmt"
 	"log/slog"
+	"math"
+	"sync"
 	"time"
 
 	"bedrock-ai/internal/bot"
@@ -40,10 +43,87 @@ func ShouldAckTeleport(mode byte, serverPos, localPos mgl32.Vec3) bool {
 	return dx*dx+dy*dy+dz*dz > teleportAckDistance*teleportAckDistance
 }
 
+// serverSupportMaxLift bounds how far up a correction may push the body and
+// still read as "the server is holding me on a surface" (a stair step or slab
+// edge) rather than a teleport.
+const serverSupportMaxLift = 0.75
+
+// NoteServerSupport records a small upward server correction as proof of a
+// surface under the feet. Caller MUST hold b.Mu.
+func NoteServerSupport(b *bot.Bot, localY, serverY float32) {
+	lift := serverY - localY
+	if lift > 0.02 && lift <= serverSupportMaxLift {
+		b.ServerSupportY = serverY
+		b.ServerSupportAt = time.Now()
+	}
+}
+
+// probeResetColumn describes the blocks around a position so a server
+// teleport can be explained: the cell the host refused and the cell it put the
+// bot back in. Info-level on purpose, like the other movement probes.
+func probeResetColumn(b *bot.Bot, p mgl32.Vec3) []string {
+	if b.WorldCache == nil {
+		return nil
+	}
+	x, y, z := int32(math.Floor(float64(p.X()))), int32(math.Floor(float64(p.Y()))), int32(math.Floor(float64(p.Z())))
+	out := make([]string, 0, 5)
+	for cy := y - 2; cy <= y+2; cy++ {
+		rid, loaded := b.WorldCache.GetBlockRID(x, cy, z)
+		if !loaded {
+			out = append(out, fmt.Sprintf("%d:unloaded", cy))
+			continue
+		}
+		name, _ := b.WorldCache.BlockName(rid)
+		out = append(out, fmt.Sprintf("%d,%d,%d:%s:solid=%v:top=%.2f", x, cy, z, name, b.WorldCache.IsRIDSolid(rid), b.WorldCache.TopOffsetAt(x, cy, z)))
+	}
+	return out
+}
+
+var (
+	resetLogMu   sync.Mutex
+	resetLogLast time.Time
+)
+
+// resetLogDue rate-limits the reset log: a pinned body is reset every ~150ms
+// and the same line twenty times a second buries everything else.
+func resetLogDue() bool {
+	resetLogMu.Lock()
+	defer resetLogMu.Unlock()
+	if time.Since(resetLogLast) < 2*time.Second {
+		return false
+	}
+	resetLogLast = time.Now()
+	return true
+}
+
 // ApplySelfMovePlayer updates bot position and teleport acknowledgement state
 // for a confirmed local player movement packet. Caller MUST hold b.Mu.
 func ApplySelfMovePlayer(b *bot.Bot, mode byte, newPos mgl32.Vec3) bool {
 	ack := ShouldAckTeleport(mode, newPos, b.Pos)
+	if ack && b.MovementState == "idle" && b.Logger != nil {
+		b.Logger.Info("server teleported idle bot",
+			slog.Any("local", b.Pos),
+			slog.Any("server_feet", newPos),
+			slog.Int("mode", int(mode)),
+			slog.Any("server_column", probeResetColumn(b, newPos)),
+		)
+	}
+	if ack && b.MovementState != "idle" && b.Logger != nil && resetLogDue() {
+		b.Logger.Info("server moved bot (teleport/reset)",
+			slog.Any("local", b.Pos),
+			slog.Any("server", newPos),
+			slog.Int("mode", int(mode)),
+			slog.String("movement_state", b.MovementState),
+			slog.Any("local_column", probeResetColumn(b, b.Pos)),
+			slog.Any("server_column", probeResetColumn(b, newPos)),
+		)
+	}
+	if ack {
+		// A host that resets the body a little ABOVE where it stood is holding it
+		// on a surface the local model cannot represent (a carpet, a stair step).
+		// Geyser delivers that as a MovePlayer reset, not a correction packet.
+		NoteServerSupport(b, b.Pos.Y(), newPos.Y())
+	}
 	if ack || b.MovementState == "idle" {
 		b.Pos = newPos
 		b.VelY = 0.0
@@ -141,6 +221,15 @@ func handleCorrectPrediction(b *bot.Bot, p *packet.CorrectPlayerMovePrediction) 
 			b.CurrentPath = nil
 			b.PathIndex = 0
 		}
+
+		if b.MovementState != "idle" {
+			b.Logger.Info("server corrected position",
+				slog.Any("local", b.Pos),
+				slog.Any("server", correctedPos),
+				slog.String("movement_state", b.MovementState),
+			)
+		}
+		NoteServerSupport(b, b.Pos.Y(), correctedPos.Y())
 
 		b.Pos = correctedPos
 		if !b.IsOnLadder {

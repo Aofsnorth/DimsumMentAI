@@ -14,22 +14,28 @@ import (
 
 // dispatchChatResponse parses the LLM reply and sends chat, executes actions,
 // routes plans, and schedules followups for a chat interaction.
-func dispatchChatResponse(b *bot.Bot, user, msg, systemPrompt, reply string) {
+//
+// It reports whether the reply handed the bot a task (a plan or at least one
+// action). The caller must not drift the bot toward the player in that case:
+// an "interact with the NPC in front of you" order is carried out where the
+// bot stands, and an implicit follow started alongside it walks the bot away
+// from the NPC and toward the player.
+func dispatchChatResponse(b *bot.Bot, user, msg, systemPrompt, reply string) (tookTask bool) {
 	parsed := ai.Parse(reply)
 
 	if isSilentResponse(reply) {
 		b.Logger.Debug("chat response: LLM chose to stay silent")
-		return
+		return false
 	}
 
 	if handleSilentActionResponse(b, user, systemPrompt, parsed) {
-		return
+		return false
 	}
 
 	sendMainChatReply(b, parsed)
 
 	if handlePlanResponse(b, user, parsed) {
-		return
+		return true
 	}
 
 	steps := buildChatSteps(b, parsed, msg)
@@ -38,6 +44,7 @@ func dispatchChatResponse(b *bot.Bot, user, msg, systemPrompt, reply string) {
 	if parsed.FollowupSec > 0 {
 		scheduleFollowup(b, user, parsed.FollowupSec)
 	}
+	return len(steps) > 0
 }
 
 // handleSilentActionResponse returns true and performs the follow-up LLM call

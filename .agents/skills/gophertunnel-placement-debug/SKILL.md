@@ -78,3 +78,17 @@ Do not use for crafting recipe rejection, pathfinding target selection, generic 
    - BDS `testforblock` finds the placed block.
    - BDS inventory contains the exact expected remaining count.
    - The probe observes `1 -> 0` or `2 -> 1` through Luna's `MobEquipment` packets.
+
+
+## Geyser: bot "holds" an item but placement times out (EquipItem)
+
+Signature: `placing block slot=8 stack_network_id=35`, then ~100ms later
+`inventory slot synced slot=8 count=0 network_id=0`, then `server did not confirm block
+placement ... context deadline exceeded`. The server says the hotbar slot is empty: the
+legacy `InventoryTransaction`(NormalTransactionData) swap in `EquipItem` is ignored by
+Geyser, while the bot mutated local state optimistically (and the LLM then claimed
+"udah kupegang"). Fix: on `GeyserCompat` with slot>=9, `equipViaStackRequest` opens the
+inventory, then take+place into an empty hotbar slot (or `SwapStackRequestAction` onto
+the held slot), updates local state ONLY after the accepted response, and returns an
+error otherwise. Look for `equip via stack request (geyser)` in logs. BDS keeps the
+legacy path (`equipLegacy`).

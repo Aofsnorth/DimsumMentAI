@@ -47,7 +47,59 @@ func (tc *TickContext) ladderPredictedPos() mgl32.Vec3 {
 }
 
 func (tc *TickContext) horizontalMovePredictedPos() mgl32.Vec3 {
-	return tc.applyStepUpAssist(tc.horizontalMovePredictedPosRaw())
+	return tc.applyStepUpAssist(tc.holdRisingBodyOffLedge(tc.horizontalMovePredictedPosRaw()))
+}
+
+// holdRisingBodyOffLedge keeps a rising (jumping) body from sliding sideways
+// into a block it has not yet cleared.
+//
+// The wall scan skips any row whose top is within step height of the feet,
+// which is right for a grounded body walking onto a slab and wrong for a
+// jump: a body 0.42 up beside a full block is still 0.58 below its top, and
+// the horizontal step buries it in the block. The host refuses that position
+// and resets the body to the ground, so the jump never gets going ("lompat
+// terlalu pendek" on Geyser). While rising, the horizontal step is therefore
+// only allowed where the body's box at the new height touches no block that
+// reaches above its feet; the body keeps rising and walks on once it clears.
+func (tc *TickContext) holdRisingBodyOffLedge(pos mgl32.Vec3) mgl32.Vec3 {
+	if tc.IsGrounded || tc.VelY <= risingSkinLimit || tc.IsOnLadder || tc.IsLadderActive {
+		return pos
+	}
+	if tc.B == nil || tc.B.WorldModel == nil || tc.B.WorldCache == nil {
+		return pos
+	}
+	if !tc.bodyClipsLedgeAt(pos.X(), pos.Z(), pos.Y()) {
+		return pos
+	}
+	if !tc.bodyClipsLedgeAt(pos.X(), tc.CurrPos.Z(), pos.Y()) {
+		return mgl32.Vec3{pos.X(), pos.Y(), tc.CurrPos.Z()}
+	}
+	if !tc.bodyClipsLedgeAt(tc.CurrPos.X(), pos.Z(), pos.Y()) {
+		return mgl32.Vec3{tc.CurrPos.X(), pos.Y(), pos.Z()}
+	}
+	return mgl32.Vec3{tc.CurrPos.X(), pos.Y(), tc.CurrPos.Z()}
+}
+
+// bodyClipsLedgeAt reports whether a body with its feet at feetY overlaps a
+// solid block that reaches above its feet.
+func (tc *TickContext) bodyClipsLedgeAt(x, z, feetY float32) bool {
+	const half = 0.299
+	minX := int32(math.Floor(float64(x - half)))
+	maxX := int32(math.Floor(float64(x + half)))
+	minZ := int32(math.Floor(float64(z - half)))
+	maxZ := int32(math.Floor(float64(z + half)))
+	minY := int32(math.Floor(float64(feetY)))
+	maxY := int32(math.Floor(float64(feetY + 1.79)))
+	for bx := minX; bx <= maxX; bx++ {
+		for bz := minZ; bz <= maxZ; bz++ {
+			for by := minY; by <= maxY; by++ {
+				if tc.B.WorldModel.IsSolid(bx, by, bz) && tc.surfaceTopY(bx, by, bz) > feetY+0.001 {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }
 
 func (tc *TickContext) horizontalMovePredictedPosRaw() mgl32.Vec3 {
@@ -178,7 +230,7 @@ func (tc *TickContext) computeTargetPosition(speed float32, needsStepUp, isMidJu
 		targetZ = tc.CurrPos.Z()
 		tc.HasHorizontalMove = false
 		tc.logVenityWalkBlocked(baseY, hasSameLevelSupport, pathAllowsGap, plannedDescent, needsStepUp, groundUnknown)
-	} else if tc.shouldDescent(plannedDescent, hasSameLevelSupport) {
+	} else if tc.shouldDescent(plannedDescent, hasSameLevelSupport) && !tc.bodyOverlapsSupportAt(tc.CurrPos.X(), tc.CurrPos.Z(), baseY) {
 		tc.NextY, tc.VelY = controlledDescentY(tc.CurrPos.Y(), tc.NextY, float32(descentTargetY), descentDrop)
 		tc.IsGrounded = (tc.NextY <= float32(descentTargetY))
 		tc.syncGrounded()
@@ -377,6 +429,28 @@ func (tc *TickContext) hasGroundSupportAt(x, z float32, feetY int32) bool {
 	offsets := []float32{0, -0.25, 0.25}
 	for _, dx := range offsets {
 		for _, dz := range offsets {
+			bx := int32(math.Floor(float64(x + dx)))
+			bz := int32(math.Floor(float64(z + dz)))
+			if tc.B.WorldModel.IsSolid(bx, supportY, bz) && !tc.B.WorldModel.IsHazard(bx, supportY, bz) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// bodyOverlapsSupportAt reports whether any corner of the 0.6-wide body box at
+// (x, z) still overlaps a solid, non-hazard support cell below feetY. The host
+// keeps such a body up, so a planned fall must not start sinking it yet: the
+// sunk position would still intersect the ledge and be refused.
+func (tc *TickContext) bodyOverlapsSupportAt(x, z float32, feetY int32) bool {
+	if tc.B == nil || tc.B.WorldModel == nil {
+		return false
+	}
+	const half = 0.299
+	supportY := feetY - 1
+	for _, dx := range [...]float32{-half, half} {
+		for _, dz := range [...]float32{-half, half} {
 			bx := int32(math.Floor(float64(x + dx)))
 			bz := int32(math.Floor(float64(z + dz)))
 			if tc.B.WorldModel.IsSolid(bx, supportY, bz) && !tc.B.WorldModel.IsHazard(bx, supportY, bz) {

@@ -19,14 +19,23 @@ import (
 func handleAddPlayer(b *bot.Bot, pk packet.Packet) bool {
 	p := pk.(*packet.AddPlayer)
 	b.Mu.Lock()
+	// Several server NPCs can share one (or an empty) username, so the
+	// username index is last-writer-wins; PlayerUsernames/PlayerPositions are
+	// keyed by runtime ID and keep every one of them.
 	b.PlayerEntityIDs[p.Username] = p.EntityRuntimeID
 	b.PlayerUsernames[p.EntityRuntimeID] = p.Username
 	b.PlayerPositions[p.EntityRuntimeID] = trackedPlayerFeetPosition(p.Position)
 	b.PlayerYaws[p.EntityRuntimeID] = p.Yaw
 	b.PlayerPitches[p.EntityRuntimeID] = p.Pitch
 	b.PlayerUUIDs[p.UUID] = p.Username
+	b.PlayerIDUUIDs[p.EntityRuntimeID] = p.UUID
+	delete(b.PlayerHidden, p.EntityRuntimeID)
 	b.Mu.Unlock()
-	b.Logger.Debug("tracked player spawned", slog.String("username", p.Username), slog.Uint64("runtime_id", p.EntityRuntimeID))
+	b.Logger.Info("tracked player spawned",
+		slog.String("username", p.Username),
+		slog.String("uuid", p.UUID.String()),
+		slog.Uint64("runtime_id", p.EntityRuntimeID),
+		slog.Any("pos", p.Position))
 	return true
 }
 
@@ -61,6 +70,11 @@ func handleRespawn(b *bot.Bot, pk packet.Packet) bool {
 	b.Pos = p.Position.Sub(mgl32.Vec3{0, 1.62, 0})
 	b.TeleportAckPending = true
 	b.TeleportAckPos = b.Pos
+	b.Logger.Info("self respawn position",
+		slog.Any("raw", p.Position),
+		slog.Any("feet", b.Pos),
+		slog.Uint64("state", uint64(p.State)),
+	)
 	b.Logger.Debug("bot respawned/teleported by server",
 		slog.Float64("x", float64(b.Pos.X())),
 		slog.Float64("y", float64(b.Pos.Y())),
@@ -97,9 +111,15 @@ func handleChangeDimension(b *bot.Bot, pk packet.Packet) bool {
 	b.Mu.Lock()
 	b.ChunkDimension = p.Dimension
 	b.Dimension = dimension.FromServerID(p.Dimension)
-	b.Pos = p.Position
-	b.TeleportAckPending = true
-	b.TeleportAckPos = p.Position
+	// Geyser fakes a dimension switch with a bogus position (y=32767); the
+	// real one follows in a MovePlayer. Adopting the bogus one only sends the
+	// body falling from the sky.
+	if p.Position.Y() <= 320 && p.Position.Y() >= -64 {
+		b.Pos = p.Position
+		b.TeleportAckPending = true
+		b.TeleportAckPos = p.Position
+	}
+	b.VelY = 0
 	b.MovementState = "idle"
 	b.CurrentPath = nil
 	b.Actors = make(map[uint64]*entity.Info)
@@ -362,12 +382,16 @@ func handleRemoveActor(b *bot.Bot, pk packet.Packet) bool {
 	}
 	id := safecast.To[uint64](p.EntityUniqueID)
 	if username, ok := b.PlayerUsernames[id]; ok {
-		delete(b.PlayerEntityIDs, username)
+		if b.PlayerEntityIDs[username] == id {
+			delete(b.PlayerEntityIDs, username)
+		}
 		delete(b.PlayerUsernames, id)
+		delete(b.PlayerIDUUIDs, id)
+		delete(b.PlayerHidden, id)
 		delete(b.PlayerPositions, id)
 		delete(b.PlayerYaws, id)
 		delete(b.PlayerPitches, id)
-		b.Logger.Debug("tracked player left view distance", slog.String("username", username))
+		b.Logger.Info("tracked player left view distance", slog.String("username", username), slog.Uint64("runtime_id", id))
 	}
 	b.Mu.Unlock()
 	return true
@@ -535,10 +559,10 @@ func handlePacketViolationWarning(b *bot.Bot, pk packet.Packet) bool {
 
 func handleSetActorLink(b *bot.Bot, pk packet.Packet) bool {
 	p := pk.(*packet.SetActorLink)
-	
+
 	b.Mu.Lock()
 	defer b.Mu.Unlock()
-	
+
 	if p.EntityLink.RiderEntityUniqueID == b.Conn.GameData().EntityUniqueID {
 		if p.EntityLink.Type == protocol.EntityLinkRemove {
 			b.VehicleID = 0

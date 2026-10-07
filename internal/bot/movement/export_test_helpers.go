@@ -12,6 +12,7 @@
 package movement
 
 import (
+	"math"
 	"time"
 
 	"bedrock-ai/internal/bot"
@@ -269,4 +270,23 @@ func (tc *TickContext) RunPhysicsAndCollisionsForTest() {
 // ComputeTargetPositionForTest exposes computeTargetPosition for testing.
 func (tc *TickContext) ComputeTargetPositionForTest(speed float32, needsStepUp, isMidJump bool) (float32, float32) {
 	return tc.computeTargetPosition(speed, needsStepUp, isMidJump)
+}
+
+// ApplyBodyClearanceForTest exposes applyBodyClearance.
+func ApplyBodyClearanceForTest(b *bot.Bot, pos mgl32.Vec3) {
+	applyBodyClearance(b, pos, int32(math.Floor(float64(pos.X()))), int32(math.Floor(float64(pos.Y()))), int32(math.Floor(float64(pos.Z()))))
+}
+
+// PathLevelYForTest exposes pathLevelY.
+func PathLevelYForTest(b *bot.Bot, pos mgl32.Vec3) int32 { return pathLevelY(b, pos) }
+
+// ApplyStepUpAssistForTest exposes applyStepUpAssist.
+func (tc *TickContext) ApplyStepUpAssistForTest(pos mgl32.Vec3) mgl32.Vec3 {
+	return tc.applyStepUpAssist(pos)
+}
+
+func (tc *TickContext) AheadIsLowStepForTest() bool { return tc.aheadIsLowStep() }
+
+func (tc *TickContext) HoldRisingBodyOffLedgeForTest(pos mgl32.Vec3) mgl32.Vec3 {
+	return tc.holdRisingBodyOffLedge(pos)
 }

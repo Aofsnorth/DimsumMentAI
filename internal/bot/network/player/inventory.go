@@ -421,6 +421,16 @@ func ApplyItemStackResponse(b *bot.Bot, p *packet.ItemStackResponse) bool {
 func processItemStackResponse(b *bot.Bot, resp protocol.ItemStackResponse) {
 	pendingCh, craftOutputNetID, hasPending := b.PendingCraftLookup(resp.RequestID)
 
+	// Info on purpose: "the server never answered" and "it answered a request
+	// ID nobody was waiting for" look identical from the craft/drop side (both
+	// are a 5s timeout), and this line is what tells them apart.
+	b.Logger.Info("item stack response received",
+		slog.Int("request_id", int(resp.RequestID)),
+		slog.Uint64("status", uint64(resp.Status)),
+		slog.Bool("has_pending", hasPending),
+		slog.Int("containers", len(resp.ContainerInfo)),
+	)
+
 	if resp.Status != 0 {
 		b.Logger.Warn("item stack request rejected",
 			slog.Int("request_id", int(resp.RequestID)),

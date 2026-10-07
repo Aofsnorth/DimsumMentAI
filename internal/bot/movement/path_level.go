@@ -18,6 +18,31 @@ import (
 // landed back on the slab and asked again — a bot hovering over a slab while
 // going nowhere. A body resting on a partial block is reported at the level
 // the planner gave it.
+// applyBodyClearance rebuilds the per-tick body occupancy marks.
+//
+// A slab (partial block) the feet rest on occupies the feet cell but is the
+// floor, not an obstacle. Clearing it made it read as air: the bot was never
+// grounded on it, fell through, got snapped back and bobbed forever.
+func applyBodyClearance(b *bot.Bot, pos mgl32.Vec3, x, y, z int32) {
+	b.WorldModel.ClearBodyClearance()
+	if !feetRestOnPartialFloor(b, pos, x, y, z) {
+		b.WorldModel.SetBodyClearance(x, y, z)
+	}
+	b.WorldModel.SetBodyClearance(x, y+1, z)
+	b.WorldModel.SetBodyClearance(x, y+2, z)
+}
+
+func feetRestOnPartialFloor(b *bot.Bot, pos mgl32.Vec3, x, y, z int32) bool {
+	if b == nil || b.WorldCache == nil {
+		return false
+	}
+	if solid, loaded := b.WorldCache.IsBlockSolid(x, y, z); !loaded || !solid {
+		return false
+	}
+	top := b.WorldCache.TopOffsetAt(x, y, z)
+	return top < 1.0 && pos.Y() >= float32(y)+top-0.05
+}
+
 func pathLevelY(b *bot.Bot, pos mgl32.Vec3) int32 {
 	level := int32(math.Floor(float64(pos.Y() + 0.1)))
 	if b == nil || b.WorldModel == nil || b.WorldCache == nil {

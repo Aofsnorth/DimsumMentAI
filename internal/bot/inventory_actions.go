@@ -4,11 +4,13 @@ package bot
 import (
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"time"
 
 	"bedrock-ai/internal/ai"
 	"bedrock-ai/internal/bot/inventory/station"
+	"bedrock-ai/internal/bot/survival"
 	"bedrock-ai/internal/safecast"
 
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
@@ -51,11 +53,15 @@ func (b *Bot) DropItem(name string, count int) error {
 	}
 
 	item := protocol.ItemInstance{StackNetworkID: b.StackNetworkIDs[targetSlot], Stack: foundItem}
+	geyser := b.GeyserCompat
 	b.Mu.Unlock()
 
 	action, dropped, err := BuildDropStackAction(targetSlot, item, count)
 	if err != nil {
 		return fmt.Errorf("drop %q from inventory slot %d: %w", name, targetSlot, err)
+	}
+	if geyser {
+		return b.dropViaCursor(name, targetSlot, item, dropped)
 	}
 
 	// Face-direction swing for viewers, then the authoritative drop request.
@@ -75,6 +81,44 @@ func (b *Bot) DropItem(name string, count int) error {
 	// The authoritative ItemStackResponse updates InventoryMap/StackNetworkIDs
 	// via applyItemStackResponse and drives syncHeldEquipmentIfUpdated, so the
 	// held-item visual clears without any local guessing.
+	return nil
+}
+
+// dropViaCursor drops through the cursor: take the stack to the cursor, then
+// drop it from there. Geyser never answered the direct slot drop (the request
+// sat unanswered until the 5s timeout and nothing appeared in the world), but it
+// does answer take and cursor-drop, the two steps the vanilla screen sends.
+func (b *Bot) dropViaCursor(name string, slot uint32, item protocol.ItemInstance, dropped uint16) error {
+	if err := b.openPersonalInventory(); err != nil {
+		return fmt.Errorf("drop %q: %w", name, err)
+	}
+	defer b.closePersonalInventory()
+	source := PlayerStackRequestSlot(slot, item.StackNetworkID)
+	takeID, takeCh := b.beginStackRequest(0)
+	takeResult, err := b.sendStackRequest(takeID, takeCh, []protocol.StackRequestAction{BuildTakeToCursorAction(source, int(dropped))}, name)
+	if err != nil {
+		return fmt.Errorf("drop %d %q: move to cursor: %w", dropped, name, err)
+	}
+	cursorID := takeResult.stackNetworkID(protocol.ContainerCursor, 0)
+	if cursorID == 0 {
+		cursorID = takeID
+	}
+
+	dropAction, err := BuildDropCursorAction(cursorID, int(dropped))
+	if err != nil {
+		_ = b.returnCursorToInventory(cursorID, slot, int(dropped), item.Stack.NetworkID, name)
+		return fmt.Errorf("drop %d %q from cursor: %w", dropped, name, err)
+	}
+	b.Logger.Info("dropping via cursor (geyser)", "item", name, "slot", slot, "count", dropped, "cursor_stack_id", cursorID)
+	if err := b.Conn.WritePacket(BuildDropSwing(b.Conn.GameData().EntityRuntimeID)); err != nil {
+		_ = b.returnCursorToInventory(cursorID, slot, int(dropped), item.Stack.NetworkID, name)
+		return fmt.Errorf("drop %d %q: send drop swing: %w", dropped, name, err)
+	}
+	dropID, dropCh := b.beginStackRequest(0)
+	if _, err := b.sendStackRequest(dropID, dropCh, []protocol.StackRequestAction{dropAction}, name); err != nil {
+		_ = b.returnCursorToInventory(cursorID, slot, int(dropped), item.Stack.NetworkID, name)
+		return fmt.Errorf("drop %d %q from cursor: %w", dropped, name, err)
+	}
 	return nil
 }
 
@@ -198,13 +242,10 @@ func (b *Bot) CraftItem(recipeNetID uint32, count int) error {
 		"ingredientCount", len(picks),
 	)
 
-	if err := b.Conn.WritePacket(&packet.Interact{
-		ActionType:            packet.InteractActionOpenInventory,
-		TargetEntityRuntimeID: b.Conn.GameData().EntityRuntimeID,
-	}); err != nil {
-		return fmt.Errorf("open personal inventory: %w", err)
+	if err := b.openPersonalInventory(); err != nil {
+		return err
 	}
-	time.Sleep(InventoryOpenDelay)
+	defer b.closePersonalInventory()
 
 	staging := &craftStaging{
 		gridInputs:         make([]CraftingGridInput, 0, len(picks)),
@@ -234,6 +275,138 @@ func (b *Bot) CraftItem(recipeNetID uint32, count int) error {
 		return fmt.Errorf("inventory full, cannot place crafted output")
 	}
 	return b.finalizeCraft(recipe, recipeNetID, count, outputSlot, ingredientSources, staging)
+}
+
+// openPersonalInventory sends the OpenInventory interact and waits for the
+// host to register it. Geyser only answers ItemStackRequests once the personal
+// inventory is open (crafting always did this; drop and equip did not and sat
+// unanswered until the 5s timeout).
+func (b *Bot) openPersonalInventory() error {
+	if err := b.Conn.WritePacket(&packet.Interact{
+		ActionType:            packet.InteractActionOpenInventory,
+		TargetEntityRuntimeID: b.Conn.GameData().EntityRuntimeID,
+	}); err != nil {
+		return fmt.Errorf("open personal inventory: %w", err)
+	}
+	time.Sleep(InventoryOpenDelay)
+	return nil
+}
+
+// closePersonalInventory tells Geyser the inventory screen was closed, as the
+// vanilla client does. Left open, the host keeps treating the player as inside
+// the inventory screen and ignores the next block click (the crafting table
+// never opened). Geyser only: other hosts never needed it.
+func (b *Bot) closePersonalInventory() {
+	if b.WorldCache == nil || !b.WorldCache.GeyserCompat() {
+		return
+	}
+	_ = b.Conn.WritePacket(&packet.ContainerClose{WindowID: 0, ContainerType: 255, ServerSide: false})
+	b.Logger.Info("personal inventory closed (geyser)")
+}
+
+// equipViaStackRequest moves inventory slot into the hotbar with server
+// confirmation and then selects it. An empty hotbar slot is preferred (take +
+// place, the same proven pair crafting uses); otherwise the held slot is
+// swapped. Local state changes only after the server accepted the move.
+func (b *Bot) equipViaStackRequest(slot uint32) error {
+	b.Mu.Lock()
+	item, ok := b.InventoryMap[slot]
+	if !ok || item.Count == 0 {
+		b.Mu.Unlock()
+		return fmt.Errorf("slot %d empty", slot)
+	}
+	itemStackID := b.StackNetworkIDs[slot]
+	target := b.EmptyHotbarSlotLocked()
+	if target >= 9 {
+		target = 0
+		if b.HeldSlot < 9 {
+			target = b.HeldSlot
+		}
+	}
+	hotbarItem := b.InventoryMap[target]
+	hotbarStackID := b.StackNetworkIDs[target]
+	name := b.ItemNames[item.NetworkID]
+	b.Mu.Unlock()
+
+	if err := b.openPersonalInventory(); err != nil {
+		return err
+	}
+	defer b.closePersonalInventory()
+
+	source := PlayerStackRequestSlot(slot, itemStackID)
+	dest := PlayerStackRequestSlot(target, hotbarStackID)
+	b.Logger.Info("equip via stack request (geyser)", "item", name, "from_slot", slot, "to_slot", target, "swap", hotbarItem.Count > 0)
+
+	var newTargetID, newSourceID int32
+	if hotbarItem.Count > 0 {
+		reqID, ch := b.beginStackRequest(0)
+		res, err := b.sendStackRequest(reqID, ch, []protocol.StackRequestAction{
+			&protocol.SwapStackRequestAction{Source: source, Destination: dest},
+		}, name)
+		if err != nil {
+			return fmt.Errorf("equip %q: swap to hotbar slot %d: %w", name, target, err)
+		}
+		newTargetID = res.stackNetworkID(dest.Container.ContainerID, dest.Slot)
+		newSourceID = res.stackNetworkID(source.Container.ContainerID, source.Slot)
+	} else {
+		takeID, takeCh := b.beginStackRequest(0)
+		takeRes, err := b.sendStackRequest(takeID, takeCh, []protocol.StackRequestAction{BuildTakeToCursorAction(source, int(item.Count))}, name)
+		if err != nil {
+			return fmt.Errorf("equip %q: move to cursor: %w", name, err)
+		}
+		cursorID := takeRes.stackNetworkID(protocol.ContainerCursor, 0)
+		if cursorID == 0 {
+			cursorID = takeID
+		}
+		placeID, placeCh := b.beginStackRequest(item.NetworkID)
+		placeRes, err := b.sendStackRequest(placeID, placeCh, []protocol.StackRequestAction{
+			buildPlaceFromCursorAction(cursorID, dest, int(item.Count)),
+		}, name)
+		if err != nil {
+			_ = b.returnCursorToInventory(cursorID, slot, int(item.Count), item.NetworkID, name)
+			return fmt.Errorf("equip %q: place into hotbar slot %d: %w", name, target, err)
+		}
+		newTargetID = placeRes.stackNetworkID(dest.Container.ContainerID, dest.Slot)
+		if newTargetID == 0 {
+			newTargetID = placeID
+		}
+	}
+
+	// The response handler only rewrites counts and stack IDs; it keeps the old
+	// item type in a slot, which is wrong after a move. Set both slots outright.
+	b.Mu.Lock()
+	b.InventoryMap[target] = item
+	if newTargetID == 0 {
+		newTargetID = itemStackID
+	}
+	if newTargetID != 0 {
+		b.StackNetworkIDs[target] = newTargetID
+	} else {
+		delete(b.StackNetworkIDs, target)
+	}
+	if hotbarItem.Count > 0 {
+		b.InventoryMap[slot] = hotbarItem
+		if newSourceID == 0 {
+			newSourceID = hotbarStackID
+		}
+		if newSourceID != 0 {
+			b.StackNetworkIDs[slot] = newSourceID
+		}
+	} else {
+		delete(b.InventoryMap, slot)
+		delete(b.StackNetworkIDs, slot)
+	}
+	b.HeldSlot = target
+	runtimeID := b.Conn.GameData().EntityRuntimeID
+	b.Mu.Unlock()
+
+	return b.Conn.WritePacket(&packet.MobEquipment{
+		EntityRuntimeID: runtimeID,
+		NewItem:         protocol.ItemInstance{StackNetworkID: newTargetID, Stack: survival.WireItemStack(item)},
+		InventorySlot:   byte(target),
+		HotBarSlot:      byte(target),
+		WindowID:        0,
+	})
 }
 
 // craftStaging keeps the authoritative grid stack IDs for personal and table
@@ -613,6 +786,16 @@ func (b *Bot) beginStackRequest(outputNetID int32) (int32, chan craftResult) {
 	return requestID, resultCh
 }
 
+// describeStackActions renders each action with its concrete type and fields.
+// %+v alone prints nested pointers as addresses, which is useless in a log.
+func describeStackActions(actions []protocol.StackRequestAction) string {
+	parts := make([]string, 0, len(actions))
+	for _, a := range actions {
+		parts = append(parts, fmt.Sprintf("%T%+v", a, reflect.Indirect(reflect.ValueOf(a)).Interface()))
+	}
+	return strings.Join(parts, " | ")
+}
+
 func (b *Bot) sendStackRequest(requestID int32, resultCh chan craftResult, actions []protocol.StackRequestAction, itemName string) (craftResult, error) {
 	request := protocol.ItemStackRequest{RequestID: requestID, Actions: actions, FilterCause: -1}
 	if err := b.Conn.WritePacket(&packet.ItemStackRequest{Requests: []protocol.ItemStackRequest{request}}); err != nil {
@@ -621,7 +804,8 @@ func (b *Bot) sendStackRequest(requestID int32, resultCh chan craftResult, actio
 		b.Mu.Unlock()
 		return craftResult{}, fmt.Errorf("send item stack request: %w", err)
 	}
-	b.Logger.Info("CraftItem awaiting response", "item", itemName, "requestID", requestID, "actions", len(actions))
+	b.Logger.Info("CraftItem awaiting response", "item", itemName, "requestID", requestID, "actions", len(actions),
+		"detail", describeStackActions(actions))
 
 	select {
 	case result := <-resultCh:

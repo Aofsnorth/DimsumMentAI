@@ -359,7 +359,9 @@ func TestMultiTickStepDownDoesNotSnapBackUp(t *testing.T) {
 		Logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
 		WorldModel: pathfinder.NewLocalWorldModel(),
 		WorldCache: world.NewWorldCache(0, cube.Range{-64, 319}, nil),
-		Pos:        mgl32.Vec3{10.5, 74.0, 10.95},
+		// Centre 0.35 past the edge: the 0.6-wide box (11.05..11.65) has fully
+		// cleared the ledge cell, so the host lets the body drop.
+		Pos: mgl32.Vec3{10.5, 74.0, 11.35},
 		CurrentPath: []pathfinder.Node{
 			{X: 10, Y: 74, Z: 10},
 			{X: 10, Y: 73, Z: 11},
@@ -384,8 +386,8 @@ func TestMultiTickStepDownDoesNotSnapBackUp(t *testing.T) {
 		CurrPos:           b.Pos,
 		NextTarget:        mgl32.Vec3{10.5, 73.0, 11.5},
 		Dx:                0,
-		Dz:                11.5 - 10.95,
-		Dist:              11.5 - 10.95,
+		Dz:                11.5 - 11.35,
+		Dist:              11.5 - 11.35,
 		NextY:             74.0,
 		MState:            "walk_to",
 	}

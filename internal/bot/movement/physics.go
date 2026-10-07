@@ -14,6 +14,7 @@ func (tc *TickContext) runPhysicsAndCollisions() {
 	tc.updateDescendingFlag()
 	tc.UpdateGroundedState()
 	tc.ApplyServerPositionAnchor()
+	tc.applyServerSupport()
 	tc.ApplyVerticalVelocity()
 	tc.applyStepDownAssist(tc.FeetY)
 	tc.applyCeilingCollision()
@@ -57,6 +58,12 @@ func (tc *TickContext) ApplyServerPositionAnchor() {
 		// the normal movement code rather than silently snapped.
 		return
 	}
+	if tc.floatingOverAir() {
+		// Not a decode gap: the cells under the feet are loaded air with a floor
+		// right below. The host echoes our own Y back, so holding it would keep
+		// a body that landed a block high floating until it next walks.
+		return
+	}
 
 	tc.NextY = tc.serverAnchorY()
 	tc.VelY = 0
@@ -74,6 +81,88 @@ func (tc *TickContext) ApplyServerPositionAnchor() {
 	tc.B.Mu.Lock()
 	tc.B.ServerGroundAt = time.Now()
 	tc.B.Mu.Unlock()
+}
+
+// floatingOverAir reports (Geyser only) that every cell under the body's box is
+// loaded, genuinely air, and the cell below that is solid. Partial floors (snow,
+// slabs, carpet) are not air, so they keep using the server anchor.
+func (tc *TickContext) floatingOverAir() bool {
+	wc := tc.B.WorldCache
+	if wc == nil || !wc.GeyserCompat() {
+		return false
+	}
+	const half = 0.299
+	x, z := tc.CurrPos.X(), tc.CurrPos.Z()
+	cy := int32(math.Floor(float64(tc.CurrPos.Y() - 0.001)))
+	minX, maxX := int32(math.Floor(float64(x-half))), int32(math.Floor(float64(x+half)))
+	minZ, maxZ := int32(math.Floor(float64(z-half))), int32(math.Floor(float64(z+half)))
+	for bx := minX; bx <= maxX; bx++ {
+		for bz := minZ; bz <= maxZ; bz++ {
+			rid, loaded := wc.GetBlockRID(bx, cy, bz)
+			if !loaded {
+				return false
+			}
+			if name, ok := wc.BlockName(rid); !ok || name != "minecraft:air" {
+				return false
+			}
+		}
+	}
+	cx, cz := int32(math.Floor(float64(x))), int32(math.Floor(float64(z)))
+	rid, loaded := wc.GetBlockRID(cx, cy-1, cz)
+	return loaded && wc.IsRIDSolid(rid)
+}
+
+// serverSupportWindow is how long a server push-up keeps the body standing.
+const serverSupportWindow = 350 * time.Millisecond
+
+// applyServerSupport treats the body as standing when the host just refused its
+// fall by lifting it a little.
+//
+// The local world model sees a stair as a full cube and a slab edge as air, so
+// a body overlapping the lower step of a stair (or a slab's rim) reads as
+// airborne, sinks into it, and the host snaps it back up. Every snap also
+// reset the horizontal position, so the bot never got off the block: it stood
+// still with walk inputs on the wire. While the host keeps holding the feet at
+// a height, trust it and keep walking; the window is short, so a body that
+// walks off the edge starts falling again almost at once.
+func (tc *TickContext) applyServerSupport() {
+	if tc.IsGrounded || tc.IsOnLadder || tc.IsParkourJump || tc.VelY > risingSkinLimit {
+		return
+	}
+	tc.B.Mu.Lock()
+	sy, at := tc.B.ServerSupportY, tc.B.ServerSupportAt
+	tc.B.Mu.Unlock()
+	if at.IsZero() || time.Since(at) > serverSupportWindow {
+		return
+	}
+	if absFloat32(tc.CurrPos.Y()-sy) > 0.02 {
+		return
+	}
+	tc.NextY = sy
+	tc.VelY = 0
+	tc.IsGrounded = true
+}
+
+// holdServerSupport reports whether the host recently lifted the body to its
+// current height, and renews that claim while the body's box still overlaps a
+// solid block under it. The renewal stops the moment the box clears the block,
+// so a body that walks off the edge starts falling again at once.
+func (tc *TickContext) holdServerSupport() bool {
+	tc.B.Mu.Lock()
+	sy, at := tc.B.ServerSupportY, tc.B.ServerSupportAt
+	tc.B.Mu.Unlock()
+	if at.IsZero() || time.Since(at) > serverSupportWindow {
+		return false
+	}
+	if absFloat32(tc.CurrPos.Y()-sy) > 0.02 {
+		return false
+	}
+	if tc.bodyOverlapsSupportAt(tc.CurrPos.X(), tc.CurrPos.Z(), int32(math.Floor(float64(sy)))) {
+		tc.B.Mu.Lock()
+		tc.B.ServerSupportAt = time.Now()
+		tc.B.Mu.Unlock()
+	}
+	return true
 }
 
 // anchorCorrectionLimit is the largest Y gap the anchor will silently correct.
@@ -445,7 +534,21 @@ func (tc *TickContext) ApplyGroundLanding() {
 	// the feet can never pull the body onto itself.
 	if cell, ok := tc.groundedCell(0, 0, tc.CurrPos.Y()); ok {
 		top := tc.surfaceTopY(int32(math.Floor(float64(tc.CurrPos.X()))), cell, int32(math.Floor(float64(tc.CurrPos.Z()))))
+		// A carpet on the floor raises the surface the host collides with. Stay
+		// on top of it while the box overlaps it; once clear, the body sinks
+		// back to the floor.
+		if ct, okc := tc.carpetSurface(tc.CurrPos.X(), tc.CurrPos.Z(), tc.CurrPos.Y()); okc && ct > top && tc.CurrPos.Y() >= ct-0.05 {
+			top = ct
+		}
 		if tc.CurrPos.Y() >= top-0.05 {
+			if tc.CurrPos.Y() > top+groundSkin && tc.holdServerSupport() {
+				// The host holds the feet above the modelled floor (a carpet on
+				// it): snapping down to the model's top is refused every tick.
+				tc.NextY = tc.CurrPos.Y()
+				tc.VelY = 0.0
+				tc.IsGrounded = true
+				return
+			}
 			tc.NextY = top
 			tc.VelY = 0.0
 			tc.IsGrounded = true
@@ -508,15 +611,15 @@ func (tc *TickContext) syncGrounded() {
 // Ground-check sample offsets are shared, not rebuilt per call. The callers only
 // ever read them, and this is on the movement tick's hot path: four probes per
 // call, several calls a tick, and a fresh slice each time is pure garbage.
-var (
-	groundCheckOffsetsNarrow  = []float32{0.0}
-	groundCheckOffsetsDefault = []float32{0.0, -0.3, 0.3}
-)
+var groundCheckOffsetsDefault = []float32{0.0, -0.3, 0.3}
 
+// groundCheckOffsets returns the footprint samples of the body. They are the same
+// while descending: a body walking off a ledge stays supported until its whole
+// 0.6-wide box has cleared the edge (centre 0.3 past it), exactly the rule the
+// host applies. Sampling only the centre while descending made the bot sink the
+// moment its centre crossed the edge, the host refused that position (the box
+// still overlapped the ledge) and snapped the bot back every tick, forever.
 func groundCheckOffsets(isDescending, isParkourJump bool) []float32 {
-	if isDescending {
-		return groundCheckOffsetsNarrow
-	}
 	return groundCheckOffsetsDefault
 }
 
@@ -556,6 +659,11 @@ func (tc *TickContext) applyStepDownAssist(feetY int32) {
 		return
 	}
 	if tc.HasPath && tc.Dist > 1.4 {
+		return
+	}
+	// Still resting on the ledge being left (box overlaps it): the host keeps
+	// that body up, so lowering it would be refused and snapped back.
+	if tc.IsGrounded && tc.CurrPos.Y()-targetY > 0.3 {
 		return
 	}
 	if tc.CurrPos.Y() > targetY {

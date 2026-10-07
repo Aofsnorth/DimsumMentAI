@@ -65,9 +65,8 @@ bot:
   # join needs — including automatic reconnects, which is why it belongs here
   # rather than being typed once by hand.
   join_messages:
-    - "/login Akukuat123 Akukuat123"
+    - "/login Akukuat123"
     - "/skin url https://namemc.com/skin/d06c7244c4cdda83"
-    - "/server HorizonSURVIVAL"
   join_message_delay_sec: 5 # wait after spawning before the first line (server may still be finishing the world transfer)
   join_message_gap_sec: 1 # pause between lines, so a burst is not sent as one flood
 

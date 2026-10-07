@@ -258,6 +258,11 @@ func craftChainWithState(ctx context.Context, b *bot.Bot, user, itemName string,
 
 	recipeID, recipe, ok := pickBestRecipe(b, itemName)
 	if !ok {
+		b.Logger.Warn("craft: no recipe known for item",
+			"item", itemName,
+			"known_recipes", len(b.GetRecipesByNetID()),
+			"similar", similarRecipeNames(b, itemName),
+		)
 		return 0, fmt.Errorf("resep tidak diketahui: %s", itemName)
 	}
 
@@ -299,6 +304,29 @@ func craftChainWithState(ctx context.Context, b *bot.Bot, user, itemName string,
 		actual = bot.MaxStackSize
 	}
 	return actual, nil
+}
+
+// similarRecipeNames lists a few known recipe names that share the requested
+// item's suffix ("axe" for iron_axe), so a missing recipe in the log can be told
+// apart from an empty crafting book.
+func similarRecipeNames(b *bot.Bot, itemName string) []string {
+	key := strings.TrimPrefix(strings.ToLower(strings.TrimSpace(itemName)), "minecraft:")
+	if i := strings.LastIndex(key, "_"); i >= 0 {
+		key = key[i+1:]
+	}
+	if key == "" {
+		return nil
+	}
+	var out []string
+	for name := range b.GetRecipes() {
+		if strings.HasSuffix(name, key) && !strings.HasPrefix(name, "minecraft:") {
+			out = append(out, name)
+			if len(out) >= 12 {
+				break
+			}
+		}
+	}
+	return out
 }
 
 // pickBestRecipe selects the recipe network ID for itemName whose ingredients

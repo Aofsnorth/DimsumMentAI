@@ -167,3 +167,22 @@ func TestANilWorldModelDoesNotPanic(t *testing.T) {
 		t.Error("a nil world model read as a cliff")
 	}
 }
+
+// TestFloatingSlabPlatformIsNotACliff: a slab at the feet level with nothing
+// below it is ground, not a drop. Reading only the cell under the feet made a
+// slab platform on air look like a ten-block cliff and froze the bot on it.
+func TestFloatingSlabPlatformIsNotACliff(t *testing.T) {
+	t.Parallel()
+
+	model := flatWorld()
+	for x := int32(2); x <= 8; x++ {
+		model.SetSolid(x, 62, 0, false)
+		model.SetSolid(x, 63, 0, true)
+		model.SetSolid(x, 52, 0, true)
+	}
+
+	ledge := movement.SenseLedge(model, mgl32.Vec3{0.5, 63.5, 0.5}, 90)
+	if ledge.IsCliff() {
+		t.Errorf("a slab platform read as a cliff: fall %.1f", ledge.Fall)
+	}
+}

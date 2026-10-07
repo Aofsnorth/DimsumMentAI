@@ -312,6 +312,16 @@ Grep for `b.Mu.Lock()` inside any `*Locked` function when this shape appears.
 - `stepJumpTargetClear(tx, ty, tz, from)` permits climbing onto a wall platform when approaching from a stair/slab (`isHalfBlock(from.X, from.Y-1, from.Z)`), while continuing to refuse jumps onto 1.5-block walls from ground or another wall.
 - Stair transitions (`isHalfBlock` on current or target floor) are priced at low cost `1.2` rather than `4.5` so A* naturally chooses the staircase.
 
+## 17. Slabs: A* level vs physics height (hover / stuck on slab)
+
+Symptoms: bot hops in place over a `*_slab`, or stops at a slab next to full stone.
+
+- 1.21 palettes name the half with the string state `minecraft:vertical_half` (not `top_half_bit`); `TopOffsetFromState` handles both, `*_double_slab` = 1.0.
+- A* models every solid as a full cell (standing on slab at cell c = node c+1) but physics rests at c+0.5. Anything comparing a route node to `floor(feet+0.1)` must use `movement.pathLevelY` (reports c+1 on a partial block), otherwise every node looks one level higher -> endless step-up jumps ("floating").
+- No auto-step existed: a 0.5 rise (slab -> full block, full -> slab) walked into the block. `applyStepUpAssist` (movement/step_up_assist.go) lifts a grounded body onto ledges <= 0.6 with head room; the wall scan skips such ledges via `surfaceTopY`.
+- A* `stepJumpRiseReachable`: a +1 level jump needs `top(target) - top(source) <= 0.25` (slab -> full block one level up is a 1.5 climb). Stairs are not judged.
+- Evidence: `path terrain probe` log line (y:rid:name:solid:top around the start cell).
+
 ## Verification
 
 - `go test ./tests/...` passes.
@@ -323,3 +333,60 @@ Grep for `b.Mu.Lock()` inside any `*Locked` function when this shape appears.
 - `go test -v ./tests/world -run "TestGeyserProxyPaletteWinsOverLocalDragonflyTables|TestUnknownNetworkIndexIsPassableOnGeyser"` passes (network index vs local RID collision → A* dead end).
 - `go test -v ./tests/bot/pathfinder -run "TestWallFloorSurfaceIsWalkableAtTheBotsOwnLevel|TestStepUpFromOrdinaryGroundOntoAWallPavedSurface|TestStepJumpOntoAWallIsStillRefused|TestFenceIsStillNotClimbedFromBelow"` passes (wall/fence floor veto, §13).
 - `go test -v ./tests/bot/movement -run TestStuckRecalcKeepsARouteWithoutDeadlocking -timeout 60s` passes; reverting the fix makes it fail on the 5s deadline (self-deadlock, §15).
+- `go test -v ./tests/bot/movement -run TestBodyClearanceKeepsSlabUnderFeetSolid` passes (§17: per-tick bodyClearance must not erase the slab under the feet, see applyBodyClearance in path_level.go).
+
+### 17b. bodyClearance erased the slab under the feet
+
+SendInputLoop marks feet cell Floor(y) (+1,+2) as body clearance, and IsSolid returns false for those. On a bottom slab the feet cell IS the slab, so grounded/pathLevelY/start-snap all read air: grounded=false, bobbing at slab top+-0.3, A* start_y one level low. Fix: applyBodyClearance skips the feet cell when feet rest on a partial solid (feet >= y+top-0.05). Symptom in logs: stall probe grounded=false with here=...slab top=0.50 and path_level == cell.
+
+### 17c. Server rubber-band on stair steps / slab rims (client model too coarse)
+
+The local model treats stairs as full cubes, so a body overlapping a stair lower step (top 0.5) reads airborne, sinks, and CorrectPlayerMovePrediction snaps it back to the SAME x/y/z every ~1.5 ticks: position alternates A / A+(one tick move, -0.16 y), grounded=false, vel_y 0 / -0.16. Fix: handleCorrectPrediction records small upward corrections (NoteServerSupport, 0.02<lift<=0.75) in Bot.ServerSupportY/At; TickContext.applyServerSupport grounds the body at that Y for 350ms. Info logs: "server corrected position" (local vs server) and "walk progress" every 2s. Test: tests/bot/movement/server_support_test.go.
+
+**Correction (verified live on nexusone):** Geyser does NOT send these resets as `CorrectPlayerMovePrediction`; they arrive as `MovePlayer` mode=2 (teleport). `ApplySelfMovePlayer` therefore also calls `NoteServerSupport` when `ack` is true, and the resting catch in `ApplyGroundLanding` uses `holdServerSupport()` (physics.go) so a body on carpet (top 0.06) / slab is not snapped down every tick (`server moved bot (teleport/reset)` log burst). Test: `TestServerResetAboveFloorHoldsBodyOnCarpet` (its second half must zero `ServerGroundAt`, otherwise the idle-bot anchor holds the body and hides the result).
+
+Other fixes from the same nexusone work, each with a regression test under tests/bot/movement:
+- **Stair-edge descent**: `bodyOverlapsSupportAt` + wide ground-check offsets let a body whose bbox still overlaps a lower support count as supported; the step-down assist is guarded so it does not fire against that.
+- **Planned-fall exemption**: a node of type `fall` in the path is not treated as an unexpected drop.
+- **Ledge-sense slab fix** and **airborne step-up gating**: step-up only fires from a grounded body.
+- Known leftover: a one-time `server moved bot` burst when step_jumping onto a stone-brick slab (~3 s, self-recovers). Not investigated.
+- Diagnostics `path terrain probe`, `stall probe`, `walk progress` are Info and noisy; downgrade to Debug if logs become unreadable.
+
+## 18. Slab step-jump loop and distant-cliff freeze
+
+- Symptom: bot pinned in front of a slab, MovePlayer mode=2 reset every ~150ms; A* plans `step_jump` over a slab (treats it as a full block). Fix: `aheadIsLowStep()` (step_up_assist.go) makes `handleStepUpJump` skip the jump when grounded so `applyStepUpAssist` walks onto it.
+- Symptom: "movement: refused a step over a drop" with ground_ahead=3 and bot frozen on a planned walk link. `stopsAtLedge` refused whenever a cliff existed anywhere in the 4-block probe. Fix: only refuse when `ledge.Distance < 1` (next step is over air).
+- Follow: `UpdateDistanceToPlayer` must run each tick or DistToPlayer stays 0 and follow never walks.
+- Reset log is rate-limited to 1 per 2s; NavStallPollsLimit raised to 50 polls so recovery can act.
+- Jump too short on Geyser: the wall scan skips rows whose top is within 0.6 of the feet, so a RISING body beside a full block slid into it (e.g. 0.42 up, block top 0.58 above). The host refused the buried position and reset the body, truncating the jump. Fix: `holdRisingBodyOffLedge` (speed_pos.go) blocks horizontal motion into any block reaching above the feet while `VelY > 0.05` and not grounded/on ladder; the body keeps rising and walks on once clear.
+
+## 19. Towering under leaves ("the body never cleared the cell")
+
+Leaves/logs in the cell at feet+2 stop the jump after a fraction of a block, so
+`PlaceVerified` never sees the body clear the cell. `placeOneBlock` now breaks
+`scaffold.TowerHeadroom(feet)` first. `FindScaffoldItem` no longer picks tools/stairs
+for names containing "stone" and may use leaves. `chopTree` re-works still-standing
+logs (up to 4 rounds, stops when a round removes nothing) instead of abandoning the tree.
+
+## 20. Carpet rubber-band (Geyser only)
+
+- Symptom: repeated `server moved bot (teleport/reset) mode=2`, local X snaps back ~0.5 each time, `stall probe` with `ahead=` showing `moss_carpet solid=false top=0.06` on a `walk` node. The pathfinder treats carpet as passable, but the Java host collides with its 1/16 shape; a box overlapping it at the same Y is rejected, and the host never lifts the bot (so `NoteServerSupport` never engages).
+- Fix: `tc.carpetSurface` (step_up_assist.go, gated on `WorldCache.GeyserCompat()`) + `WorldCache.IsCarpetAt`. `applyStepUpAssist` lifts onto the carpet top (exempt from the airborne/route gate); `ApplyGroundLanding` keeps the body on the carpet top while its box overlaps it and lets it sink once clear. Do NOT use `holdServerSupport` as a self-claim: it renews while any solid is under the body and the bot would float 0.0625 over bare floor.
+- Tests: `tests/bot/movement/carpet_step_test.go`.
+
+## 21. Floating after a /tpa teleport (Geyser)
+
+Symptom: after a teleport the bot hovers ~1 block above the ground until it walks; `bot took
+damage! marking block below feet as hazard` logs a Y one higher than the real floor; A* later
+plans a `fall` from start_y = floor+2.
+
+Cause of the *hold*: `ApplyServerPositionAnchor` pins a stationary body to `ServerGroundY`, and
+Geyser echoes our own PlayerAuthInput Y back as MovePlayer, which refreshes the anchor (and it
+self-renews), so any transient +1 Y error stays forever while idle. It clears as soon as the bot
+has a path (anchor is skipped), matching "normal again after walking".
+Fix (Geyser only): `floatingOverAir()` in `movement/physics.go` - when every cell under the box
+is loaded literally `minecraft:air` and the cell below is solid, do not anchor; gravity lands
+the body. Partial floors (snow/slab/carpet) are not air so they still anchor.
+Also: `handleChangeDimension` ignores Geyser's fake position (y=32767); new Info logs
+`server teleported idle bot` and `self respawn position` expose raw/feet Y to find the origin of
+the +1 (still unidentified - read these logs after a /tpa).

@@ -437,7 +437,7 @@ func NavigateToBlock(b *bot.Bot, x, y, z int32, tolerance float32) bool {
 const (
 	navPollInterval    = 100 * time.Millisecond
 	navMaxPolls        = 600 // hard ceiling (~60s) so we never hang forever
-	NavStallPollsLimit = 15  // ~1.5s with no measurable progress = stuck
+	NavStallPollsLimit = 50  // ~5s with no measurable progress = stuck (movement recovery needs >1.5s)
 	navProgressEpsilon = 0.05
 )
 

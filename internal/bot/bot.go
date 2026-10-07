@@ -363,6 +363,15 @@ type Bot struct {
 	ServerGroundAt  time.Time
 	LastServerPosAt time.Time
 
+	// ServerSupportY/At record the last time the host corrected the bot UPWARD
+	// by a small amount: it refused a fall the client predicted, so something
+	// the local world model cannot represent (a stair step, a partial block
+	// edge) is holding the feet at that height. The movement tick treats the
+	// body as standing there for a short window instead of sinking into the
+	// block again and being snapped back — which froze the bot in place.
+	ServerSupportY  float32
+	ServerSupportAt time.Time
+
 	// TeleportAckPending is true when the server teleported the bot (via MovePlayer
 	// or Respawn) and the next PlayerAuthInput packet must acknowledge it at the
 	// exact teleported position with InputFlagHandledTeleport set.
@@ -554,6 +563,12 @@ type PlayerTracker struct {
 	PlayerYaws      map[uint64]float32
 	PlayerPitches   map[uint64]float32
 	PlayerUUIDs     map[uuid.UUID]string
+	// PlayerIDUUIDs maps a tracked player's runtime ID to the UUID its
+	// AddPlayer carried. PlayerHidden marks the ones whose tab-list entry the
+	// server removed while the entity stayed in the world: those are server
+	// NPCs (Geyser/Citizens), not real players.
+	PlayerIDUUIDs map[uint64]uuid.UUID
+	PlayerHidden  map[uint64]bool
 }
 
 // NewPlayerTracker returns a PlayerTracker with all six maps initialized to
@@ -566,6 +581,8 @@ func NewPlayerTracker() PlayerTracker {
 		PlayerYaws:      make(map[uint64]float32),
 		PlayerPitches:   make(map[uint64]float32),
 		PlayerUUIDs:     make(map[uuid.UUID]string),
+		PlayerIDUUIDs:   make(map[uint64]uuid.UUID),
+		PlayerHidden:    make(map[uint64]bool),
 	}
 }
 

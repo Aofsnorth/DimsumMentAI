@@ -29,19 +29,33 @@ func (s *Scaffolder) FindScaffoldItem() (uint32, protocol.ItemStack, bool) {
 	inv := s.rg.bot.GetInventorySlots()
 	names := s.rg.bot.GetItemNames()
 
-	priority := []string{"dirt", "cobblestone", "stone", "netherrack", "sand", "gravel", "clay", "mud"}
+	// Leaves are last: a bot that just cleared a canopy is carrying them, they are
+	// solid when placed, and using them beats a trip to dig dirt.
+	priority := []string{"dirt", "cobblestone", "stone", "netherrack", "sand", "gravel", "clay", "mud", "leaves"}
 	for _, p := range priority {
 		for slot, item := range inv {
 			if item.Count <= 0 {
 				continue
 			}
-			name := names[item.NetworkID]
-			if strings.Contains(strings.ToLower(name), p) {
+			name := strings.ToLower(names[item.NetworkID])
+			if strings.Contains(name, p) && isPlainScaffoldBlock(name) {
 				return slot, item, true
 			}
 		}
 	}
 	return 0, protocol.ItemStack{}, false
+}
+
+// isPlainScaffoldBlock rejects names that merely contain a scaffold keyword:
+// "stone" matches stone_axe and stone_stairs, and a tool or a partial block is
+// not something to build a tower from.
+func isPlainScaffoldBlock(name string) bool {
+	for _, bad := range []string{"axe", "shovel", "sword", "hoe", "stairs", "slab", "wall", "button", "plate", "fence", "door", "sign"} {
+		if strings.Contains(name, bad) {
+			return false
+		}
+	}
+	return true
 }
 
 // Scaffold tuning constants, exported for tests.
@@ -146,6 +160,18 @@ func (s *Scaffolder) TowerUpTo(ctx context.Context, targetY float32) {
 // read the result back from the world instead of asserting it.
 func (s *Scaffolder) placeOneBlock(ctx context.Context, bot Bot, curPos mgl32.Vec3, item protocol.ItemStack) (bool, string) {
 	ref, cell := scaffold.TowerColumn(curPos)
+
+	// Open the ceiling before anything else. Under a canopy the cell above the
+	// head holds leaves, and a jump into leaves never gets the body off the
+	// floor, so the tower failed on every attempt. Breaking them is what a player
+	// does instead of hunting for more dirt.
+	headroom := scaffold.TowerHeadroom(curPos)
+	if _, occupied := scaffold.Occupied(bot, headroom); occupied {
+		s.logger.Info("scaffold: clearing the blocks above the head", "pos", headroom)
+		if ok, reason := scaffold.ClearCell(ctx, bot, headroom, true, scaffold.TierHand); !ok {
+			return false, "could not clear the headroom: " + reason
+		}
+	}
 
 	// Clear whatever is in the way first, while the body is still down and the
 	// cell is reachable.

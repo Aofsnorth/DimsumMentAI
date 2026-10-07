@@ -32,7 +32,28 @@ func (tc *TreeChopper) chopTree(ctx context.Context, basePos protocol.BlockPos, 
 
 	logBlocks = sortLogBlocks(logBlocks)
 	tc.equipBestAxe()
-	tc.chopLogBlocks(ctx, logBlocks)
+
+	// Keep going until the trunk is down. One pass defers every log the bot could
+	// not reach or see, and the tree used to be abandoned right there with its
+	// upper half standing. Each further round works on what is still a log and
+	// stops as soon as a round removes nothing, so an unreachable top cannot
+	// loop forever.
+	for round := 0; round < maxChopRounds && len(logBlocks) > 0; round++ {
+		tc.chopLogBlocks(ctx, logBlocks)
+		if !sleepContext(ctx, 300*time.Millisecond) {
+			break
+		}
+		left := tc.stillLogs(logBlocks)
+		if len(left) == 0 {
+			break
+		}
+		if len(left) >= len(logBlocks) {
+			tc.logger.Warn("Tree not finished: remaining logs could not be reached", "left", len(left), "base", basePos)
+			break
+		}
+		tc.logger.Info("Tree not finished, working the remaining logs", "left", len(left), "round", round+1)
+		logBlocks = left
+	}
 
 	tc.rg.scaffold.DescendFromTower(ctx, float32(basePos.Y()))
 
@@ -58,6 +79,20 @@ func (tc *TreeChopper) chopTree(ctx context.Context, basePos protocol.BlockPos, 
 		rl.ResetLook()
 	}
 	return got
+}
+
+// maxChopRounds bounds how many times one trunk is re-worked.
+const maxChopRounds = 4
+
+// stillLogs filters positions down to those the world still reports as logs.
+func (tc *TreeChopper) stillLogs(positions []protocol.BlockPos) []protocol.BlockPos {
+	var left []protocol.BlockPos
+	for _, pos := range positions {
+		if name, ok := tc.rg.bot.GetBlockName(pos.X(), pos.Y(), pos.Z()); ok && isLogBlockName(name) {
+			left = append(left, pos)
+		}
+	}
+	return left
 }
 
 // collectLogBlocks returns every log in the trunk rooted at basePos.

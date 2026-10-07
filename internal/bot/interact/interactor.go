@@ -142,6 +142,11 @@ type Request struct {
 	Entity  string // an entity type or a player name, if one was named
 	Block   string // a block type, if one was named
 	InFront bool   // "in front of you" or nothing named at all
+
+	// Requester is the player who asked. They are never what "the thing in
+	// front of you" means: the bot walks up to its owner, so the owner is
+	// always the nearest entity and would otherwise win over the real NPC.
+	Requester string
 }
 
 // Interactor performs world interaction on behalf of the bot.
@@ -158,6 +163,7 @@ func New(bot Bot, logger *slog.Logger) *Interactor {
 // Interact resolves the request and clicks whatever it points at.
 func (i *Interactor) Interact(ctx context.Context, user, param string) {
 	request := ParseRequest(param)
+	request.Requester = user
 	target, err := i.Resolve(request)
 	if err != nil {
 		i.logger.Info("interact target not found", "param", param, "error", err.Error())
@@ -257,6 +263,24 @@ func (i *Interactor) interactEntity(ctx context.Context, target Target) bool {
 
 	_ = i.bot.WritePacket(animation.InteractSwing(i.bot.GetEntityRuntimeID()))
 
+	// Java NPC plugins behind Geyser mostly bind their action to a left click
+	// (attack), which Bedrock never turns into a right-click event. A hit on a
+	// server NPC or hologram armor stand is harmless; a hit on a real player
+	// is not, so real players only ever get the interact above.
+	if i.isNPCClickTarget(target) {
+		_ = i.bot.WritePacket(&packet.InventoryTransaction{
+			TransactionData: &protocol.UseItemOnEntityTransactionData{
+				TargetEntityRuntimeID: target.ID,
+				ActionType:            protocol.UseItemOnEntityActionAttack,
+				HotBarSlot:            safecast.To[int32](hotbar),
+				HeldItem:              held,
+				Position:              i.bot.GetCoords().Add(mgl32.Vec3{0, EyeHeight, 0}),
+				ClickedPosition:       clickedRel,
+			},
+		})
+		_ = i.bot.WritePacket(animation.InteractSwing(i.bot.GetEntityRuntimeID()))
+	}
+
 	// NPC dialogue exists only on Education Edition worlds and the request is
 	// ignored everywhere else. Sending it alongside the Interact is free and
 	// makes real NPC figures respond instead of just being clicked at.
@@ -273,6 +297,27 @@ func (i *Interactor) interactEntity(ctx context.Context, target Target) bool {
 		return false
 	}
 	return true
+}
+
+// npcChecker is implemented by bots that can tell a server NPC from a player.
+type npcChecker interface {
+	IsServerNPC(id uint64) bool
+}
+
+// isNPCClickTarget reports whether a left-click is safe and useful: armor
+// stands (hologram/NPC hitboxes) and player-model NPCs the server hid from the
+// tab list. A real player is never attacked.
+func (i *Interactor) isNPCClickTarget(target Target) bool {
+	if target.Kind != KindEntity {
+		return false
+	}
+	if strings.Contains(Normalise(target.Name), "armor_stand") {
+		return true
+	}
+	if c, ok := i.bot.(npcChecker); ok {
+		return c.IsServerNPC(target.ID)
+	}
+	return false
 }
 
 // interactBlock clicks a block entity the way a vanilla client does: aim,
@@ -314,6 +359,11 @@ func (i *Interactor) interactBlock(ctx context.Context, target Target) (bool, st
 	_ = i.bot.WritePacket(animation.InteractSwing(i.bot.GetEntityRuntimeID()))
 
 	tx := i.clickTransaction(target)
+	i.logger.Info("block click sent",
+		"block", target.Name, "pos", target.Block, "face", tx.BlockFace,
+		"hotbar_slot", tx.HotBarSlot, "held_count", tx.HeldItem.Stack.Count,
+		"held_item_id", tx.HeldItem.Stack.NetworkID, "block_rid", tx.BlockRuntimeID,
+		"feet", i.bot.GetCoords())
 	_ = i.bot.WritePacket(&packet.InventoryTransaction{TransactionData: &tx})
 
 	if !changesState {
@@ -324,7 +374,9 @@ func (i *Interactor) interactBlock(ctx context.Context, target Target) (bool, st
 			return false, "interupsi: klik tidak selesai"
 		}
 		_ = i.bot.WritePacket(animation.InteractSwing(i.bot.GetEntityRuntimeID()))
-		_ = i.bot.QueueItemInteractionData(tx)
+		if err := i.bot.QueueItemInteractionData(tx); err != nil {
+			i.logger.Info("inline block click not queued", "block", target.Name, "error", err.Error())
+		}
 		// Await at least one PlayerAuthInput heartbeat so the queued inline
 		// interaction is dispatched before ResetLook() clears the aim angles.
 		_ = sleepContext(ctx, settleDelay)
@@ -544,7 +596,7 @@ func (i *Interactor) Resolve(request Request) (Target, error) {
 		return Target{}, notFoundError(request)
 	}
 
-	if target, ok := i.resolveInFront(botPos, scanBlocks()); ok {
+	if target, ok := i.resolveInFront(botPos, scanBlocks(), request.Requester); ok {
 		return target, nil
 	}
 	return Target{}, notFoundError(request)
@@ -552,6 +604,7 @@ func (i *Interactor) Resolve(request Request) (Target, error) {
 
 // resolveNamedEntity matches a player by name first, then any entity by type.
 func (i *Interactor) resolveNamedEntity(name string, botPos mgl32.Vec3) (Target, bool) {
+	i.logEntityCensus(botPos)
 	if id, pos, ok := i.bot.FindPlayer(name); ok && inReach(botPos, pos, entityReach) {
 		return Target{Kind: KindEntity, ID: id, Name: name, Pos: aimPoint(pos)}, true
 	}
@@ -643,8 +696,15 @@ func (i *Interactor) ClickBlockAt(ctx context.Context, pos protocol.BlockPos) (b
 
 // resolveInFront picks whatever the bot is facing: an entity first (server
 // buttons and figures are entities far more often than blocks), then a block.
-func (i *Interactor) resolveInFront(botPos mgl32.Vec3, blocks []Target) (Target, bool) {
+func (i *Interactor) resolveInFront(botPos mgl32.Vec3, blocks []Target, requester string) (Target, bool) {
+	i.logEntityCensus(botPos)
 	forward := ForwardVector(i.bot.GetYaw())
+	requesterID := uint64(0)
+	if requester != "" {
+		if id, _, ok := i.bot.FindPlayer(requester); ok {
+			requesterID = id
+		}
+	}
 
 	type candidate struct {
 		id   uint64
@@ -658,6 +718,15 @@ func (i *Interactor) resolveInFront(botPos mgl32.Vec3, blocks []Target) (Target,
 			return
 		}
 		if !inReach(botPos, info.Position, entityReach) {
+			return
+		}
+		i.logger.Info("interact candidate nearby",
+			"id", id, "type", info.Type, "name", info.Name,
+			"pos", info.Position, "is_requester", requesterID != 0 && id == requesterID)
+		if requesterID != 0 && id == requesterID {
+			return
+		}
+		if requester != "" && strings.EqualFold(info.Name, requester) {
 			return
 		}
 		if !WithinCone(botPos, info.Position, forward, FrontConeDegrees) {
@@ -735,6 +804,45 @@ func (i *Interactor) resolveInFront(botPos mgl32.Vec3, blocks []Target) (Target,
 		}
 	}
 	return pickNearestBlock(inFront, nil, botPos, blockReach)
+}
+
+// censusRadius is how far logEntityCensus looks. It is deliberately much wider
+// than entityReach: the clickable figure of a server portal is often not the
+// entity the reach filter keeps, and the log has to show what else is there.
+const censusRadius = 20.0
+
+// logEntityCensus logs every tracked entity around the bot, reach filter or not.
+// A click that "does nothing" is almost always a click on the wrong entity (a
+// hologram text line instead of the NPC under it); this is the evidence that
+// says which entities exist and where.
+func (i *Interactor) logEntityCensus(botPos mgl32.Vec3) {
+	log := func(id uint64, info *entity.Info) {
+		if info == nil {
+			return
+		}
+		dx := info.Position.X() - botPos.X()
+		dy := info.Position.Y() - botPos.Y()
+		dz := info.Position.Z() - botPos.Z()
+		dist := float32(math.Sqrt(float64(dx*dx + dy*dy + dz*dz)))
+		if dist > censusRadius {
+			return
+		}
+		// Bare armor stands (name == type) are pixel-art/hitbox filler and
+		// would drown the log; named ones are holograms.
+		if info.Name == info.Type {
+			return
+		}
+		i.logger.Info("interact entity census",
+			"id", id, "type", info.Type, "name", info.Name,
+			"pos", info.Position, "dist", dist)
+	}
+	for id, ent := range i.bot.GetEntities() {
+		log(id, ent)
+	}
+	for id, pe := range i.bot.GetPlayerList() {
+		p := pe
+		log(id, &p)
+	}
 }
 
 // pickNearestBlock returns the closest block in range that passes filter.

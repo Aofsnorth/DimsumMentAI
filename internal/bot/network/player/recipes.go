@@ -69,37 +69,43 @@ func handlePlayerList(b *bot.Bot, p *packet.PlayerList) {
 				)
 			}
 		case protocol.PlayerListActionRemove:
+			// Geyser (and Citizens-style NPC plugins) spawn a skinned NPC with
+			// AddPlayer and then drop its tab-list entry right away so it does
+			// not show in the player list. The entity is still standing in the
+			// world, so only the UUID mapping goes; RemoveActor is what ends
+			// the entity's tracking.
 			if username, ok := b.PlayerUUIDs[entry.UUID]; ok {
-				forgetPlayer(b, username)
+				b.Logger.Info("player list entry removed",
+					slog.String("username", username),
+					slog.String("uuid", entry.UUID.String()))
+				delete(b.PlayerUUIDs, entry.UUID)
+			}
+			for id, u := range b.PlayerIDUUIDs {
+				if u == entry.UUID {
+					b.PlayerHidden[id] = true
+				}
 			}
 		}
 		b.Mu.Unlock()
 	}
 }
 
-// forgetPlayer removes all tracked state for a player that left the world.
-// Caller must hold b.Mu.
-func forgetPlayer(b *bot.Bot, username string) {
-	b.Logger.Debug("tracked player disconnected", slog.String("username", username))
-	if id, hasID := b.PlayerEntityIDs[username]; hasID {
-		delete(b.PlayerUsernames, id)
-		delete(b.PlayerPositions, id)
-		delete(b.PlayerYaws, id)
-		delete(b.PlayerPitches, id)
-	}
-	delete(b.PlayerEntityIDs, username)
-	for uuid, name := range b.PlayerUUIDs {
-		if name == username {
-			delete(b.PlayerUUIDs, uuid)
-		}
-	}
-}
-
+// handleCraftingData folds a CraftingData packet into the recipe tables.
+//
+// The packet is a delta, not a snapshot: ClearRecipes says whether the client
+// must drop what it already knows first, and a packet that leaves it false adds
+// to the existing set. The old code wiped every table on every packet, so a
+// Geyser host that re-sent a short follow-up list (a stonecutter refresh after
+// a backend switch, say) erased the whole crafting book — and the next
+// "craft iron axe" died with "resep tidak diketahui" although the server had
+// advertised the recipe at login.
 func handleCraftingData(b *bot.Bot, p *packet.CraftingData) {
 	b.Mu.Lock()
-	b.Recipes = make(map[string]uint32)
-	b.RecipeCandidates = make(map[string][]uint32)
-	b.RecipesByNetID = make(map[uint32]bot.RecipeInfo)
+	if p.ClearRecipes || b.Recipes == nil || b.RecipeCandidates == nil || b.RecipesByNetID == nil {
+		b.Recipes = make(map[string]uint32)
+		b.RecipeCandidates = make(map[string][]uint32)
+		b.RecipesByNetID = make(map[uint32]bot.RecipeInfo)
+	}
 
 	for i := range p.ShapelessRecipes {
 		recipe := p.ShapelessRecipes[i]
@@ -132,8 +138,15 @@ func handleCraftingData(b *bot.Bot, p *packet.CraftingData) {
 		}
 	}
 	indexSmithingRecipes(b, p)
+	named, total := len(b.Recipes), len(b.RecipesByNetID)
 	b.Mu.Unlock()
-	b.Logger.Debug("Crafting recipes cached", "count", len(b.Recipes))
+	b.Logger.Info("crafting data received",
+		"shaped", len(p.ShapedRecipes),
+		"shapeless", len(p.ShapelessRecipes),
+		"clear", p.ClearRecipes,
+		"known_names", named,
+		"known_recipes", total,
+	)
 }
 
 // indexSmithingRecipes walks the smithing transform and trim recipes into the
@@ -194,14 +207,24 @@ func registerRecipeName(b *bot.Bot, name string, recipeNetID uint32) {
 	}
 	lower := strings.ToLower(name)
 	b.Recipes[lower] = recipeNetID
-	b.RecipeCandidates[lower] = append(b.RecipeCandidates[lower], recipeNetID)
+	b.RecipeCandidates[lower] = appendUniqueID(b.RecipeCandidates[lower], recipeNetID)
 
 	cleanName := strings.TrimPrefix(name, "minecraft:")
 	cleanLower := strings.ToLower(cleanName)
 	b.Recipes[cleanLower] = recipeNetID
 	if cleanLower != lower {
-		b.RecipeCandidates[cleanLower] = append(b.RecipeCandidates[cleanLower], recipeNetID)
+		b.RecipeCandidates[cleanLower] = appendUniqueID(b.RecipeCandidates[cleanLower], recipeNetID)
 	}
+}
+
+// appendUniqueID keeps a re-sent recipe from being listed twice.
+func appendUniqueID(ids []uint32, id uint32) []uint32 {
+	for _, existing := range ids {
+		if existing == id {
+			return ids
+		}
+	}
+	return append(ids, id)
 }
 
 // ApplyAttributeValues folds the attributes of an UpdateAttributes packet into

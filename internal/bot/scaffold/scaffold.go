@@ -778,6 +778,18 @@ func JumpAndWait(ctx context.Context, bot Bot, cell protocol.BlockPos, timeout t
 	}
 }
 
+// TowerHeadroom is the first cell above the body in a tower column: the one a
+// jump has to pass through. A body stands in feet and feet+1, so the ceiling is
+// feet+2, and a jump must lift the feet a full block to clear the cell it is
+// about to fill. Leaves or a canopy log in that cell stop the head after a
+// fraction of a block — the "body never cleared the cell" loop under a tree.
+func TowerHeadroom(feet mgl32.Vec3) protocol.BlockPos {
+	x := int32(math.Floor(float64(feet.X())))
+	y := int32(math.Floor(float64(feet.Y())))
+	z := int32(math.Floor(float64(feet.Z())))
+	return protocol.BlockPos{x, y + 2, z}
+}
+
 // TowerColumn is the reference cell for a tower, given where the feet are: the
 // block under the body, whose top face the new block goes on.
 func TowerColumn(feet mgl32.Vec3) (ref, cell protocol.BlockPos) {

@@ -83,3 +83,42 @@ anchors at the top-left of the 3×3 grid, `slot = 32 + row*3 + column`.
 - Re-run the clean BDS harness with one oak log and verify exactly four sticks are removed using a limit greater than four; a clear limit of four cannot prove there were no extra sticks.
 - Verify the server has exactly two planks left and the bot's local inventory summary reports the same count after crafting four sticks.
 - Run at least three clean cycles. Each must accept oak planks before sticks with no rejection, timeout, desync, disconnect, or crash.
+
+## Geyser: "resep tidak diketahui" for a recipe the server advertised
+
+`CraftingData` is a delta: `ClearRecipes=false` means ADD to the book. The handler
+used to wipe all tables on every packet, so a short re-send (Geyser after a backend
+switch/transfer) erased the whole book. `handleCraftingData` now only resets on
+`ClearRecipes` (or first packet) and logs `crafting data received` with counts. If it
+still happens, read the `craft: no recipe known for item` warn: `known_recipes=0`
+means the book was wiped/never sent; `similar=[...]` lists names with the same suffix.
+
+## Geyser: dropping items (give/drop) times out with no response
+
+A direct `DropStackRequestAction` from a hotbar/inventory slot got no ItemStackResponse
+on Geyser (5s timeout, no item in the world). On `GeyserCompat`, `Bot.DropItem` now does
+take-to-cursor then `BuildDropCursorAction` (drop from cursor), returning the cursor on
+failure. BDS keeps the direct slot drop.
+
+## Geyser: ItemStackRequests need OpenInventory first (live log 12:30-12:33)
+
+Geyser answers ItemStackRequests only after `Interact{OpenInventory}` for the personal
+inventory. CraftItem did this (all requests answered); DropItem did not (take-to-cursor
+unanswered -> 5s timeout, no "item stack response received"). `openPersonalInventory()`
+now runs before CraftItem, `dropViaCursor` and the Geyser equip. Signature of the bug:
+`CraftItem awaiting response` with no matching `item stack response received`.
+
+## Personal inventory must be closed (Geyser)
+
+`openPersonalInventory()` (OpenInventory interact) is now paired with `closePersonalInventory()` (ContainerClose window 0, type 255) via defer in CraftItem, dropViaCursor and equipViaStackRequest. Suspected (unconfirmed live) cause of "server did not open crafting table" after earlier inventory ops. `interactBlock` logs `block click sent` (block, face, hotbar slot, held item, rid) for diagnosing unanswered clicks.
+
+## Silence after placing the crafting table (Geyser, unresolved)
+
+Signature: `placing block ... crafting_table`, then `net heartbeat last_packet_age_ms` grows
+(1s,2s,3s...), `server did not confirm block placement`. Cause NOT confirmed: candidates are
+(a) legacy standalone InventoryTransaction ClickBlock + PlayerAction StartItemUseOn from
+`BuildPlacementPackets` not accepted by Geyser, (b) the ContainerClose/MobEquipment before it,
+(c) a bot-side deadlock (heartbeat age measures bot reads). `startHeartbeat` now writes
+`logs/stall_<HHMMSS>.txt` (all goroutine stacks) once when silence >= 3s: if the packet loop
+is in ReadPacket the host went quiet; if it is on a mutex the bot deadlocked. Always ask for
+the lines after the heartbeats (`connection lost after a long silence` / `disconnected by server`).

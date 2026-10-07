@@ -87,3 +87,32 @@ func dropTestItem(count uint16, stackNetworkID int32) protocol.ItemInstance {
 		},
 	}
 }
+
+func TestBuildDropCursorActionTargetsTheCursor(t *testing.T) {
+	t.Parallel()
+
+	action, err := bot.BuildDropCursorAction(41, 3)
+	if err != nil {
+		t.Fatalf("BuildDropCursorAction() error = %v", err)
+	}
+	if action.Count != 3 {
+		t.Fatalf("count = %d, want 3", action.Count)
+	}
+	if action.Source.Container.ContainerID != protocol.ContainerCursor || action.Source.Slot != 0 {
+		t.Fatalf("source = %+v, want the cursor slot 0", action.Source)
+	}
+	if action.Source.StackNetworkID != 41 {
+		t.Fatalf("source stack network ID = %d, want 41", action.Source.StackNetworkID)
+	}
+}
+
+func TestBuildDropCursorActionRejectsBadInput(t *testing.T) {
+	t.Parallel()
+
+	if _, err := bot.BuildDropCursorAction(0, 1); err == nil {
+		t.Fatal("a zero cursor stack ID must be refused")
+	}
+	if _, err := bot.BuildDropCursorAction(5, 0); err == nil {
+		t.Fatal("a zero count must be refused")
+	}
+}

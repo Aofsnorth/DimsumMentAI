@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"runtime"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -30,6 +31,7 @@ func startHeartbeat(ctx context.Context, b *bot.Bot, lastNano *atomic.Int64, las
 	go func() {
 		t := time.NewTicker(time.Second)
 		defer t.Stop()
+		dumped := false
 		for {
 			select {
 			case <-ctx.Done():
@@ -42,9 +44,28 @@ func startHeartbeat(ctx context.Context, b *bot.Bot, lastNano *atomic.Int64, las
 				b.Logger.Info("net heartbeat",
 					slog.Int64("last_packet_age_ms", age.Milliseconds()),
 					slog.Any("last_packet", lastType.Load()))
+				if age >= 3*time.Second && !dumped {
+					dumped = true
+					dumpStacks(b)
+				}
 			}
 		}
 	}()
+}
+
+// dumpStacks writes every goroutine's stack to logs/ once per silence. If the
+// packet loop is parked in ReadPacket the host went quiet; if it is parked on a
+// mutex inside a handler, the bot deadlocked itself.
+func dumpStacks(b *bot.Bot) {
+	buf := make([]byte, 1<<20)
+	buf = buf[:runtime.Stack(buf, true)]
+	_ = os.MkdirAll("logs", 0o755)
+	path := fmt.Sprintf("logs/stall_%s.txt", time.Now().Format("150405"))
+	if err := os.WriteFile(path, buf, 0o644); err != nil {
+		b.Logger.Warn("stall stack dump failed", slog.String("error", err.Error()))
+		return
+	}
+	b.Logger.Info("stall stack dump written", slog.String("path", path))
 }
 
 func PacketLoop(ctx context.Context, b *bot.Bot) error {

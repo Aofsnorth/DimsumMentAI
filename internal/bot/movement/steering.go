@@ -49,7 +49,11 @@ func (tc *TickContext) performActiveSteering() {
 	// is the worst shape this bug can take: an authorised drop stopped the body
 	// dead, and an unauthorised one let it walk off. Both at once, so neither
 	// symptom would have looked like this feature working.
-	if !tc.DropAuthorised() && tc.stopsAtLedge() {
+	//
+	// A drop the pathfinder planned is authorised by the plan: A* only emits a
+	// fall link after measuring where it lands, so refusing it here made the
+	// bot stand on the edge of its own route forever.
+	if !tc.DropAuthorised() && !tc.plannedFallAhead() && tc.stopsAtLedge() {
 		tc.HasHorizontalMove = false
 		tc.MoveVec = mgl32.Vec2{}
 		return
@@ -156,7 +160,7 @@ func (tc *TickContext) computePathAdvanceDist() (float32, bool) {
 		}
 	}
 
-	if currNode.Y != int32(math.Floor(float64(tc.CurrPos.Y()+0.1))) {
+	if currNode.Y != pathLevelY(tc.B, tc.CurrPos) {
 		advanceDist = 0.5
 	} else if tc.B.PathIndex > 0 && tc.B.PathIndex+1 < len(tc.B.CurrentPath) {
 		prevNode := tc.B.CurrentPath[tc.B.PathIndex-1]
@@ -432,6 +436,8 @@ func (tc *TickContext) handleStuck() {
 		"no_progress", stalled,
 	)
 	tc.B.Mu.Unlock()
+
+	tc.logStallProbe(frozen, stalled)
 
 	if tc.tryStuckJump() {
 		return
@@ -769,6 +775,12 @@ func (tc *TickContext) handleStepUpJump(nextNode pathfinder.Node, baseY int32) {
 	// lags a few ticks behind the head after a turn) made the bot stall at the
 	// ledge, walking into the wall instead of hopping up. checkWallCollision's
 	// groundedStepUp bypass lets the forward motion carry it onto the step.
+	//
+	// A half-block rise (slab) is walked onto by applyStepUpAssist; jumping
+	// there clips the slab and the host resets the body in a loop.
+	if tc.IsGrounded && tc.aheadIsLowStep() {
+		return
+	}
 	tc.ShouldJump = true
 	tc.JumpReason = fmt.Sprintf("Step Up: nextNode.Y(%d) > baseY(%d)", nextNode.Y, baseY)
 }

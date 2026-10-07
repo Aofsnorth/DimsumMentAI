@@ -147,9 +147,9 @@ func HandleIncomingChat(ctx context.Context, b *bot.Bot, evt event.ChatEvent) {
 	}
 
 	b.Logger.Debug("Nvidia LLM raw response received", "raw", reply)
-	dispatchChatResponse(b, evt.SourceName, msg, systemPrompt, reply)
-
-	noteImplicitFollow(b, evt.SourceName)
+	if tookTask := dispatchChatResponse(b, evt.SourceName, msg, systemPrompt, reply); !tookTask {
+		noteImplicitFollow(b, evt.SourceName)
+	}
 }
 
 // noteImplicitFollow drifts the bot toward whoever it was just talking to.

@@ -161,7 +161,7 @@ ai:
   #kc/inclusionai/ling-3.0-flash:free
   # API key is loaded from .env (NVIDIA_API_KEY). See .env.example.
   base_url: "https://api.cline.bot/api/v1" # leave empty to use provider default (nvidia). Required for openai_compatible/anthropic_compatible/google_compatible.
-  main_player: "MemberArthenyx"
+  main_player: "Synterix"
   respond_only_to_linked_player: false
   respond_only_when_tagged: true # true = only respond when tagged/named in chat (e.g. Luna or @Luna)
   custom_personality: "" # Custom LLM personality prompt override (leave empty to use default)

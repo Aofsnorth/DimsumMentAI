@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"bedrock-ai/internal/bot"
+	"bedrock-ai/internal/bot/pathfinder"
 	"bedrock-ai/internal/debuglog"
 
 	"github.com/go-gl/mathgl/mgl32"
@@ -183,6 +184,58 @@ func reportIfNotMoving(b *bot.Bot, tc *TickContext, lastAt *time.Time, lastPos *
 	)
 }
 
+// logStallProbe records the physics state of a bot that spent a window moving
+// without gaining ground: whether it is grounded, which level it reads itself
+// at against the route node, what the wall scan says about the next step, and
+// what the step-up assist would do. Evidence for slab/stair stalls.
+func (tc *TickContext) logStallProbe(frozen, stalled bool) {
+	b := tc.B
+	if b == nil || b.Logger == nil || b.WorldCache == nil {
+		return
+	}
+	var next pathfinder.Node
+	hasNext := false
+	b.Mu.Lock()
+	if b.PathIndex < len(b.CurrentPath) {
+		next = b.CurrentPath[b.PathIndex]
+		hasNext = true
+	}
+	b.Mu.Unlock()
+
+	var dirX, dirZ float32
+	if tc.Dist > 0.01 {
+		dirX, dirZ = tc.Dx/tc.Dist, tc.Dz/tc.Dist
+	}
+	stepX := tc.CurrPos.X() + dirX*0.28
+	stepZ := tc.CurrPos.Z() + dirZ*0.28
+	wall := tc.checkWallCollision(stepX, stepZ, false, false)
+	assist := tc.applyStepUpAssist(mgl32.Vec3{stepX, tc.CurrPos.Y(), stepZ})
+
+	feetX := int32(math.Floor(float64(tc.CurrPos.X())))
+	feetZ := int32(math.Floor(float64(tc.CurrPos.Z())))
+	aheadX := int32(math.Floor(float64(tc.CurrPos.X() + dirX*1.0)))
+	aheadZ := int32(math.Floor(float64(tc.CurrPos.Z() + dirZ*1.0)))
+	level := pathLevelY(b, tc.CurrPos)
+	b.Logger.Info("stall probe",
+		"pos", tc.CurrPos,
+		"grounded", tc.IsGrounded,
+		"vel_y", tc.VelY,
+		"next_y", tc.NextY,
+		"path_level", level,
+		"next_node", next,
+		"has_next", hasNext,
+		"dist", tc.Dist,
+		"should_jump", tc.ShouldJump,
+		"jump_reason", tc.JumpReason,
+		"wall_ahead", wall,
+		"assist_y", assist.Y(),
+		"frozen", frozen,
+		"no_progress", stalled,
+		"here", probeColumn(b, feetX, level, feetZ),
+		"ahead", probeColumn(b, aheadX, level, aheadZ),
+	)
+}
+
 // probeColumn renders the cells from feetY-2 to feetY+2 of one column as
 // y:rid:name:solid:top, so a stuck report shows what the bot actually sees.
 func probeColumn(b *bot.Bot, x, feetY, z int32) []string {
@@ -302,6 +355,24 @@ func SendInputLoop(ctx context.Context, b *bot.Bot, gd minecraft.GameData) {
 			tc.FeetY = int32(math.Floor(float64(tc.CurrPos.Y())))
 			tc.FeetZ = int32(math.Floor(float64(tc.CurrPos.Z())))
 
+			if tick%40 == 0 && tc.MState == "walk_to" {
+				b.Mu.Lock()
+				idx, plen, grounded := b.PathIndex, len(b.CurrentPath), b.IsGrounded
+				var nextNode any = "none"
+				if idx < plen {
+					n := b.CurrentPath[idx]
+					nextNode = fmt.Sprintf("(%d,%d,%d,%s)", n.X, n.Y, n.Z, n.LinkType)
+				}
+				b.Mu.Unlock()
+				b.Logger.Info("walk progress",
+					"pos", tc.CurrPos,
+					"target", tc.TPos,
+					"grounded", grounded,
+					"path_idx", idx,
+					"path_len", plen,
+					"next", nextNode,
+				)
+			}
 			if tick%60 == 0 && b.WorldCache != nil {
 				b.Logger.Debug("world probe",
 					"pos", tc.CurrPos,
@@ -316,10 +387,7 @@ func SendInputLoop(ctx context.Context, b *bot.Bot, gd minecraft.GameData) {
 			// Per-tick body clearance: feet/head cells are non-solid for
 			// collision only this tick. Do not use SetSolid(false) here —
 			// that permanently erased real blocks from the world model.
-			b.WorldModel.ClearBodyClearance()
-			b.WorldModel.SetBodyClearance(tc.FeetX, tc.FeetY, tc.FeetZ)
-			b.WorldModel.SetBodyClearance(tc.FeetX, tc.FeetY+1, tc.FeetZ)
-			b.WorldModel.SetBodyClearance(tc.FeetX, tc.FeetY+2, tc.FeetZ)
+			applyBodyClearance(b, tc.CurrPos, tc.FeetX, tc.FeetY, tc.FeetZ)
 
 			b.Mu.Lock()
 			isGrounded := b.IsGrounded
@@ -338,6 +406,7 @@ func SendInputLoop(ctx context.Context, b *bot.Bot, gd minecraft.GameData) {
 			tc.detectLadder()
 			tc.takeRequestedJump()
 			tc.takeRequestedDrop()
+			tc.UpdateDistanceToPlayer()
 			tc.updateTargetPositionIfFollowing()
 			tc.resolveNextTarget()
 			// A walk_to that lost its route has to re-plan here: the host clears

@@ -52,7 +52,7 @@ func cliffWorld(t *testing.T) *bot.Bot {
 func newWalkingTick(b *bot.Bot) *movement.TickContext {
 	return &movement.TickContext{
 		B:       b,
-		CurrPos: mgl32.Vec3{0.5, 63, 0.5},
+		CurrPos: mgl32.Vec3{2.5, 63, 0.5},
 		Yaw:     90,
 		MState:  "walk_to",
 		HasPath: true,
@@ -154,5 +154,38 @@ func TestTheGateAsksTheBodyNotTheModel(t *testing.T) {
 	if !tc.DropsOverTest() {
 		t.Fatal("the tick does not recognise the cliff in front of it: " +
 			"the gate would never fire in a run, whatever the geometry says")
+	}
+}
+
+// TestAPlannedFallIsNotRefused: A* only emits a fall link after measuring its
+// landing, so the gate must not stop the bot on the edge of its own route.
+func TestAPlannedFallIsNotRefused(t *testing.T) {
+	t.Parallel()
+
+	b := cliffWorld(t)
+	b.CurrentPath = []pathfinder.Node{{X: 3, Y: 55, Z: 0, LinkType: pathfinder.LinkFall}}
+	b.PathIndex = 0
+	tc := newWalkingTick(b)
+
+	tc.SteerForTest()
+
+	if !tc.HasHorizontalMove {
+		t.Error("the body refused a fall the pathfinder planned")
+	}
+}
+
+// TestADistantCliffDoesNotStopTheBody: ground continues under the next step,
+// so the walk goes on and the gate fires at the last block of ground.
+func TestADistantCliffDoesNotStopTheBody(t *testing.T) {
+	t.Parallel()
+
+	b := cliffWorld(t)
+	tc := newWalkingTick(b)
+	tc.CurrPos = mgl32.Vec3{0.5, 63, 0.5}
+
+	tc.SteerForTest()
+
+	if !tc.HasHorizontalMove {
+		t.Error("the body froze 3 blocks before a cliff edge")
 	}
 }

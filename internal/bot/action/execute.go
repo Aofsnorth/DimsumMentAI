@@ -307,6 +307,9 @@ func interactHandler(b *bot.Bot, param, user string) {
 		})
 		return
 	}
+	// A click is made standing still. A leftover follow/walk would keep pulling
+	// the bot toward the player while it aims at the NPC.
+	b.StopMovement()
 	go b.Interactor.Interact(context.Background(), user, param)
 }
 

@@ -202,23 +202,32 @@ func (b *Bot) GetEntities() map[uint64]*entity.Info {
 	return snapshot
 }
 
+// IsServerNPC reports whether a tracked player entity is a server-spawned NPC
+// (its tab-list entry was removed while the entity stayed in the world) rather
+// than a real player.
+func (b *Bot) IsServerNPC(id uint64) bool {
+	b.Mu.Lock()
+	defer b.Mu.Unlock()
+	return b.PlayerHidden[id]
+}
+
 // GetPlayerList returns a snapshot of tracked player entities other than the bot itself.
 func (b *Bot) GetPlayerList() map[uint64]entity.Info {
 	b.Mu.Lock()
 	defer b.Mu.Unlock()
-	out := make(map[uint64]entity.Info, len(b.PlayerEntityIDs))
-	for name, id := range b.PlayerEntityIDs {
-		if strings.EqualFold(name, b.Name) {
+	out := make(map[uint64]entity.Info, len(b.PlayerPositions))
+	// Keyed by runtime ID, not username: server NPCs often share a name.
+	for id, pos := range b.PlayerPositions {
+		name := b.PlayerUsernames[id]
+		if name != "" && strings.EqualFold(name, b.Name) {
 			continue
 		}
-		if pos, ok := b.PlayerPositions[id]; ok {
-			out[id] = entity.Info{
-				ID:       id,
-				Type:     "minecraft:player",
-				Name:     name,
-				Position: pos,
-				Health:   20,
-			}
+		out[id] = entity.Info{
+			ID:       id,
+			Type:     "minecraft:player",
+			Name:     name,
+			Position: pos,
+			Health:   20,
 		}
 	}
 	return out
@@ -526,7 +535,21 @@ func BuildHeldEquipmentPacket(entityRuntimeID uint64, slot uint32, item protocol
 	}
 }
 
+// EquipItem puts the item in inventory slot into the hand. On Geyser an item
+// outside the hotbar is moved with a real ItemStackRequest and only reported as
+// held once the server accepted it; the legacy transaction below is silently
+// ignored there, which left the bot "holding" an item the server never moved.
 func (b *Bot) EquipItem(slot uint32) error {
+	b.Mu.Lock()
+	geyser := b.GeyserCompat
+	b.Mu.Unlock()
+	if geyser && slot >= 9 {
+		return b.equipViaStackRequest(slot)
+	}
+	return b.equipLegacy(slot)
+}
+
+func (b *Bot) equipLegacy(slot uint32) error {
 	b.Mu.Lock()
 	defer b.Mu.Unlock()
 

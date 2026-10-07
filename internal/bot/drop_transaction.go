@@ -40,6 +40,29 @@ func BuildDropStackAction(slot uint32, item protocol.ItemInstance, requestedCoun
 	return action, dropped, nil
 }
 
+// BuildDropCursorAction builds the drop of count items held on the cursor.
+//
+// Geyser answers the cursor form reliably (it maps to a click outside the
+// window) while a drop straight from a hotbar/inventory slot can go unanswered,
+// so Geyser hosts are driven take-to-cursor then drop-from-cursor, the same two
+// steps the vanilla inventory screen performs.
+func BuildDropCursorAction(cursorStackID int32, count int) (*protocol.DropStackRequestAction, error) {
+	if count <= 0 || count > 255 {
+		return nil, errors.New("drop count out of range")
+	}
+	if cursorStackID == 0 {
+		return nil, errors.New("cursor stack network ID is missing")
+	}
+	return &protocol.DropStackRequestAction{
+		Count: byte(count),
+		Source: protocol.StackRequestSlotInfo{
+			Container:      protocol.FullContainerName{ContainerID: protocol.ContainerCursor},
+			Slot:           0,
+			StackNetworkID: cursorStackID,
+		},
+	}, nil
+}
+
 // BuildDropSwing builds the arm animation shown when tossing an item.
 func BuildDropSwing(entityRuntimeID uint64) *packet.Animate {
 	return &packet.Animate{
