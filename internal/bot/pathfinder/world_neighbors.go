@@ -623,6 +623,9 @@ func (w *LocalWorldModel) stepJumpTargetClear(tx, ty, tz int32, from Node) bool 
 	if !w.IsSolid(tx, ty-1, tz) || w.IsHazard(tx, ty-1, tz) {
 		return false
 	}
+	if !w.stepJumpRiseReachable(from.X, from.Y-1, from.Z, tx, ty-1, tz) {
+		return false
+	}
 	if w.isFenceOrWall(tx, ty-1, tz) {
 		// A wall or fence is 1.5 blocks tall. Stepping onto it from below is
 		// only possible when climbing from a stair or slab, where the step-up
@@ -806,6 +809,44 @@ func (w *LocalWorldModel) stepDownJumpGapClear(cx, cy, cz, dx, dz, distance int3
 // cannot name.
 func runtimeIDToStateAvailable() bool {
 	return chunk.RuntimeIDToState != nil
+}
+
+// topAwareQuerier is implemented by chunk sources that know the walkable
+// surface height of a block (a bottom slab is 0.5, a full block 1.0).
+type topAwareQuerier interface {
+	TopOffsetAt(x, y, z int32) float32
+}
+
+// maxStepJumpRise is the most a jump can lift the feet: 1.25 blocks, and the
+// planner already counts one whole level, so the floors may differ by 0.25.
+const maxStepJumpRise = 0.25 + 1e-3
+
+// stepJumpRiseReachable reports whether a +1 level jump is physically possible
+// given the real surface heights. A* models every solid block as a full cell,
+// so jumping from a slab (top 0.5) to a full block one level higher looked like
+// a 1-block hop but is a 1.5-block climb the body can never make; the bot
+// jumped at that ledge forever. Stairs and unknown surfaces are not judged.
+func (w *LocalWorldModel) stepJumpRiseReachable(fx, fy, fz, tx, ty, tz int32) bool {
+	q, ok := w.chunkQuerier.(topAwareQuerier)
+	if !ok {
+		return true
+	}
+	if w.isStairs(fx, fy, fz) || w.isStairs(tx, ty, tz) {
+		return true
+	}
+	return q.TopOffsetAt(tx, ty, tz)-q.TopOffsetAt(fx, fy, fz) <= maxStepJumpRise
+}
+
+func (w *LocalWorldModel) isStairs(x, y, z int32) bool {
+	if w.chunkQuerier == nil {
+		return false
+	}
+	rid, loaded := w.chunkQuerier.GetBlockRID(x, y, z)
+	if !loaded {
+		return false
+	}
+	name, ok := blockNameFor(w.chunkQuerier, rid)
+	return ok && strings.Contains(name, "stair")
 }
 
 func (w *LocalWorldModel) isHalfBlock(x, y, z int32) bool {

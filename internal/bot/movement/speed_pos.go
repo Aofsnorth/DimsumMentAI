@@ -47,12 +47,16 @@ func (tc *TickContext) ladderPredictedPos() mgl32.Vec3 {
 }
 
 func (tc *TickContext) horizontalMovePredictedPos() mgl32.Vec3 {
+	return tc.applyStepUpAssist(tc.horizontalMovePredictedPosRaw())
+}
+
+func (tc *TickContext) horizontalMovePredictedPosRaw() mgl32.Vec3 {
 	yawDiff := AngleDifference(tc.TargetYaw, tc.Yaw)
 	absYawDiff := math.Abs(float64(yawDiff))
 	speed, needsStepUp, isMidJump := tc.computeMoveSpeed(absYawDiff)
 	targetX, targetZ := tc.computeTargetPosition(speed, needsStepUp, isMidJump)
 	if tc.checkWallCollision(targetX, targetZ, needsStepUp, isMidJump) {
-		baseY := int32(math.Floor(float64(tc.CurrPos.Y() + 0.1)))
+		baseY := pathLevelY(tc.B, tc.CurrPos)
 		_, _, plannedDescent := tc.plannedDescent(baseY)
 		pathAllowsGap := tc.pathAllowsForwardWithoutGround(baseY)
 
@@ -117,7 +121,7 @@ func (tc *TickContext) computeBaseSpeed() (float32, bool, bool) {
 		tc.B.Mu.Lock()
 		if tc.B.PathIndex < len(tc.B.CurrentPath) {
 			nextNode := tc.B.CurrentPath[tc.B.PathIndex]
-			baseY := int32(math.Floor(float64(tc.CurrPos.Y() + 0.1)))
+			baseY := pathLevelY(tc.B, tc.CurrPos)
 			if nextNode.Y > baseY {
 				needsStepUp = true
 				if isMidJump {
@@ -145,7 +149,7 @@ func (tc *TickContext) computeTargetPosition(speed float32, needsStepUp, isMidJu
 
 	targetX = tc.CurrPos.X() + stepX
 	targetZ = tc.CurrPos.Z() + stepZ
-	baseY := int32(math.Floor(float64(tc.CurrPos.Y() + 0.1)))
+	baseY := pathLevelY(tc.B, tc.CurrPos)
 	descentTargetY, descentDrop, plannedDescent := tc.plannedDescent(baseY)
 	hasSameLevelSupport := tc.hasGroundSupportAt(targetX, targetZ, baseY)
 	if hasSameLevelSupport {
@@ -234,6 +238,12 @@ func (tc *TickContext) checkWallCollision(targetX, targetZ float32, needsStepUp,
 			}
 			for bz := minZ; bz <= maxZ; bz++ {
 				if tc.B.WorldModel.IsSolid(bx, by, bz) {
+					// A slab (or other low block) whose real top is within
+					// step height is a step, not a wall; applyStepUpAssist
+					// lifts the body onto it.
+					if tc.IsGrounded && tc.surfaceTopY(bx, by, bz) <= tc.NextY+stepUpHeight {
+						continue
+					}
 					return true
 				}
 			}
@@ -283,7 +293,7 @@ func (tc *TickContext) descentLinkFromY() (int32, bool) {
 	}
 	var prevY int32
 	if tc.B.PathIndex == 0 {
-		prevY = int32(math.Floor(float64(tc.B.Pos.Y() + 0.1)))
+		prevY = pathLevelY(tc.B, tc.B.Pos)
 	} else {
 		prevY = tc.B.CurrentPath[tc.B.PathIndex-1].Y
 	}
@@ -306,7 +316,7 @@ func (tc *TickContext) plannedDescent(baseY int32) (int32, int32, bool) {
 	nextNode := tc.B.CurrentPath[tc.B.PathIndex]
 	var fromY int32
 	if tc.B.PathIndex == 0 {
-		fromY = int32(math.Floor(float64(tc.B.Pos.Y() + 0.1)))
+		fromY = pathLevelY(tc.B, tc.B.Pos)
 	} else {
 		fromY = tc.B.CurrentPath[tc.B.PathIndex-1].Y
 		if baseY > fromY {

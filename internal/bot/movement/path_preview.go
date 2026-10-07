@@ -24,7 +24,7 @@ func PreviewPath(b *bot.Bot, dest mgl32.Vec3) PathPreview {
 	b.Mu.Lock()
 	start := pathfinder.Node{
 		X: int32(math.Floor(float64(b.Pos.X()))),
-		Y: int32(math.Floor(float64(b.Pos.Y() + 0.1))),
+		Y: pathLevelY(b, b.Pos),
 		Z: int32(math.Floor(float64(b.Pos.Z()))),
 	}
 	b.Mu.Unlock()

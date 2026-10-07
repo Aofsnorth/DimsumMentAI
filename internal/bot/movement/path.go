@@ -87,7 +87,7 @@ func RecalculatePath(b *bot.Bot) {
 	b.Mu.Lock()
 	start := pathfinder.Node{
 		X: int32(math.Floor(float64(b.Pos.X()))),
-		Y: int32(math.Floor(float64(b.Pos.Y() + 0.1))),
+		Y: pathLevelY(b, b.Pos),
 		Z: int32(math.Floor(float64(b.Pos.Z()))),
 	}
 	targetY := b.TargetPos.Y()

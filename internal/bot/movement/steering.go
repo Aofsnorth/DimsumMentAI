@@ -383,7 +383,7 @@ func (tc *TickContext) EnsureWalkToHasPath() {
 	hasPath := len(tc.B.CurrentPath) > 0
 	feet := pathfinder.Node{
 		X: int32(math.Floor(float64(tc.B.Pos.X()))),
-		Y: int32(math.Floor(float64(tc.B.Pos.Y() + 0.1))),
+		Y: pathLevelY(tc.B, tc.B.Pos),
 		Z: int32(math.Floor(float64(tc.B.Pos.Z()))),
 	}
 	tc.B.Mu.Unlock()
@@ -581,7 +581,7 @@ func (tc *TickContext) MarkBlockingCellsTempSolidLocked(window time.Duration) {
 
 	dirX := tc.Dx / tc.Dist
 	dirZ := tc.Dz / tc.Dist
-	feetY := int32(math.Floor(float64(tc.CurrPos.Y() + 0.1)))
+	feetY := pathLevelY(tc.B, tc.CurrPos)
 
 	for _, ahead := range []float32{0.5, 1.0} {
 		bx := int32(math.Floor(float64(tc.CurrPos.X() + dirX*ahead)))
@@ -691,7 +691,7 @@ func (tc *TickContext) applyParkourJump() {
 	nextNode := tc.B.CurrentPath[tc.B.PathIndex]
 	tc.B.Mu.Unlock()
 
-	baseY := int32(math.Floor(float64(tc.CurrPos.Y() + 0.1)))
+	baseY := pathLevelY(tc.B, tc.CurrPos)
 	dxPath := math.Abs(float64(nextNode.X - prevNode.X))
 	dzPath := math.Abs(float64(nextNode.Z - prevNode.Z))
 	horizDistance := float32(math.Max(dxPath, dzPath))
