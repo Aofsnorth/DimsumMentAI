@@ -55,6 +55,10 @@ type Manager struct {
 	mu     sync.Mutex
 
 	// Auto-eat state
+	// eatMu serialises meals: concurrent eat actions (the LLM can emit several)
+	// otherwise fired five use-items inside one second, which restarts the
+	// server-side eating animation and eats one cookie instead of five.
+	eatMu       sync.Mutex
 	lastEatTime time.Time
 	autoEatOn   bool
 	hungerLevel int

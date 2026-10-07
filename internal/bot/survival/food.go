@@ -5,6 +5,7 @@
 package survival
 
 import (
+	"fmt"
 	"sort"
 	"strings"
 	"time"
@@ -41,6 +42,13 @@ const eatCooldown = 250 * time.Millisecond
 // food, failed equip), so the tick does not retry every 500 ms forever.
 const eatFailBackoff = 3 * time.Second
 
+// eatConfirmTimeout is how long to wait for the host to shrink the stack after
+// a use-item before calling the meal a failure.
+const eatConfirmTimeout = 3 * time.Second
+
+// maxMealsPerTick caps a chain of back-to-back meals.
+const maxMealsPerTick = 24
+
 // ShouldAutoEat is the decision half of auto-eat: is the bot hungry enough, and
 // has enough time passed since the last meal? Kept separate from the action so
 // the judgement can be tested without the 1.6-second eating animation.
@@ -72,19 +80,35 @@ func (m *Manager) tickAutoEat() {
 
 	m.logger.Debug("Auto-eat triggered", "hunger", hunger, "threshold", m.EatThreshold)
 
-	// Stamp the attempt, not only the success, and back off longer on failure.
-	ate := m.EatBestFood()
-	stamp := time.Now()
-	if !ate {
-		stamp = stamp.Add(eatFailBackoff - eatCooldown)
+	// Chain meals back to back while still hungry, like a player holding
+	// right-click, instead of waiting for the next 500 ms tick between them.
+	// Stamp the attempt, and back off longer on failure.
+	for i := 0; i < maxMealsPerTick; i++ {
+		sent, consumed := m.eatBest()
+		ate := sent && consumed
+		stamp := time.Now()
+		if !ate {
+			stamp = stamp.Add(eatFailBackoff - eatCooldown)
+		}
+		m.mu.Lock()
+		m.lastEatTime = stamp
+		m.mu.Unlock()
+		if !ate || !m.ShouldAutoEat() {
+			return
+		}
+		time.Sleep(eatCooldown)
 	}
-	m.mu.Lock()
-	m.lastEatTime = stamp
-	m.mu.Unlock()
 }
 
-// EatBestFood finds and eats the best available food item
+// EatBestFood finds and eats the best available food item. It reports whether
+// a meal was started.
 func (m *Manager) EatBestFood() bool {
+	sent, _ := m.eatBest()
+	return sent
+}
+
+// eatBest is EatBestFood that also reports whether the host registered the meal.
+func (m *Manager) eatBest() (sent, consumed bool) {
 	inv := m.bot.GetInventorySlots()
 	names := m.bot.GetItemNames()
 
@@ -106,42 +130,129 @@ func (m *Manager) EatBestFood() bool {
 			name := strings.ToLower(names[item.NetworkID])
 			name = strings.TrimPrefix(name, "minecraft:")
 			if name == foodName {
-				if m.eatFoodItem(slot, item) {
-					m.logger.Info("Auto-eat: consumed food", "name", name, "slot", slot)
-					return true
+				if sent, consumed := m.eatFoodItem(slot, item); sent {
+					m.logger.Info("Auto-eat: consumed food", "name", name, "slot", slot, "registered", consumed)
+					return true, consumed
 				}
 			}
 		}
 	}
 
 	m.logger.Debug("Auto-eat: no food found in inventory")
-	return false
+	return false, false
 }
 
-func (m *Manager) eatFoodItem(slot uint32, item protocol.ItemStack) bool {
+// EatNamed eats the carried item the player asked for ("cookie", "cookies",
+// "minecraft:bread"). An exact name wins over a substring match, so asking for
+// "carrot" never picks carrot_on_a_stick while a carrot exists. It reports an
+// error when nothing matches or the host did not register the meal, so the
+// caller never claims a meal that did not happen.
+func (m *Manager) EatNamed(want string) error {
+	want = strings.TrimPrefix(strings.ToLower(strings.TrimSpace(want)), "minecraft:")
+	want = strings.ReplaceAll(want, " ", "_")
+	singular := strings.TrimSuffix(want, "s")
+	if want == "" {
+		return fmt.Errorf("no food name given")
+	}
+
+	inv := m.bot.GetInventorySlots()
+	names := m.bot.GetItemNames()
+	slots := make([]uint32, 0, len(inv))
+	for slot := range inv {
+		slots = append(slots, slot)
+	}
+	sort.Slice(slots, func(i, j int) bool { return slots[i] < slots[j] })
+
+	pick := func(match func(name string) bool) (uint32, bool) {
+		for _, slot := range slots {
+			if inv[slot].Count <= 0 {
+				continue
+			}
+			name := strings.TrimPrefix(strings.ToLower(names[inv[slot].NetworkID]), "minecraft:")
+			if match(name) {
+				return slot, true
+			}
+		}
+		return 0, false
+	}
+	slot, ok := pick(func(n string) bool { return n == want || n == singular })
+	if !ok {
+		slot, ok = pick(func(n string) bool { return n != "" && strings.Contains(n, singular) })
+	}
+	if !ok {
+		return fmt.Errorf("no %s in inventory", want)
+	}
+
+	// Keep eating the same food until the hunger bar is full, the stack is
+	// gone, or the host stops registering meals.
+	ate := 0
+	for i := 0; i < maxMealsPerTick; i++ {
+		sent, consumed := m.eatFoodItem(slot, m.bot.GetInventorySlots()[slot])
+		if !sent {
+			if ate > 0 {
+				return nil
+			}
+			return fmt.Errorf("could not use %s", want)
+		}
+		if !consumed {
+			if ate > 0 {
+				return nil // full, most likely
+			}
+			return fmt.Errorf("server did not register eating %s (not edible, or already full)", want)
+		}
+		ate++
+		m.mu.Lock()
+		full := m.hungerLevel >= 20
+		m.mu.Unlock()
+		if full || m.bot.GetInventorySlots()[slot].Count <= 0 {
+			return nil
+		}
+	}
+	return nil
+}
+
+// eatFoodItem reports whether the use-item went out and whether the stack
+// shrank afterwards.
+func (m *Manager) eatFoodItem(slot uint32, item protocol.ItemStack) (sent, consumed bool) {
+	m.eatMu.Lock()
+	defer m.eatMu.Unlock()
 	// Skip the equip when the food is already in the selected hotbar slot.
 	//
 	// A meal out of the selected slot needs no MobEquipment, and the use-item
 	// transaction below then names a slot the bot really is holding.
 	if held := m.bot.GetHeldItemSlot(); held != slot {
 		if err := m.bot.EquipItem(slot); err != nil {
-			return false
+			return false, false
 		}
 		time.Sleep(150 * time.Millisecond)
 	}
 
-	if !m.useHeldItem() {
-		return false
+	// Baseline AFTER the equip, from the live inventory: the caller's stack can
+	// be stale, which made a failed meal look consumed.
+	before := item
+	if cur, ok := m.bot.GetInventorySlots()[m.bot.GetHeldItemSlot()]; ok {
+		before = cur
 	}
-	time.Sleep(1600 * time.Millisecond) // eating takes ~1.6 seconds
 
-	// Say whether the meal registered: a use that the host ignores otherwise
-	// looks identical to a good one in the logs.
-	held := m.bot.GetHeldItemSlot()
-	after, ok := m.bot.GetInventorySlots()[held]
-	consumed := !ok || after.Count < item.Count || after.NetworkID != item.NetworkID
-	m.logger.Info("Auto-eat: meal result", "slot", slot, "held", held, "consumed", consumed)
-	return true
+	if !m.useHeldItem() {
+		return false, false
+	}
+
+	// The host confirms a meal by shrinking the stack, about 1.7 s after the
+	// use (1.6 s of eating plus latency). A fixed 1.6 s sleep read just before
+	// that update and reported a good meal as failed. Poll instead, and return
+	// the moment the stack shrinks so the next meal starts immediately.
+	deadline := time.Now().Add(eatConfirmTimeout)
+	for {
+		held := m.bot.GetHeldItemSlot()
+		after, ok := m.bot.GetInventorySlots()[held]
+		consumed = !ok || after.Count < before.Count || after.NetworkID != before.NetworkID
+		if consumed || time.Now().After(deadline) {
+			m.logger.Info("Auto-eat: meal result", "slot", slot, "held", held, "consumed", consumed)
+			return true, consumed
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
 }
 
 // useHeldItem right-clicks the air with whatever is in the selected hotbar

@@ -155,7 +155,7 @@ func reportIfNotMoving(b *bot.Bot, tc *TickContext, lastAt *time.Time, lastPos *
 	}
 
 	if b.WorldCache != nil {
-		b.Logger.Debug("stuck block probe",
+		b.Logger.Info("stuck block probe",
 			"feet", [3]int32{tc.FeetX, tc.FeetY, tc.FeetZ},
 			"feet_y_exact", tc.CurrPos.Y(),
 			"geyser", b.WorldCache.GeyserCompat(),

@@ -436,7 +436,15 @@ func isBlockNamePassable(name string) bool {
 func TopOffsetFromState(name string, props map[string]any) float32 {
 	switch {
 	case strings.Contains(name, "slab"):
+		// A double slab is a full block whatever its half state says.
+		if strings.Contains(name, "double_slab") {
+			return 1.0
+		}
 		if top, ok := boolState(props, "top_half_bit"); ok && top {
+			return 1.0
+		}
+		// 1.21 palettes name the half with a string, not top_half_bit.
+		if half, ok := props["minecraft:vertical_half"].(string); ok && half == "top" {
 			return 1.0
 		}
 		return 0.5

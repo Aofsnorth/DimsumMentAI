@@ -150,6 +150,19 @@ func RecalculatePath(b *bot.Bot) {
 		"movement_state", movementState,
 	)
 
+	// Evidence for "stuck on slab/stairs" reports: what the bot's own world
+	// cache holds around the start cell (y:rid:name:solid:top, feet-2..feet+2).
+	if b.WorldCache != nil {
+		b.Logger.Info("path terrain probe",
+			"start", [3]int32{start.X, start.Y, start.Z},
+			"x+1", probeColumn(b, start.X+1, start.Y, start.Z),
+			"x", probeColumn(b, start.X, start.Y, start.Z),
+			"x-1", probeColumn(b, start.X-1, start.Y, start.Z),
+			"x-2", probeColumn(b, start.X-2, start.Y, start.Z),
+			"x-3", probeColumn(b, start.X-3, start.Y, start.Z),
+		)
+	}
+
 	b.WorldModel.PurgeFalseSolidOverrides()
 
 	// If the bot's feet are inside a solid block (physics pushed it half a

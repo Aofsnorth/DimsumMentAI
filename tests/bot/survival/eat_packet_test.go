@@ -84,3 +84,17 @@ func TestEatingIgnoresNonFoodLookalikes(t *testing.T) {
 		t.Error("ate a carrot_on_a_stick / beetroot_seeds")
 	}
 }
+
+// TestEatNamedReportsMissingFoodInsteadOfClaimingAMeal: the manual eat action
+// used to answer "Ate food successfully" whatever happened.
+func TestEatNamedReportsMissingFoodInsteadOfClaimingAMeal(t *testing.T) {
+	t.Parallel()
+
+	b := newFakeBot()
+	b.names[271] = "minecraft:cookie"
+	b.inventory[5] = protocol.ItemStack{ItemType: protocol.ItemType{NetworkID: 271}, Count: 4}
+
+	if err := newTestManager(b).EatNamed("bread"); err == nil {
+		t.Error("EatNamed(bread) = nil with only cookies carried")
+	}
+}

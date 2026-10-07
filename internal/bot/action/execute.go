@@ -548,7 +548,7 @@ var ActionHandlers = map[string]ActionHandler{
 			return
 		}
 		go func() {
-			if err := b.InventoryMgr.Eat(food); err != nil {
+			if err := b.SurvivalMgr.EatNamed(food); err != nil {
 				ReportStatus(b, user, event.ActionStatus{Action: "eat", Item: food, Success: false, Error: err.Error()})
 				return
 			}
