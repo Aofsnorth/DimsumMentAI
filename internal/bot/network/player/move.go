@@ -131,17 +131,28 @@ func ApplySelfMovePlayer(b *bot.Bot, mode byte, newPos mgl32.Vec3) bool {
 	// every "kok ga kena knockback" before the slide could ever be seen:
 	// claimed, overwritten within 200ms, corrected back to the stale spot.
 	// Once the carried motion has decayed, the echo is authority again.
-	if ack || (b.MovementState == "idle" && b.KnockbackX == 0 && b.KnockbackZ == 0) {
+	//
+	// The same protection covers any vertical flight, jump included: an echo
+	// landing mid-arc carries the pre-arc floor, and adopting it is what cut
+	// jumps to a fraction of their height. A REAL teleport is far away — those
+	// adopt regardless of flight, because nothing about them is a nudge.
+	dxD, dyD, dzD := newPos.X()-b.Pos.X(), newPos.Y()-b.Pos.Y(), newPos.Z()-b.Pos.Z()
+	realTeleport := dxD*dxD+dyD*dyD+dzD*dzD > teleportAckDistance*teleportAckDistance
+	inFlight := b.VelY > 0.05 || b.VelY < -0.05 || b.KnockbackX != 0 || b.KnockbackZ != 0 || time.Now().Before(b.KnockbackUntil)
+	if (ack && realTeleport) || (!inFlight && (ack || b.MovementState == "idle")) {
 		b.Pos = newPos
 		b.VelY = 0.0
+		if ack && realTeleport {
+			b.TeleportAckPending = true
+			b.TeleportAckPos = newPos
+		}
 	}
 	b.ServerGroundY = newPos.Y()
 	b.ServerGroundAt = time.Now()
 	b.LastServerPosAt = b.ServerGroundAt
-	if ack {
-		b.TeleportAckPending = true
-		b.TeleportAckPos = newPos
-	}
+	// TeleportAckPending is set inside the adopt branch only: a correction we
+	// skipped mid-flight must not arm the ack, or the next tick claims the
+	// skipped position and the arc dies anyway.
 	return ack
 }
 
@@ -216,7 +227,31 @@ func handleCorrectPrediction(b *bot.Bot, p *packet.CorrectPlayerMovePrediction) 
 	b.Mu.Lock()
 	correctedPos := p.Position.Sub(mgl32.Vec3{0, 1.62})
 	localY := b.Pos.Y()
-	if correctedPos.Y() <= 320 && correctedPos.Y() >= -64 {
+	// A body in vertical flight — rising from a jump or a hit-hop, falling
+	// from a ledge — owns its arc, and a live knockback extends that to the
+	// whole slide. A prediction correction arriving inside the window is the
+	// move-checker re-sending the pre-arc position; adopting it mid-rise is
+	// what cut jumps to a fraction of their height, and zeroing the fall
+	// velocity on each one is what rendered drops as slow motion. Past the
+	// arc, the correction is authority again.
+	kbLive := b.KnockbackX != 0 || b.KnockbackZ != 0 || time.Now().Before(b.KnockbackUntil)
+	inFlight := kbLive || b.VelY > 0.05 || b.VelY < -0.05
+	inRange := correctedPos.Y() <= 320 && correctedPos.Y() >= -64
+
+	if inRange && inFlight {
+		// The decisive flight diagnostic. During a hit it tells whether the
+		// server refused the slide (correction near the PRE-hit spot) or
+		// confirms it (near the slid spot). During a jump or fall it is the
+		// move-checker re-sending the pre-arc position. Either way the
+		// correction is NOT adopted — the arc owns the body — but it is
+		// recorded.
+		b.Logger.Info("server correction during flight ignored",
+			slog.Any("local", b.Pos),
+			slog.Any("server", correctedPos),
+			slog.Float64("vel_y", float64(b.VelY)),
+			slog.Bool("kb_live", kbLive),
+		)
+	} else if inRange {
 		posDiff := float64(b.Pos.X()-correctedPos.X())*float64(b.Pos.X()-correctedPos.X()) +
 			float64(b.Pos.Y()-correctedPos.Y())*float64(b.Pos.Y()-correctedPos.Y()) +
 			float64(b.Pos.Z()-correctedPos.Z())*float64(b.Pos.Z()-correctedPos.Z())
@@ -229,20 +264,7 @@ func handleCorrectPrediction(b *bot.Bot, p *packet.CorrectPlayerMovePrediction) 
 			b.PathIndex = 0
 		}
 
-		// A correction landing mid-knockback is the one log line that decides
-		// where a missing knockback lives: a corrected position near the PRE-hit
-		// spot means the server refused the slide itself, while one near the
-		// slid spot means it confirms it. It used to log only for a walking
-		// body — which is to say, never during the idle duels where the
-		// knockback kept disappearing without a trace.
-		if b.KnockbackX != 0 || b.KnockbackZ != 0 {
-			b.Logger.Info("server corrected position while knockback live",
-				slog.Any("local", b.Pos),
-				slog.Any("server", correctedPos),
-				slog.Float64("carried_kb_x", float64(b.KnockbackX)),
-				slog.Float64("carried_kb_z", float64(b.KnockbackZ)),
-			)
-		} else if b.MovementState != "idle" {
+		if b.MovementState != "idle" {
 			b.Logger.Info("server corrected position",
 				slog.Any("local", b.Pos),
 				slog.Any("server", correctedPos),
@@ -252,11 +274,7 @@ func handleCorrectPrediction(b *bot.Bot, p *packet.CorrectPlayerMovePrediction) 
 		NoteServerSupport(b, b.Pos.Y(), correctedPos.Y())
 
 		b.Pos = correctedPos
-		// The vertical half of a knockback is the server's own assignment; its
-		// correction arriving mid-hop does not retract that assignment, and
-		// zeroing the hop here is how the rise kept dying before it cleared a
-		// half block.
-		if !b.IsOnLadder && b.KnockbackX == 0 && b.KnockbackZ == 0 {
+		if !b.IsOnLadder {
 			b.VelY = 0.0
 		}
 		// The server owns the authoritative position. Remember the Y it just

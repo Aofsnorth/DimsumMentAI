@@ -43,6 +43,12 @@ const serverAnchorWindow = 1200 * time.Millisecond
 // the anchor was written to hold.
 const anchorFlightSkin float32 = 0.2
 
+// assignedRiseThreshold is the upward velocity above which a grounded body is
+// treated as having been assigned flight by the server (a jump impulse or a
+// hit hop) rather than standing. Below it the grounded branch keeps zeroing
+// the residual jitter as always.
+const assignedRiseThreshold float32 = 0.05
+
 // ApplyServerPositionAnchor holds a stationary bot at the last Y the server
 // confirmed, instead of letting gravity pull it down when the local world model
 // has no floor decoded beneath it.
@@ -441,11 +447,20 @@ func (tc *TickContext) ApplyVerticalVelocity() {
 	// tick that refuses it must not leave it armed for a second impulse on the
 	// rising body -- what the player sees as jumping again off the sky.
 	if tc.IsGrounded {
-		tc.VelY = 0.0
-		if tc.ShouldJump {
-			tc.B.Logger.Debug("jump triggered", "reason", tc.JumpReason, "dist", tc.Dist, "pos", tc.CurrPos, "mState", tc.MState)
-			tc.VelY = 0.42
+		if tc.VelY > assignedRiseThreshold {
+			// The server assigned this body an upward motion — the hop a PvP hit
+			// carries in SetActorMotion. The model's floor vote (the ground is
+			// right below) cannot cancel an assignment: zeroing the rise here is
+			// exactly why the knockback slide happened while the hop never did —
+			// the body glided flat instead of flying.
 			tc.IsGrounded = false
+		} else {
+			tc.VelY = 0.0
+			if tc.ShouldJump {
+				tc.B.Logger.Debug("jump triggered", "reason", tc.JumpReason, "dist", tc.Dist, "pos", tc.CurrPos, "mState", tc.MState)
+				tc.VelY = 0.42
+				tc.IsGrounded = false
+			}
 		}
 	} else {
 		// When airborne, ShouldJump must not apply any upward impulse, and
@@ -660,6 +675,17 @@ func parkourWindowActive(until time.Time) bool {
 
 func (tc *TickContext) applyStepDownAssist(feetY int32) {
 	if !tc.IsDescending || tc.IsOnLadder {
+		return
+	}
+	// IsDescending fires for every body with ground 1-3 blocks below its feet —
+	// which includes the apex of a jump, the rise of a knockback hop, and any
+	// real free fall. This assist drives a fixed -0.16 descent and FORCE-SETS
+	// VelY to match, so applying it to those bodies reversed rises mid-air
+	// (the quarter-height jump, the flat knockback hop) and held falls at a
+	// constant crawl (the slow-motion drop). A body still rising, or already
+	// falling faster than this assist's own step, belongs to its own arc and
+	// to gravity — only the slow walk off a ledge is a step.
+	if tc.VelY > 0.05 || tc.VelY < -0.3 {
 		return
 	}
 	var targetY float32

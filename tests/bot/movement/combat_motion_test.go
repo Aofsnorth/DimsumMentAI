@@ -104,6 +104,123 @@ func TestKnockbackSlidesTheClaimAndDecays(t *testing.T) {
 	}
 }
 
+// TestAssignedRiseSurvivesTheGroundedVote: the server's hop (SetActorMotion
+// velY ≈ 0.36) arrives while the model's floor sits right below the feet, and
+// the grounded vote used to zero the rise before it ever lifted — which is
+// why the knockback slid flat and the jump rose a quarter of its height. An
+// assigned rise must leave the ground intact.
+func TestAssignedRiseSurvivesTheGroundedVote(t *testing.T) {
+	t.Parallel()
+	b := newCombatMotionBot()
+	tc := &movement.TickContext{
+		B: b, CurrPos: mgl32.Vec3{0.5, 67, 0.5},
+		VelY: 0.3607398, IsGrounded: true,
+		// Production seeds this from the previous tick; a zero value reads as
+		// a 67-block vertical jump in applyPositionCorrection and zeroes VelY
+		// before the rise is ever judged.
+		LastPredictedY: 67,
+	}
+	tc.SetSyncedGroundedForTest(true)
+
+	tc.RunPhysicsAndCollisionsForTest()
+
+	if tc.IsGrounded {
+		t.Fatal("an assigned rise was grounded by the floor vote; the hop never leaves the ground")
+	}
+	if tc.VelY < 0.35 {
+		t.Fatalf("rise velocity = %.3f, want the assigned 0.36 preserved", tc.VelY)
+	}
+	if tc.NextY < tc.CurrPos.Y()+0.3 {
+		t.Fatalf("NextY = %.3f, want the body lifted by the assigned rise", tc.NextY)
+	}
+}
+
+// TestGroundedRestStaysGrounded is the regression half: an ordinary standing
+// body with no vertical motion keeps its grounded state and does not drift.
+func TestGroundedRestStaysGrounded(t *testing.T) {
+	t.Parallel()
+	b := newCombatMotionBot()
+	tc := &movement.TickContext{B: b, CurrPos: mgl32.Vec3{0.5, 67, 0.5}, VelY: 0}
+	tc.SetSyncedGroundedForTest(true)
+
+	tc.RunPhysicsAndCollisionsForTest()
+
+	if !tc.IsGrounded {
+		t.Fatal("an ordinary standing body lost its grounded state")
+	}
+	if tc.VelY != 0 {
+		t.Fatalf("standing body VelY = %.3f, want 0", tc.VelY)
+	}
+	if tc.NextY != tc.CurrPos.Y() {
+		t.Fatalf("standing body NextY = %.3f, want the floor %.3f", tc.NextY, tc.CurrPos.Y())
+	}
+}
+
+// The step-down assist used to fire for ANY body with ground 1-3 blocks
+// below its feet — jump apexes, knockback hops, free falls — and its fixed
+// -0.16 descent FORCE-SET VelY to match. That single behaviour was all three
+// live complaints at once: the jump rose a quarter of its height (the rise
+// reversed mid-air), the knockback hop barely lifted, and every drop played
+// in slow motion (gravity never got to accumulate past the forced -0.16).
+// These tests pin the corrected scope: rises are never fought, real falls
+// belong to gravity, and the slow walk off a ledge keeps its assist.
+func TestFreeFallIsNotThrottledByStepDownAssist(t *testing.T) {
+	t.Parallel()
+	b := newCombatMotionBot() // floor at cell (0,66,0)
+	tc := &movement.TickContext{
+		B: b, CurrPos: mgl32.Vec3{0.5, 68.5, 0.5},
+		VelY: -0.5, LastPredictedY: 68.5,
+	}
+	tc.SetSyncedGroundedForTest(false)
+
+	tc.RunPhysicsAndCollisionsForTest()
+
+	if tc.VelY > -0.55 {
+		t.Fatalf("fall velocity = %.3f, want gravity to keep accelerating past the assist's -0.16 cap", tc.VelY)
+	}
+	if tc.NextY > tc.CurrPos.Y()-0.5 {
+		t.Fatalf("NextY = %.3f, want the body to have fallen at free-fall speed", tc.NextY)
+	}
+}
+
+func TestRiseIsNeverReversedByStepDownAssist(t *testing.T) {
+	t.Parallel()
+	b := newCombatMotionBot()
+	tc := &movement.TickContext{
+		B: b, CurrPos: mgl32.Vec3{0.5, 68.0, 0.5},
+		VelY: 0.3, LastPredictedY: 68.0,
+	}
+	tc.SetSyncedGroundedForTest(false)
+
+	tc.RunPhysicsAndCollisionsForTest()
+
+	if tc.VelY < 0.15 {
+		t.Fatalf("rising velocity = %.3f, want the arc to keep its rise (gravity only)", tc.VelY)
+	}
+	if tc.NextY <= tc.CurrPos.Y() {
+		t.Fatalf("NextY = %.3f, want the body still rising above %.3f", tc.NextY, tc.CurrPos.Y())
+	}
+}
+
+func TestWalkOffLedgeKeepsItsAssist(t *testing.T) {
+	t.Parallel()
+	b := newCombatMotionBot()
+	tc := &movement.TickContext{
+		B: b, CurrPos: mgl32.Vec3{0.5, 67.5, 0.5},
+		VelY: -0.1, LastPredictedY: 67.5,
+	}
+	tc.SetSyncedGroundedForTest(false)
+
+	tc.RunPhysicsAndCollisionsForTest()
+
+	// The slow step off a one-block ledge is what the assist exists for: the
+	// descent is driven toward the floor top at the assist's step speed, not
+	// left to gravity.
+	if tc.VelY > -0.05 || tc.NextY >= tc.CurrPos.Y() {
+		t.Fatalf("walk-off descent: VelY %.3f NextY %.3f, want the assist driving the body down toward the floor", tc.VelY, tc.NextY)
+	}
+}
+
 func TestForceWalkOwnsTheBodyUntilTheDeadline(t *testing.T) {
 	t.Parallel()
 	b := newCombatMotionBot()

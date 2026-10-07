@@ -4,6 +4,7 @@ package player
 import (
 	"fmt"
 	"log/slog"
+	"time"
 
 	"bedrock-ai/internal/bot"
 	"bedrock-ai/internal/bot/dimension"
@@ -401,6 +402,11 @@ func handleSetActorMotion(b *bot.Bot, pk packet.Packet) bool {
 		// Bedrock-style, exactly like the vanilla client does.
 		b.KnockbackX = p.Velocity.X()
 		b.KnockbackZ = p.Velocity.Z()
+		// The carried-motion decay runs out in ~8 ticks, but the arc the hit
+		// bought — rise, apex, fall — lasts longer. Corrections are skipped for
+		// this whole window; past it, server authority resumes whatever the
+		// decay left behind.
+		b.KnockbackUntil = time.Now().Add(1200 * time.Millisecond)
 		b.IsGrounded = false
 		b.Logger.Info("Bot motion set by SetActorMotion", "velocity", p.Velocity)
 	}

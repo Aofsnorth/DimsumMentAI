@@ -368,6 +368,11 @@ type Bot struct {
 	// bleeds it off Bedrock-style each tick.
 	KnockbackX float32
 	KnockbackZ float32
+	// KnockbackUntil bounds the protection window around a hit: while it is
+	// in the future, position corrections are not adopted (they are the move
+	// checker second-guessing the very motion it assigned) and the assigned
+	// hop velocity is not zeroed. One hit = one window.
+	KnockbackUntil time.Time
 	// ForceWalk is the raw, pathfinding-free push: a world-space direction and
 	// a deadline. A* refusing to route — a blocked bridge, terrain it cannot
 	// model — is exactly the case this exists for, so it deliberately clears
