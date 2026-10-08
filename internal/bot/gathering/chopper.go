@@ -92,8 +92,19 @@ func (tc *TreeChopper) fellTreesUntilTarget(ctx context.Context, targetCount int
 	bot := tc.rg.bot
 	felledBases := make(map[protocol.BlockPos]bool)
 	var pending []treeCandidate
+	var lastCandidate protocol.BlockPos
+	emptyRescans := 0
 
-	for attempt := 0; attempt < MaxGatherAttempts && collected < targetCount; attempt++ {
+	// One trunk only yields a handful of logs, so the attempt budget has to
+	// scale with the order: twelve attempts cannot fill a "200 kayu" request
+	// any more than one tree could. The cap still bounds runaway loops; the
+	// count and the reachable-tree supply end the job before it anyway.
+	attempts := MaxGatherAttempts
+	if targetCount/2 > attempts {
+		attempts = targetCount / 2
+	}
+
+	for attempt := 0; attempt < attempts && collected < targetCount; attempt++ {
 		select {
 		case <-ctx.Done():
 			return collected, felled
@@ -109,15 +120,31 @@ func (tc *TreeChopper) fellTreesUntilTarget(ctx context.Context, targetCount int
 			var maxRadius int32
 			pending, maxRadius = tc.findTreeCandidates(bot.GetCoords(), preferred, felledBases)
 			if len(pending) == 0 {
-				tc.logger.Info("No further log blocks found nearby",
-					"collected", collected, "target", targetCount, "maxRadius", maxRadius)
-				return collected, felled
+				// An empty scan usually means the terrain around the new position
+				// is not decoded yet, not that the forest ended. A live 200-log
+				// run surrendered here after one tree because the rescan saw only
+				// unloaded ground. Walk toward the last tree the scan did see —
+				// forests cluster — load fresh chunks, and rescan, before the
+				// job is allowed to report a shortage.
+				emptyRescans++
+				if emptyRescans > 3 || lastCandidate == (protocol.BlockPos{}) {
+					tc.logger.Info("No further log blocks found nearby",
+						"collected", collected, "target", targetCount, "maxRadius", maxRadius, "empty_rescans", emptyRescans)
+					return collected, felled
+				}
+				tc.logger.Info("Rescan empty, walking toward the last known trees and rescanning",
+					"toward", lastCandidate, "empty_rescans", emptyRescans)
+				bot.NavigateTo(mgl32.Vec3{float32(lastCandidate.X()) + 0.5, float32(lastCandidate.Y()), float32(lastCandidate.Z()) + 0.5})
+				sleepContext(ctx, 6*time.Second)
+				continue
 			}
+			emptyRescans = 0
 		}
 
 		best := pending[0]
 		pending = pending[1:]
 		felledBases[best.base] = true
+		lastCandidate = best.base
 		tc.logSelectedCandidate(best, attempt+1)
 
 		reached, got := tc.ChopTreeAt(ctx, best.base, targetCount-collected)
@@ -148,6 +175,11 @@ func GatherOutcome(collected, target, felled int) (success bool, errMsg string) 
 		return true, ""
 	case collected > 0:
 		return false, fmt.Sprintf("hanya dapat %d dari %d log (%d pohon ditebang)", collected, target, felled)
+	case felled > 0:
+		// The trunks came down but the drops never reached the inventory — that
+		// is a pickup failure, and reporting it as a tree shortage sent the
+		// model hunting for a forest that was standing right there.
+		return false, fmt.Sprintf("%d pohon ditebang tapi drop-nya gagal diambil", felled)
 	default:
 		return false, "tidak ada pohon yang bisa ditebang"
 	}
@@ -275,6 +307,19 @@ func (tc *TreeChopper) logSelectedCandidate(best treeCandidate, attempt int) {
 	)
 }
 
+// haltWalk stops the legs without cancelling the running gather. The
+// movement-layer StopMovement routes through Stop, which cancels the activity
+// context — and the gather's context IS that activity: the chop cancelled
+// itself the instant it arrived at the tree, reporting a felled trunk and
+// zero logs, every single time the tree needed walking to.
+func (tc *TreeChopper) haltWalk() {
+	if h, ok := tc.rg.bot.(interface{ HaltWalk() }); ok {
+		h.HaltWalk()
+		return
+	}
+	tc.rg.bot.StopMovement()
+}
+
 // ChopTreeAt walks to startPos and fells that trunk. It reports whether the base
 // was reached and how many logs the chop actually yielded.
 func (tc *TreeChopper) ChopTreeAt(ctx context.Context, startPos protocol.BlockPos, targetCount int) (reached bool, collected int) {
@@ -303,7 +348,7 @@ func (tc *TreeChopper) ChopTreeAt(ctx context.Context, startPos protocol.BlockPo
 		tc.logger.Warn("Could not reach tree base", "pos", startPos)
 		return false, 0
 	}
-	tc.rg.bot.StopMovement()
+	tc.haltWalk()
 
 	// startPos already IS the base (GatherWood traced it before selecting),
 	// so we don't trace again here. Callers from elsewhere that pass a

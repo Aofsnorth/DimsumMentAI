@@ -593,6 +593,36 @@ func (b *Bot) NearestTrackedPlayer(origin mgl32.Vec3, maxDist float32) (name str
 	return name, id, pos, found
 }
 
+// AskGatherDecision asks the model to choose a strategy for a gather
+// situation that has more than one sensible answer — currently "the upper
+// logs are out of reach": pillar up with blocks, or leave them and move on.
+// It returns exactly "scaffold" or "skip", defaulting to skip on any
+// failure, because a silent model must never wedge a running gather job.
+func (b *Bot) AskGatherDecision(situation string) string {
+	if b.AiClient == nil {
+		return "skip"
+	}
+	system := "You are deciding one step of a Minecraft wood-gathering job. " +
+		"Answer with exactly ONE word: 'scaffold' (pillar up with blocks to reach the logs) or 'skip' (leave them, find another tree). No other words."
+	reply, err := b.AiClient.Ask(b.Name, system, situation)
+	if err != nil {
+		b.Logger.Warn("gather decision LLM call failed", slog.String("error", err.Error()))
+		return "skip"
+	}
+	return ParseGatherDecision(reply)
+}
+
+// ParseGatherDecision folds a model reply into the one decision word the
+// gatherer understands. Anything that is not clearly "scaffold" is a skip —
+// the safe answer, since scaffolding spends blocks and time.
+func ParseGatherDecision(reply string) string {
+	lower := strings.ToLower(strings.TrimSpace(reply))
+	if strings.Contains(lower, "scaffold") {
+		return "scaffold"
+	}
+	return "skip"
+}
+
 // SetSneakHeld raises or drops the combat shield hold. It is a combat-owned
 // state, not an emote: the shield only blocks while the input stream claims a
 // crouch, so this flag is what turns "the bot has a shield" into "the bot is

@@ -49,6 +49,15 @@ func (tc *TreeChopper) chopTree(ctx context.Context, basePos protocol.BlockPos, 
 		}
 		if len(left) >= len(logBlocks) {
 			tc.logger.Warn("Tree not finished: remaining logs could not be reached", "left", len(left), "base", basePos)
+			// The upper half is out of arm's reach, and there is more than one
+			// sensible answer: pillar up with blocks and take them, or leave the
+			// top standing and move to the next tree. The model picks; the
+			// gatherer only executes. A model that cannot answer costs nothing —
+			// the default is to skip.
+			if tc.maybeScaffoldToLogs(ctx, left, basePos) {
+				tc.chopLogBlocks(ctx, left)
+				left = tc.stillLogs(left)
+			}
 			break
 		}
 		tc.logger.Info("Tree not finished, working the remaining logs", "left", len(left), "round", round+1)
@@ -65,9 +74,24 @@ func (tc *TreeChopper) chopTree(ctx context.Context, basePos protocol.BlockPos, 
 	// Verify the broken logs actually enter the inventory before counting them.
 	// Previously the bot could break a log, fail to pick it up, and still
 	// announce that gathering was done.
+	//
+	// One sweep raced three separate delays: the drops falling from the top of
+	// the trunk, their pickup cooldown, and the item-entity packet arriving.
+	// On a live server all three lost the race and a felled tree reported zero
+	// logs — so the sweep is retried until something lands in the inventory or
+	// the tries run out.
 	before := tc.rg.looter.currentItemCount("log")
-	tc.rg.looter.CollectAllDrops(ctx, 8.0)
-	got := tc.rg.looter.currentItemCount("log") - before
+	got := 0
+	for try := 0; try < 4 && ctx.Err() == nil; try++ {
+		tc.rg.looter.CollectAllDrops(ctx, 8.0)
+		if !sleepContext(ctx, 700*time.Millisecond) {
+			break
+		}
+		got = tc.rg.looter.currentItemCount("log") - before
+		if got > 0 {
+			break
+		}
+	}
 	if got <= 0 {
 		tc.logger.Warn("Wood broken but not picked up", "target", targetCount)
 		return 0
@@ -83,6 +107,57 @@ func (tc *TreeChopper) chopTree(ctx context.Context, basePos protocol.BlockPos, 
 
 // maxChopRounds bounds how many times one trunk is re-worked.
 const maxChopRounds = 4
+
+// gatherDecider is the optional view of the bot that can ask the model to
+// choose between two gather strategies. It is an assertion rather than a
+// method on the gathering Bot interface so the test doubles stay untouched;
+// a bot without it always skips, which is the behaviour before this existed.
+type gatherDecider interface {
+	AskGatherDecision(situation string) string
+}
+
+// maybeScaffoldToLogs handles the "the good wood is up there" case. It asks
+// the model whether to pillar up to the unreachable logs or leave them; on
+// "scaffold" it builds up to just below the lowest unreachable log so the
+// next chop rounds can reach it. Reports whether the body is now up at the
+// logs (the caller re-chops; DescendFromTower brings it back down after).
+func (tc *TreeChopper) maybeScaffoldToLogs(ctx context.Context, left []protocol.BlockPos, basePos protocol.BlockPos) bool {
+	if len(left) == 0 {
+		return false
+	}
+	lowest := left[0]
+	highest := left[0]
+	for _, pos := range left {
+		if pos.Y() < lowest.Y() {
+			lowest = pos
+		}
+		if pos.Y() > highest.Y() {
+			highest = pos
+		}
+	}
+	situation := fmt.Sprintf(
+		"The tree at X:%d Y:%d Z:%d still has %d logs above your reach (lowest unreachable at Y:%d, you stand at Y:%d). "+
+			"Answer exactly one word: 'scaffold' to pillar up with blocks and chop them, or 'skip' to leave the top and move to another tree.",
+		basePos.X(), basePos.Y(), basePos.Z(), len(left), lowest.Y(), int(tc.rg.bot.GetCoords().Y()))
+
+	decision := "skip"
+	if decider, ok := tc.rg.bot.(gatherDecider); ok {
+		decision = decider.AskGatherDecision(situation)
+	}
+	tc.logger.Info("Gather decision for unreachable upper logs",
+		"decision", decision, "logs", len(left), "lowest_y", lowest.Y(), "base", basePos)
+	if decision != "scaffold" {
+		return false
+	}
+	if _, _, ok := tc.rg.scaffold.FindScaffoldItem(); !ok {
+		tc.logger.Info("Scaffold chosen but no blocks to build with; skipping the top")
+		return false
+	}
+	// Standing at the lowest unreachable log's level puts the whole upper
+	// trunk inside swing reach; TowerUpTo pillars from right here.
+	tc.rg.scaffold.TowerUpTo(ctx, float32(lowest.Y()))
+	return true
+}
 
 // stillLogs filters positions down to those the world still reports as logs.
 func (tc *TreeChopper) stillLogs(positions []protocol.BlockPos) []protocol.BlockPos {
@@ -337,7 +412,7 @@ func (tc *TreeChopper) returnToReach(ctx context.Context, pos protocol.BlockPos)
 
 	tc.logger.Debug("Out of reach after towering, walking back to log", "pos", pos)
 	if tc.rg.bot.NavigateToBlock(pos.X(), pos.Y()-1, pos.Z(), 2.0) {
-		tc.rg.bot.StopMovement()
+		tc.haltWalk()
 	}
 }
 
@@ -541,17 +616,40 @@ func (tc *TreeChopper) equipBestAxe() {
 	inv := bot.GetInventorySlots()
 	names := bot.GetItemNames()
 
-	axes := []string{"netherite_axe", "diamond_axe", "iron_axe", "stone_axe", "wooden_axe", "golden_axe"}
-	for _, axeName := range axes {
+	// Tiered: the exact vanilla tiers first, then any name that carries "axe"
+	// or "kapak" anywhere — custom servers (this one included) rename or add
+	// axes, and a matcher keyed to six exact strings declared the gift axe
+	// "item custom aneh-aneh" while it sat in the inventory.
+	tiers := []func(string) bool{
+		func(n string) bool { return strings.Contains(n, "netherite_axe") },
+		func(n string) bool { return strings.Contains(n, "diamond_axe") },
+		func(n string) bool { return strings.Contains(n, "iron_axe") },
+		func(n string) bool { return strings.Contains(n, "stone_axe") },
+		func(n string) bool { return strings.Contains(n, "wooden_axe") },
+		func(n string) bool { return strings.Contains(n, "golden_axe") },
+		// Any axe-shaped name at all, any language.
+		func(n string) bool { return strings.Contains(n, "axe") || strings.Contains(n, "kapak") },
+	}
+	for _, match := range tiers {
 		for slot, item := range inv {
 			if item.Count <= 0 {
 				continue
 			}
-			name := names[item.NetworkID]
-			if strings.Contains(strings.ToLower(name), axeName) {
+			name := strings.ToLower(names[item.NetworkID])
+			if match(name) {
 				_ = bot.EquipItem(slot)
 				return
 			}
 		}
 	}
+	// Nothing matched: dump what the inventory DOES hold, so the next run's
+	// log says what the server called the axe instead of leaving a silent gap.
+	held := make([]string, 0, len(inv))
+	for slot, item := range inv {
+		if item.Count <= 0 {
+			continue
+		}
+		held = append(held, fmt.Sprintf("slot=%d name=%q", slot, names[item.NetworkID]))
+	}
+	tc.logger.Warn("equipBestAxe: no axe recognised in inventory", "inventory", strings.Join(held, ", "))
 }

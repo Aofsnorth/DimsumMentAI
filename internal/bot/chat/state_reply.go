@@ -14,7 +14,15 @@ import (
 const stateReplyRules = `
 [STATE CHANGE REPLY]
 You have just changed what you are doing, in response to the player's last
-message. Say so in one short sentence, in the language and tone you already use.
+message. Nothing written here runs — no tags, no tasks.
+- The change is ALREADY VISIBLE in the world (the player can see you stopped,
+  walked, attacked). Most of the time the human move is <silent/> — the world
+  said it already.
+- If words add something (a joke, a reaction, a fact they cannot see): ONE
+  short fragment, reaction first ("wkwk", "sip", "oke dah"), the way a friend
+  types. NEVER a report sentence — "udah aku berhenti", "aku sudah berhenti
+  ikutin" is a status log, not a person. Wrong: "Sip, aku udah berhenti ngikutin
+  kamu kok." Right: "oke dah" or <silent/>.
 - Report ONLY the change named below. Do not mention any other state, task, item or mob.
 - DO NOT emit <action>, <plan> or <followup> tags. Nothing written here is executed.
 - DO NOT ask a follow-up question and DO NOT offer to start new work.

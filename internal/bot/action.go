@@ -164,6 +164,24 @@ func (b *Bot) ForceWalk(yaw float32, seconds float32) {
 	}
 }
 
+// HaltWalk clears the walking state WITHOUT cancelling the running job.
+//
+// StopMovement routes through Stop, which cancels the activity context — and
+// the gatherer navigates to its own trees mid-job, so the old call made every
+// chop cancel itself the moment it arrived: "reached the tree, collected
+// zero", every time the tree needed walking to.
+func (b *Bot) HaltWalk() {
+	b.Mu.Lock()
+	defer b.Mu.Unlock()
+	b.MovementState = "idle"
+	b.CurrentPath = nil
+	b.PathIndex = 0
+	b.TargetPos = mgl32.Vec3{}
+	b.TargetPlayerName = ""
+	b.LookTargetName = ""
+	b.LookTargetUntil = time.Time{}
+}
+
 // ActivityContext returns the context that bounds the bot's current job.
 //
 // Long-running work started from an action must derive its context from here

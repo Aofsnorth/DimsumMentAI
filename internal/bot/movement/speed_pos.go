@@ -160,11 +160,30 @@ func (tc *TickContext) computeMoveSpeed(absYawDiff float64) (float32, bool, bool
 
 func (tc *TickContext) computeBaseSpeed() (float32, bool, bool) {
 	speed := float32(0.215)
+	// A latched walk trip claims NO sprint flag on the wire, so the body must
+	// also move at walking pace: sprint speed without the flag is exactly the
+	// claim-vs-displacement mismatch anticheats read. SprintHint takes b.Mu
+	// itself, so it is read before this function's own critical section (the
+	// mutex is not reentrant).
+	walkLatched := false
+	if tc.B != nil {
+		if sprint, _, latched := tc.B.SprintHint(); latched && !sprint {
+			walkLatched = true
+		}
+	}
 	tc.B.Mu.Lock()
-	if tc.HasPath && len(tc.B.CurrentPath)-tc.B.PathIndex > 2 {
+	if !walkLatched && tc.HasPath && len(tc.B.CurrentPath)-tc.B.PathIndex > 2 {
 		speed = 0.28
 	}
 	tc.B.Mu.Unlock()
+	// The shield hold claims a crouch on the wire, and a crouching player is
+	// slow — that is the entire cost of blocking. Moving at full pace while
+	// the input stream says sneaking is the same claim-vs-speed mismatch, so
+	// the hold caps the body at vanilla sneak speed. The ladder and swim
+	// sneaks are separate flags and keep their own speeds.
+	if tc.B != nil && tc.B.SneakHeldState() && speed > 0.065 {
+		speed = 0.065
+	}
 
 	isMidJump := !tc.IsGrounded || tc.VelY > 0.05
 	needsStepUp := false

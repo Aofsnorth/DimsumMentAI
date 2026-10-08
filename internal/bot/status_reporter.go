@@ -43,6 +43,19 @@ var quietSuccessActions = map[string]bool{
 	// one (chat latency lands before the walk ends) reads as a lie.
 	"goto": true, "gotoblock": true, "standon": true, "come": true,
 	//
+	// Results the player watches happen. They ASKED for the command and saw it
+	// typed, the duel starts in front of them, the shield goes on the arm —
+	// announcing "udah aku ketik command-nya" is narrating the visible, and
+	// narrating the visible is what made the chat read like a build log. A
+	// failure still narrates (the next block below), because "gagal, katanya
+	// /pvp doang" is news a player needs.
+	"cmd": true, "pvp": true, "attack": true, "shield": true, "block": true,
+	"armor": true, "autoarmor": true, "autoeat": true, "mount": true,
+	"dismount": true, "unmount": true, "give": true, "heal": true,
+	"potion": true, "run": true, "stroll": true, "force_walk": true,
+	"equip": true, "drop": true, "place": true, "eat": true, "shoot": true,
+	"bow": true, "crossbow": true, "tame": true, "shear": true, "milk": true,
+	//
 	// Deliberately absent: status, inventory, todo, lookat. Those are admin
 	// commands the player typed, and going silent in reply to a direct question
 	// is the one failure this table must not cause.
@@ -193,15 +206,15 @@ func reportActionStatusAsync(b *Bot, user string, status event.ActionStatus) {
 		invSummary,
 	)
 	systemPrompt += "\n\n[STATUS REPLY RULES]\n" +
-		"You are generating a short status update after the bot just performed an action for the player.\n" +
-		"- Reply in natural Indonesian, following the player's tone; do not force slang like cuy or translate internal action labels into speech.\n" +
-		"- Report concrete outcomes, not generic success announcements. Never turn waypoints into found or collected items.\n" +
+		"You are a Minecraft player who just did the thing below. You are writing chat to a friend who can probably SEE you doing it.\n" +
+		"- First question: is this even worth saying? If the player watched it happen (walked there, typed the command, equipped the thing) the human answer is <silent/> — say NOTHING. Silence after visible actions is what people do.\n" +
+		"- If it IS worth saying: react first like a gamer (\"wkwk\", \"gila\", \"udah\", \"done\"), one short fragment. NEVER open with a report phrase like \"udah aku ketik\", \"sudah selesai\", \"aku sudah\" — that is a status log, not a person.\n" +
+		"- Reply in natural Indonesian matching the player's tone; never translate internal action labels into speech.\n" +
+		"- Report concrete outcomes only when the player is waiting on them (a count they asked for, a thing you crafted for them). Never turn waypoints into found items.\n" +
 		"- DO NOT use action tags (<action>, <plan>, <followup>, etc.).\n" +
 		"- DO NOT use raw item IDs like 'oak_planks'; use friendly names like 'Oak Planks'.\n" +
-		"- Keep it under 25 words unless the result needs explanation.\n" +
-		"- Answer ONLY the latest ACTION RESULT nonce below; ignore older status prompts in this conversation.\n" +
-		"- If the action failed, briefly explain why and offer to help or suggest what to do next.\n" +
-		"- If it succeeded, just say what happened naturally."
+		"- Under 15 words. If the action failed, say what went wrong in one casual line — that IS worth saying.\n" +
+		"- Answer ONLY the latest ACTION RESULT nonce below; ignore older status prompts in this conversation."
 
 	prompt := BuildStatusPrompt(status)
 

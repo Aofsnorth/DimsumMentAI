@@ -56,7 +56,20 @@ func ExecutePlan(b *bot.Bot, steps []Step, user string) {
 //
 // Craft keeps its structured path, which already returns the real outcome.
 func ExecuteAndWait(b *bot.Bot, label, param, user string) event.ActionStatus {
-	return ExecuteAndWaitWithTimeout(b, label, param, user, statusTimeout)
+	return ExecuteAndWaitWithTimeout(b, label, param, user, actionReportTimeout(label))
+}
+
+// actionReportTimeout resolves how long a step may run before "no result"
+// means failure. Most actions answer within seconds, but a big gather —
+// "cariin 200 kayu" — is a job measured in many minutes, and the planner
+// must keep waiting for its terminal report instead of declaring the step
+// dead at ninety seconds and re-running it over the top of the first try.
+func actionReportTimeout(label string) time.Duration {
+	switch strings.ToLower(strings.TrimSpace(label)) {
+	case "gather", "chop", "automine", "fish", "harvest", "explore":
+		return 45 * time.Minute
+	}
+	return statusTimeout
 }
 
 // ExecuteAndWaitWithTimeout is ExecuteAndWait with the report timeout passed in, so the
@@ -126,8 +139,12 @@ func waitForActionSettled(b *bot.Bot, label string) {
 		// loop, so its end is observable; the timeout only bounds the wait for
 		// a loop that is not running.
 		waitForEmoteSettled(b, 5*time.Second)
-	case "gather", "mine", "automine", "loot", "clear", "scan":
-		waitForGatheringIdle(b, 90*time.Second)
+	case "gather", "chop", "mine", "automine", "loot", "clear", "scan":
+		// Event-driven: the wait returns the moment the gatherer stops. The
+		// long cap exists for jobs like "200 kayu" that legitimately run for
+		// many minutes — cutting them at ninety seconds started the next plan
+		// step (craft, place) while the bot was still chopping.
+		waitForGatheringIdle(b, actionReportTimeout(label))
 	case "craft":
 		time.Sleep(900 * time.Millisecond)
 	case "follow":

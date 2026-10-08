@@ -175,9 +175,25 @@ func (tc *TickContext) applyServerSupport() {
 	if absFloat32(tc.CurrPos.Y()-sy) > 0.02 {
 		return
 	}
+	// The hold ends the moment the box demonstrably stands over nothing. The
+	// carrying cell is either the one containing the held height (a slab, a
+	// stair, a full-collision decor block) or the one below it (a thin decor
+	// the model calls passable) — and a cell the model has not decoded cannot
+	// outvote the host that lifted the body onto it.
+	if !tc.bodyOverlapsSupportColumn(tc.CurrPos.X(), tc.CurrPos.Z(), sy) &&
+		tc.supportColumnConfirmedEmpty(tc.CurrPos.X(), tc.CurrPos.Z(), sy) {
+		return
+	}
 	tc.NextY = sy
 	tc.VelY = 0
 	tc.IsGrounded = true
+	// Renew while the box still overlaps, so walking ACROSS a held surface —
+	// the lobby's carpets and decor the model reads thinner than the host's
+	// collision — does not lapse between corrections and bounce the body
+	// down-and-up every step.
+	tc.B.Mu.Lock()
+	tc.B.ServerSupportAt = time.Now()
+	tc.B.Mu.Unlock()
 }
 
 // holdServerSupport reports whether the host recently lifted the body to its
@@ -200,6 +216,46 @@ func (tc *TickContext) holdServerSupport() bool {
 		tc.B.Mu.Unlock()
 	}
 	return true
+}
+
+// supportColumnConfirmedEmpty reports whether every footprint cell that could
+// carry the held surface is LOADED and non-solid — the host's hold is then
+// demonstrably over nothing and must lapse. Unloaded cells abstain: a model
+// that has not decoded the ground cannot outvote the host that lifted the
+// body onto it.
+func (tc *TickContext) supportColumnConfirmedEmpty(x, z float32, sy float32) bool {
+	if tc.B == nil || tc.B.WorldCache == nil {
+		return false
+	}
+	cell := int32(math.Floor(float64(sy)))
+	const half = 0.299
+	for _, dy := range [...]int32{0, -1} {
+		for _, dx := range [...]float32{-half, half} {
+			for _, dz := range [...]float32{-half, half} {
+				bx, bz := int32(math.Floor(float64(x+dx))), int32(math.Floor(float64(z+dz)))
+				rid, loaded := tc.B.WorldCache.GetBlockRID(bx, cell+dy, bz)
+				if !loaded {
+					return false
+				}
+				if tc.B.WorldCache.IsRIDSolid(rid) {
+					return false
+				}
+			}
+		}
+	}
+	return true
+}
+
+// bodyOverlapsSupportColumn reports whether the body's footprint still stands
+// over either of the two cells that can carry a host-held surface: the cell
+// containing the held height (a slab, a stair, a full-collision decor block)
+// or the one below it (a thin decor the model calls passable). The
+// server-support hold uses it because the whole point of the hold is that the
+// model is wrong about that surface's height — its own solidity vote cannot
+// be the arbiter.
+func (tc *TickContext) bodyOverlapsSupportColumn(x, z float32, sy float32) bool {
+	cell := int32(math.Floor(float64(sy)))
+	return tc.bodyOverlapsSupportAt(x, z, cell+1) || tc.bodyOverlapsSupportAt(x, z, cell)
 }
 
 // anchorCorrectionLimit is the largest Y gap the anchor will silently correct.
@@ -636,7 +692,22 @@ func (tc *TickContext) ApplyGroundLanding() {
 	}
 
 	if hasGroundBelow {
-		tc.NextY = landingTop
+		// The host may hold the feet ABOVE the model's surface — lobby decor
+		// (carpets, paths) whose collision is taller than the model's top
+		// offset. Landing on the model's top drags the body down into a
+		// correct-up, sink-down loop with the host on every step. When the
+		// support is fresh, sits above the model's top, and the body is already
+		// at or near it, land at the support height instead.
+		landingY := landingTop
+		tc.B.Mu.Lock()
+		sy, at := tc.B.ServerSupportY, tc.B.ServerSupportAt
+		tc.B.Mu.Unlock()
+		if !at.IsZero() && time.Since(at) <= serverSupportWindow &&
+			sy > landingY && tc.CurrPos.Y() >= sy-0.3 &&
+			tc.bodyOverlapsSupportColumn(tc.CurrPos.X(), tc.CurrPos.Z(), sy) {
+			landingY = sy
+		}
+		tc.NextY = landingY
 		tc.VelY = 0.0
 		tc.IsGrounded = true
 		if tc.IsParkourJump {

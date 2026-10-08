@@ -72,6 +72,10 @@ type CombatManager struct {
 	// target that soaks several without dying is armoured, and that count is
 	// what moves the doctrine from sword to axe.
 	swingsInFight int
+	// lastBanter spaces the mid-duel chat moments. A player fighting talks
+	// DURING the fight — a taunt here, a reaction there — not just before and
+	// after it; the intervals are what keep it human instead of spammy.
+	lastBanter time.Time
 	// Shot is the state of the ranged shot currently in flight: the draw is
 	// held across several ticks before the release goes out.
 	Shot Shot
@@ -166,6 +170,7 @@ func (cm *CombatManager) EngageTarget(id uint64) {
 	cm.pvpTarget = ""
 	cm.inCombat = true
 	cm.swingsInFight = 0
+	cm.lastBanter = time.Now()
 	cm.logger.Info("Engaging combat target", "name", info.Name, "id", id, "type", info.Type)
 
 	go cm.equipBestWeapon()
@@ -185,6 +190,7 @@ func (cm *CombatManager) EngagePlayer(username string) bool {
 	cm.pvpTarget = username
 	cm.inCombat = true
 	cm.swingsInFight = 0
+	cm.lastBanter = time.Now()
 	cm.logger.Info("Engaging PVP target", "username", username, "id", id)
 	go cm.equipBestWeapon()
 	return true

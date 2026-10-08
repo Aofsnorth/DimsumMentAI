@@ -780,12 +780,24 @@ func handleDrop(b *bot.Bot, param, user string) {
 
 			if heldItem.Count == 0 || heldItemName == "" {
 				b.Logger.Warn("handleDrop: no item in hand")
+				// The drop is a request somebody made; a silent return told the model
+				// nothing and the plan step waited out its timeout before failing.
+				ReportStatus(b, user, event.ActionStatus{
+					Action:  "drop",
+					Success: false,
+					Error:   "nggak ada item di tangan buat di-drop",
+				})
 				return
 			}
 			itemName = heldItemName
 			b.Logger.Info("handleDrop: dropping held item", "item", heldItemName, "slot", heldSlot)
 		} else if itemName == "" {
 			// Neither specific item nor held item — nothing to drop
+			ReportStatus(b, user, event.ActionStatus{
+				Action:  "drop",
+				Success: false,
+				Error:   "butuh nama barang, contoh: drop:oak_log,1",
+			})
 			return
 		}
 
@@ -850,8 +862,10 @@ func handleDrop(b *bot.Bot, param, user string) {
 			}
 
 			// Force-stop so the look loop stops interpolating yaw toward path
-			// direction and instead aims at the player.
-			b.StopMovement()
+			// direction and instead aims at the player. HaltWalk, not StopMovement:
+			// the stop variant cancels the activity context, which would murder
+			// any job the drop is a step inside.
+			b.HaltWalk()
 
 			// Re-fetch BOTH positions after navigation/stop. The recipient may
 			// have moved while we walked, and our own position certainly did —
@@ -900,8 +914,18 @@ func handleDrop(b *bot.Bot, param, user string) {
 		b.Logger.Debug("handleDrop: executing drop", "item", itemName, "count", count)
 		if err := b.InventoryMgr.DropItem(itemName, count); err != nil {
 			b.Logger.Warn("handleDrop: DropItem failed", "item", itemName, "error", err)
+			ReportStatus(b, user, event.ActionStatus{
+				Action:  "drop",
+				Item:    itemName,
+				Success: false,
+				Error:   err.Error(),
+			})
 			return
 		}
+		// The drop used to finish silently on both paths — success and failure —
+		// so the model never learned the outcome and every drop plan step died
+		// on its timeout while the item sat in the inventory.
+		ReportStatus(b, user, event.ActionStatus{Action: "drop", Item: itemName, Count: count, Success: true})
 
 		if foundPlayer {
 			// No backstep: the bot already stands one block farther than the

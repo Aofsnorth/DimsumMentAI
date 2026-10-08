@@ -81,6 +81,7 @@ func (cm *CombatManager) Tick(ctx context.Context) {
 	plan := MobMovePlan(normalizedMobName(target), HorizontalDistance(botPos, target.Position), cm.bot.Appetite())
 	if pvp {
 		plan = PvPPlan(HorizontalDistance(botPos, target.Position))
+		cm.maybeBanter(target)
 	}
 	if plan.Flee {
 		// Put something between the body and the blast before leaving, if there
@@ -174,6 +175,42 @@ const (
 	fairReach     float32       = 3.0
 	meleeCooldown time.Duration = 500 * time.Millisecond
 )
+
+// The mid-duel banter window. A player fighting trades lines DURING the
+// fight — every ten to fifteen seconds there is a chance of one very short
+// message, and most of those moments produce nothing. The spacing and the
+// chance are what keep it human; a line every swing is a spam bot.
+const (
+	pvpBanterCooldown = 10 * time.Second
+	pvpBanterChance   = 45 // percent chance per window
+)
+
+// SetBanterChanceForTest pins the banter probability so a test can make the
+// normally-random moment deterministic.
+var pvpBanterChanceOverride = -1
+
+// maybeBanter opens one optional chat moment during a duel. The model may
+// send one short line or stay silent; the decision is entirely its own, and
+// nothing here constructs the sentence.
+func (cm *CombatManager) maybeBanter(target *entity.Info) {
+	cm.mu.Lock()
+	due := time.Since(cm.lastBanter) >= pvpBanterCooldown
+	if due {
+		cm.lastBanter = time.Now()
+	}
+	cm.mu.Unlock()
+	if !due {
+		return
+	}
+	chance := pvpBanterChance
+	if pvpBanterChanceOverride >= 0 {
+		chance = pvpBanterChanceOverride
+	}
+	if time.Now().UnixNano()%100 >= int64(chance) {
+		return
+	}
+	cm.bot.InjectAIEvent("[SYSTEM EVENT: Mid-duel moment against " + target.Name + ". If you have ONE very short line a real player would type right now (taunt, reaction, trash talk), send it as plain chat with no action tags. Otherwise stay completely silent.]")
+}
 
 // swingAt is the melee half of a tick: the range check, the cooldown, the sight
 // check, the hit, and the durability that has to be paid for it.
