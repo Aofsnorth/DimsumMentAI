@@ -1753,11 +1753,7 @@ func (r *Runner) waterWorldOf() waterWorld {
 	if r.b == nil {
 		return nil
 	}
-	model := r.b.GetLocalWorldModel()
-	if model == nil {
-		return nil
-	}
-	water, ok := model.(waterWorld)
+	water, ok := r.b.GetLocalWorldModel().(waterWorld)
 	if !ok {
 		return nil
 	}

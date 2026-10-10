@@ -41,12 +41,13 @@ func PlanBannerPattern(inv Inventory, pattern string) (Plan, error) {
 		return Plan{}, fmt.Errorf("loom: no banner in the bag to pattern")
 	}
 
-	inputs := []StagedInput{{
+	inputs := make([]StagedInput, 0, 2)
+	inputs = append(inputs, StagedInput{
 		Slot:       loom.Inputs[0],
 		SourceSlot: banner.Slot,
 		ItemName:   banner.Name,
 		Count:      1,
-	}}
+	})
 
 	if !resolved.ConsumesDye {
 		// The base border pattern is what a plain dye produces, so the banner

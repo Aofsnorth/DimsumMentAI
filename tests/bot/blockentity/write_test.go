@@ -32,10 +32,8 @@ type fakeBot struct {
 	signText map[[3]int32]string
 	held     protocol.ItemStack
 
-	echoSigns   bool
-	writeErr    error
-	blockedCell [3]int32
-	blockedSet  bool
+	echoSigns bool
+	writeErr  error
 
 	writes  []packet.Packet
 	lookAts []mgl32.Vec3

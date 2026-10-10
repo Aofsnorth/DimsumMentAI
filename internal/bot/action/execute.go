@@ -171,15 +171,6 @@ func lootHandler(radius float32, msg string) ActionHandler {
 	}
 }
 
-// storeItem stores the normalised item name in a chest.
-func storeItem(b *bot.Bot, param string) {
-	go func() {
-		itemName := NormalizeItemName(param)
-		success := b.InventoryMgr.Chest().StoreItem(context.Background(), itemName, 0)
-		b.Logger.Debug("store action complete", "success", success, "item", itemName)
-	}()
-}
-
 // harvestCrops harvests the crop type described by param. The farmer returns
 // how much it actually picked, so that is what the step reports.
 func harvestCrops(b *bot.Bot, param, user string) {
@@ -1168,14 +1159,6 @@ func lookupHandler(label string) (ActionHandler, bool) {
 	defer ActionHandlersMu.RUnlock()
 	handler, ok := ActionHandlers[label]
 	return handler, ok
-}
-
-// registerHandler adds or replaces a handler. Used by the init() functions
-// that wire up a family of labels.
-func registerHandler(label string, handler ActionHandler) {
-	ActionHandlersMu.Lock()
-	defer ActionHandlersMu.Unlock()
-	ActionHandlers[label] = handler
 }
 
 // Execute maps an AI-parsed action tag to bot behaviors.

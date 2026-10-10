@@ -63,7 +63,7 @@ func TestArrivingAtEndOfPathDoesNotDeadlockOnSprintHint(t *testing.T) {
 	acquired := make(chan struct{})
 	go func() {
 		b.Mu.Lock()
-		b.Mu.Unlock()
+		b.Mu.Unlock() //nolint:staticcheck // the bare lock/unlock pair IS the availability probe
 		close(acquired)
 	}()
 	select {

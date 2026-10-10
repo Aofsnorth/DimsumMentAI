@@ -45,14 +45,6 @@ func (c OneBlockConfidence) String() string {
 	}
 }
 
-// oneBlockThreshold is how many distinct blocks have to be in view before the
-// world stops looking like a single block.
-//
-// Two is chosen over one on purpose. A bot standing on grass in the middle of a
-// field sees only the block it is on; adding the one it is about to step onto
-// takes that to two, and a single-block world never gets there.
-const oneBlockThreshold = 2
-
 // DetectOneBlock reads the world from the block summary a snapshot already
 // built.
 //

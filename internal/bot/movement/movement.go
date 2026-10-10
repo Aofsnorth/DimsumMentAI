@@ -273,7 +273,7 @@ func SendInputLoop(ctx context.Context, b *bot.Bot, gd minecraft.GameData) {
 	// that outlives a single TickContext.
 	gait := NewGaitState()
 	stride := &StridePhase{}
-	startStallWatchdog(b, ctx)
+	startStallWatchdog(ctx, b)
 
 	var lastPredictedY float32 = initPos.Y()
 	prevPos := initPos
@@ -335,10 +335,6 @@ func SendInputLoop(ctx context.Context, b *bot.Bot, gd minecraft.GameData) {
 			if tAck {
 				tc.TeleportAck = true
 				tc.PrevPos = tPos
-				prevPos = tPos
-				lastPredictedY = tPos.Y()
-				smoothLookYaw = tc.Yaw
-				smoothLookPitch = tc.Pitch
 				if tc.MState == "walk_to" || tc.MState == "follow" {
 					dx := tc.CurrPos.X() - lastProgressPos.X()
 					dz := tc.CurrPos.Z() - lastProgressPos.Z()

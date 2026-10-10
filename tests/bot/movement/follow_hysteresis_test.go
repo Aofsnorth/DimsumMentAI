@@ -108,7 +108,7 @@ func TestFollowStopTargetDoesNotFlap(t *testing.T) {
 
 	wantsMoveVals := make([]bool, 0, 40)
 	for tick := 0; tick < 40; tick++ {
-		dist := float32(2.0)
+		var dist float32
 		if tick%2 == 0 {
 			dist = 1.98
 		} else {

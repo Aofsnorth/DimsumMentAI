@@ -6,6 +6,7 @@
 package combat_test
 
 import (
+	"context"
 	"errors"
 	"sync"
 	"testing"
@@ -34,7 +35,7 @@ func TestPvPReachIsFair(t *testing.T) {
 	if !cm.EngagePlayer("steve") {
 		t.Fatal("EngagePlayer(steve) = false, want tracked player")
 	}
-	cm.Tick(nil)
+	cm.Tick(context.TODO())
 
 	f.mu.Lock()
 	outOfReach := len(f.packets)
@@ -50,7 +51,7 @@ func TestPvPReachIsFair(t *testing.T) {
 		pos mgl32.Vec3
 	}{id: 42, pos: mgl32.Vec3{2.0, 64, 0}}
 	f.mu.Unlock()
-	cm.Tick(nil)
+	cm.Tick(context.TODO())
 
 	f.mu.Lock()
 	defer f.mu.Unlock()

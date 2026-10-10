@@ -54,20 +54,20 @@ func NewRotationDoomedForTest(buffer int) (*Logger, error) {
 		return nil, err
 	}
 	path := filepath.Join(dir, "events.jsonl")
-	if err := os.WriteFile(path, nil, 0o644); err != nil {
+	if err := os.WriteFile(path, nil, 0o600); err != nil {
 		return nil, err
 	}
 
 	// A non-empty directory where events.jsonl.1 belongs.
 	blocker := path + ".1"
-	if err := os.Mkdir(blocker, 0o755); err != nil {
+	if err := os.Mkdir(blocker, 0o700); err != nil {
 		return nil, err
 	}
-	if err := os.WriteFile(filepath.Join(blocker, "occupied"), []byte("x"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(blocker, "occupied"), []byte("x"), 0o600); err != nil {
 		return nil, err
 	}
 
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
 		return nil, err
 	}

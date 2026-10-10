@@ -236,14 +236,3 @@ func (r *Runner) Idle(snap Snapshot) {
 		}
 	}
 }
-
-// idleProgress is how much of the current rest period is left, for the state
-// text. Zero when not idling.
-func (r *Runner) idleProgress(now time.Time) time.Duration {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if r.idleUntil.IsZero() || !now.Before(r.idleUntil) {
-		return 0
-	}
-	return r.idleUntil.Sub(now)
-}

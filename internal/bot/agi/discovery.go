@@ -234,8 +234,5 @@ func SplitList(text string) []string {
 // IsBareTerm reports whether a term is a single block or item name, with no
 // rendered detail attached.
 func IsBareTerm(term string) bool {
-	if strings.ContainsAny(term, " \t()") {
-		return false
-	}
-	return true
+	return !strings.ContainsAny(term, " \t()")
 }

@@ -147,12 +147,13 @@ func idleKeys(s agi.Snapshot) []struct {
 		descriptions[g.Name] = g.Description
 	}
 
-	out := []struct {
+	questions := jev.BuildGoalQuestion(agi.GoalsFor(goals), descriptions, "")
+	out := make([]struct {
 		Name string
 		Raw  json.RawMessage
-	}{}
+	}, 0, len(questions))
 
-	for name, raw := range jev.BuildGoalQuestion(agi.GoalsFor(goals), descriptions, "") {
+	for name, raw := range questions {
 		out = append(out, struct {
 			Name string
 			Raw  json.RawMessage

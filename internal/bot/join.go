@@ -24,12 +24,11 @@ const MaxServerSwitches = 10
 // other holders of b.Mu wait on network I/O, and holding b.Mu across that would
 // turn a quick switch request into a stall.
 type joinState struct {
-	mu             sync.Mutex
-	pending        string
-	applied        string
-	hook           func(address string) error
-	sessionCancel  context.CancelFunc
-	switchFailures int
+	mu            sync.Mutex
+	pending       string
+	applied       string
+	hook          func(address string) error
+	sessionCancel context.CancelFunc
 }
 
 // SetJoinHook installs the function that actually redirects the dialer. It is a

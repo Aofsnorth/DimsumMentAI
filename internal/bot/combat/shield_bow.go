@@ -113,7 +113,7 @@ func (cm *CombatManager) HasShield() bool {
 // carried at all, and whether any ammunition is in the inventory. Both lookups
 // were open-coded per weapon before; the draw sequence is shared, so they are
 // too.
-func (cm *CombatManager) rangedSlot(kind WeaponKind) (slot uint32, found, HasArrows bool) {
+func (cm *CombatManager) rangedSlot(kind WeaponKind) (slot uint32, found, arrows bool) {
 	inventory := cm.slotNames()
 
 	for _, name := range inventory {
@@ -123,15 +123,15 @@ func (cm *CombatManager) rangedSlot(kind WeaponKind) (slot uint32, found, HasArr
 		}
 		short = strings.ToLower(strings.TrimSpace(short))
 		if short == "arrow" || strings.HasSuffix(short, "_arrow") {
-			HasArrows = true
+			arrows = true
 			break
 		}
 	}
 
 	if best := findBest(inventory, kind); best >= 0 {
-		return uint32(best), true, HasArrows
+		return uint32(best), true, arrows
 	}
-	return 0, false, HasArrows
+	return 0, false, arrows
 }
 
 // shootOnce runs a whole draw-and-release for a weapon of a kind in one call.
@@ -140,12 +140,12 @@ func (cm *CombatManager) rangedSlot(kind WeaponKind) (slot uint32, found, HasArr
 // the tick, so the draw is waited out here rather than carried across ticks.
 // The combat loop uses the tick-driven path instead.
 func (cm *CombatManager) shootOnce(kind WeaponKind, targetID uint64) bool {
-	slot, found, HasArrows := cm.rangedSlot(kind)
+	slot, found, arrows := cm.rangedSlot(kind)
 	if !found {
 		cm.logger.Debug("shoot: no weapon of that kind in the inventory")
 		return false
 	}
-	if kind == WeaponBow && !HasArrows {
+	if kind == WeaponBow && !arrows {
 		cm.logger.Debug("shoot: no arrows, so the bow is just a stick")
 		return false
 	}

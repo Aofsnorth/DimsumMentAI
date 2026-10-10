@@ -30,7 +30,9 @@ permissions:
   contents: read
 
 env:
-  GO_VERSION: "1.26.5"
+  # 1.26.9 carries the net/http fixes for GO-2026-6613 and GO-2026-6617;
+  # govulncheck fails the pipeline on anything older.
+  GO_VERSION: "1.26.9"
   GOFLAGS: "-count=1"
   COVERAGE_MIN: "0"
 
@@ -72,9 +74,9 @@ jobs:
 
       # --- Computational guide: golangci-lint ---
       - name: Install golangci-lint
-        uses: golangci/golangci-lint-action@v6
+        uses: golangci/golangci-lint-action@v9
         with:
-          version: v1.64.8
+          version: v2.14.0
           args: --timeout 5m
 
   # ---------------------------------------------------------------------------

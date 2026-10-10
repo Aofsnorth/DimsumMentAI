@@ -563,7 +563,6 @@ func TestTridentLoyalty_Decisions(t *testing.T) {
 func TestTridentState_ThrowAndReturn(t *testing.T) {
 	t.Parallel()
 
-	const tick = 50 * time.Millisecond
 	s := combat.TridentState{}
 	now := throwNow
 

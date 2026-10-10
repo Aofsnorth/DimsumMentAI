@@ -25,7 +25,6 @@ import (
 	"flag"
 	"fmt"
 	"os"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -314,19 +313,6 @@ func noteInbound(pk packet.Packet) {
 	sentMu.Lock()
 	sentCounts["<-"+name]++
 	sentMu.Unlock()
-}
-
-func dumpSent() {
-	sentMu.Lock()
-	defer sentMu.Unlock()
-	keys := make([]string, 0, len(sentCounts))
-	for k := range sentCounts {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	for _, k := range keys {
-		fmt.Printf("  %-40s %d\n", k, sentCounts[k])
-	}
 }
 
 func report(pk packet.Packet) {

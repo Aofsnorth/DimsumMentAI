@@ -51,7 +51,7 @@ func TickStalled(lastTick, now time.Time) bool {
 // startStallWatchdog runs for the life of the connection and needs no bot lock
 // to do its job, which is the point: when the tick is wedged on a mutex, the
 // only goroutine that can still speak is one that never waits for it.
-func startStallWatchdog(b *bot.Bot, ctx context.Context) {
+func startStallWatchdog(ctx context.Context, b *bot.Bot) {
 	go func() {
 		ticker := time.NewTicker(tickStallCheckInterval)
 		defer ticker.Stop()

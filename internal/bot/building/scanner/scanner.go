@@ -76,7 +76,9 @@ func (s *AreaScanner) FindFlatArea(cx, cy, cz, requiredSize int) (int, int, int)
 }
 
 func flatAreaCandidates(cx, cz int) []flatAreaCand {
-	candidates := []flatAreaCand{{x: cx + 5, z: cz + 5}}
+	// 1 default spot + 8 angles x 6 radii, with headroom for float drift.
+	candidates := make([]flatAreaCand, 1, 56)
+	candidates[0] = flatAreaCand{x: cx + 5, z: cz + 5}
 	for r := 4; r <= 24; r += 4 {
 		for angle := 0.0; angle < math.Pi*2; angle += math.Pi / 4 {
 			dx := int(math.Round(math.Cos(angle) * float64(r)))
@@ -141,7 +143,7 @@ func (s *AreaScanner) ScanNearbyStructures() []common.StructureInfo {
 	// a nearby chest ends up eleventh on a list of ten.
 	botCellX := int(blockcell.Of(botPos.X()))
 	botCellZ := int(blockcell.Of(botPos.Z()))
-	var sorted []common.StructureInfo
+	sorted := make([]common.StructureInfo, 0, len(s.placedStructures))
 	sorted = append(sorted, s.placedStructures...)
 
 	for i := 0; i < len(sorted); i++ {

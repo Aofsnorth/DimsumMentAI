@@ -365,27 +365,6 @@ func (f *fakeBot) addContainer(slot uint32, netID int32, name string, count uint
 	}
 }
 
-// inventoryName reports the resolved name and count in an inventory slot.
-func (f *fakeBot) inventoryName(slot uint32) (string, uint16) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	stack, ok := f.inv[slot]
-	if !ok {
-		return "", 0
-	}
-	return f.names[stack.NetworkID], stack.Count
-}
-
-func (f *fakeBot) containerSlotName(slot uint32) (string, uint16) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	item, ok := f.container[slot]
-	if !ok {
-		return "", 0
-	}
-	return f.names[item.Stack.NetworkID], item.Stack.Count
-}
-
 // eventIndex reports the position of a recorded call, or -1.
 func (f *fakeBot) eventIndex(name string) int {
 	f.mu.Lock()
@@ -398,35 +377,13 @@ func (f *fakeBot) eventIndex(name string) int {
 	return -1
 }
 
-// placedContainers lists, in order, the container of every slot the manager
-// placed into. Duplicates are kept: a stand loads three bottle slots and the
-// test should be able to say so.
-func (f *fakeBot) placedContainers() []byte {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	out := make([]byte, 0, len(f.placed))
-	for _, call := range f.placed {
-		out = append(out, call.containerID)
-	}
-	return out
-}
-
-// placedSlots lists the slots the manager placed into, alongside the containers
-// above, so a failure can be reported as a (container, slot) pair.
+// placedSlots lists the slots the manager placed into, so a failure can be
+// reported as a (container, slot) pair.
 func (f *fakeBot) placedSlots() []transferCall {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	out := make([]transferCall, len(f.placed))
 	copy(out, f.placed)
-	return out
-}
-
-// takenSlots lists the transfers the manager took out of a container.
-func (f *fakeBot) takenSlots() []transferCall {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	out := make([]transferCall, len(f.taken))
-	copy(out, f.taken)
 	return out
 }
 

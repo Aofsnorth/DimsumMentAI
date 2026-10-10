@@ -45,6 +45,8 @@ linters:
         - G104   # unhandled errors (errcheck covers this)
         - G115   # integer overflow conversions; pervasive by design in the
                  # protocol layer (slots, coords) and guarded by callers
+        - G117   # marshalling oauth token cache files to disk; the files are
+                 # local caches written 0600, not wire or log output
         - G404   # math/rand is intentional for jitter/animation, not crypto
       severity: medium
       confidence: medium
@@ -54,8 +56,6 @@ linters:
         - shift
         - copylocks
         - printf
-    misspell:
-      locale: GB
     staticcheck:
       # QF*/ST* are style-refactor suggestions; the codebase intentionally
       # keeps its current shape. SA/S (bug & simplification) stay enabled.
@@ -94,6 +94,10 @@ linters:
       - legacy
       - std-error-handling
     rules:
+      - linters:
+          - gosec
+        path: internal/connection/capture\.go$  # BOT_PACKET_CAPTURE debug recorder; paths come from an operator-set env var
+        text: "G703:"
       - linters:
           - gocritic
           - gosec

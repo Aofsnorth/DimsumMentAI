@@ -473,19 +473,6 @@ func (w *LocalWorldModel) wallBlocksStanding(x, y, z int32) bool {
 // of the cell it occupies (1.5 blocks tall in a 1-block cell).
 const wallTopOverCell = 0.5
 
-// maxStepUp is the tallest ledge a player walks up without jumping (0.6 blocks,
-// Minecraft's step height).
-//
-// It matters because the two footing heights a wall surface can present are half
-// a block apart. A bot standing on ordinary ground has its feet at exactly the
-// node level; a bot standing on a wall has them half a block higher. Comparing
-// those two heights with nothing else — which is what this rule did first —
-// vetoes the ordinary-ground-to-wall-surface transition. That transition is a
-// half-block step, which a player makes without thinking, and the bot refused it:
-// standing at the edge of a lobby paved in tuff_brick_wall, every tile inside it
-// read as unclimbable and A* could not enter the lobby at all.
-const maxStepUp = 0.6
-
 // footingTopY is the height the bot's feet currently rest at, which is what a
 // neighbouring floor has to be compared against.
 //

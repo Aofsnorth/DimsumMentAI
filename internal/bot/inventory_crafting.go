@@ -5,8 +5,6 @@ import (
 	"fmt"
 	"strings"
 
-	"bedrock-ai/internal/safecast"
-
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
 )
 
@@ -32,41 +30,6 @@ func SnapshotIngredientSources(inventory map[uint32]protocol.ItemStack, picks []
 		}
 		source.consumed += pick.Count
 		sources[pick.Slot] = source
-	}
-	return sources
-}
-
-// snapshotIngredientSourcesFromRecipe builds ingredient source snapshots from
-// the recipe's ingredient descriptors rather than from pick plans, for use with
-// AutoCraft where we don't plan individual grid placements.
-func snapshotIngredientSourcesFromRecipe(inv map[uint32]protocol.ItemStack, names map[int32]string, ingredients []protocol.ItemDescriptorCount, crafts int) map[uint32]IngredientSourceSnapshot {
-	sources := make(map[uint32]IngredientSourceSnapshot)
-	for _, ing := range ingredients {
-		targetName, networkID := ResolveIngredientIdentity(ing.Descriptor, names)
-		if targetName == "" && networkID == 0 {
-			continue
-		}
-		needed := int(ing.Count) * crafts
-		for slot, item := range inv {
-			if item.Count <= 0 {
-				continue
-			}
-			itemName := names[item.NetworkID]
-			matched := false
-			if targetName != "" {
-				matched = itemName != "" && ItemNameMatches(itemName, targetName)
-			} else {
-				matched = item.NetworkID == safecast.To[int32](networkID)
-			}
-			if !matched {
-				continue
-			}
-			if _, exists := sources[slot]; exists {
-				continue
-			}
-			sources[slot] = IngredientSourceSnapshot{stack: item, consumed: needed}
-			break
-		}
 	}
 	return sources
 }

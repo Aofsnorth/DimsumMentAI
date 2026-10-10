@@ -169,7 +169,7 @@ func deliver(f *fakeBot, name string, count int, after time.Duration) {
 				break
 			}
 			if f.names[stack.NetworkID] == qualified {
-				f.items[s] = protocol.ItemStack{ItemType: protocol.ItemType{NetworkID: netID}, Count: uint16(stack.Count) + uint16(count)}
+				f.items[s] = protocol.ItemStack{ItemType: protocol.ItemType{NetworkID: netID}, Count: stack.Count + uint16(count)}
 				return
 			}
 		}
@@ -204,15 +204,6 @@ func qualify(name string) string {
 // placeBlock seeds a block in the world.
 func (f *fakeBot) placeBlock(x, y, z int32, name string) {
 	f.blocks[[3]int32{x, y, z}] = name
-}
-
-// itemNameAt resolves the name of a bag slot.
-func (f *fakeBot) itemNameAt(slot uint32) string {
-	stack, ok := f.items[slot]
-	if !ok {
-		return ""
-	}
-	return f.names[stack.NetworkID]
 }
 
 var errRejected = errors.New("server rejected the stack request")

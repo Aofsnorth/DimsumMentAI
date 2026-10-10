@@ -269,9 +269,7 @@ func handleLightPortal(b *bot.Bot, param, user string) {
 	// same lit-portal search enterPortal uses. This makes "light the portal"
 	// degrade gracefully into "walk into the lit one" instead of failing.
 	if !foundObsidian {
-		litPos, foundLit := findNearestBlock(b.GetCoords(), radii.Portal, BotBlockLookup(b), func(name string) bool {
-			return isLitPortalBlock(name)
-		})
+		litPos, foundLit := findNearestBlock(b.GetCoords(), radii.Portal, BotBlockLookup(b), isLitPortalBlock)
 		if !foundLit {
 			portalFailure(b, user, fmt.Errorf("nggak nemu frame obsidian atau portal dalam radius %d", radii.Portal))
 			return

@@ -30,11 +30,11 @@ const (
 
 func (tc *TickContext) updateLookDirection() {
 	tc.updateActivelyClimbing()
-	WantsToMove := tc.resolveTargetLook()
+	wantsMove := tc.resolveTargetLook()
 	if tc.applyLookEmote() {
 		return
 	}
-	tc.applyEasedLookDirection(WantsToMove)
+	tc.applyEasedLookDirection(wantsMove)
 }
 
 // applyLookEmote advances a look emote one step and hands the result straight
@@ -108,15 +108,15 @@ func (tc *TickContext) resolveTargetLook() bool {
 	tc.TargetYaw = tc.Yaw
 	tc.TargetPitch = tc.Pitch
 
-	WantsToMove := tc.WantsToMove()
-	if WantsToMove {
+	wantsMove := tc.WantsToMove()
+	if wantsMove {
 		tc.ApplyMoveLookTarget()
-		return WantsToMove
+		return wantsMove
 	}
 
 	lookTargetActive := tc.applyTrackedLookTarget()
 	tc.applyIdleOrFollowLook(lookTargetActive)
-	return WantsToMove
+	return wantsMove
 }
 
 // Follow walk/stop hysteresis thresholds. A single 2.0-block threshold on both
@@ -210,12 +210,12 @@ func (tc *TickContext) ApplyFollowLookTarget() {
 	}
 }
 
-func (tc *TickContext) applyEasedLookDirection(WantsToMove bool) {
+func (tc *TickContext) applyEasedLookDirection(wantsMove bool) {
 	yawDiff := AngleDifference(tc.TargetYaw, tc.Yaw)
 	absYawDiff := math.Abs(float64(yawDiff))
 	yawSpeed := tc.selectYawSpeed(absYawDiff)
 	pitchSpeed := float32(28.0)
-	if WantsToMove {
+	if wantsMove {
 		// Walking owns its target (route direction plus gaze scan). Keep the
 		// smoothed state in sync so the first stationary tick after stopping
 		// does not glide in from a stale angle.
@@ -224,7 +224,7 @@ func (tc *TickContext) applyEasedLookDirection(WantsToMove bool) {
 		tc.SmoothStationaryLookTarget()
 		pitchSpeed = 12.0
 	}
-	tc.ApplyEasedLook(WantsToMove, yawSpeed, pitchSpeed)
+	tc.ApplyEasedLook(wantsMove, yawSpeed, pitchSpeed)
 }
 
 func (tc *TickContext) selectYawSpeed(absYawDiff float64) float32 {
@@ -257,7 +257,7 @@ func (tc *TickContext) selectYawSpeed(absYawDiff float64) float32 {
 //     but never vibrating. Per-tick random jitter would create 20Hz
 //     vibration; this instead matches how a human head's turn rate
 //     fluctuates over the course of a single head movement.
-func (tc *TickContext) ApplyEasedLook(WantsToMove bool, yawMax, pitchMax float32) {
+func (tc *TickContext) ApplyEasedLook(wantsMove bool, yawMax, pitchMax float32) {
 	// --- Head (leads) -------------------------------------------------------
 	// Head eases toward the target faster than the body so it arrives first.
 	headEase := float32(0.32)
@@ -266,7 +266,7 @@ func (tc *TickContext) ApplyEasedLook(WantsToMove bool, yawMax, pitchMax float32
 	if tc.IsLadderActive {
 		headCap = 28.0
 	}
-	if WantsToMove {
+	if wantsMove {
 		headEase = 0.42
 		headMin = 0.70
 	}
@@ -291,7 +291,7 @@ func (tc *TickContext) ApplyEasedLook(WantsToMove bool, yawMax, pitchMax float32
 	headPitchSpd := SmoothSpeedMultiplier(tc.Tick, speedAmp, 2.1)
 
 	// Smoothly ease head toward target (with smooth speed variation).
-	walkingScanEnabled := WantsToMove && tc.HasHorizontalMove && !tc.IsLadderActive
+	walkingScanEnabled := wantsMove && tc.HasHorizontalMove && !tc.IsLadderActive
 	gazeYaw, gazePitch := tc.TargetYaw, tc.TargetPitch
 	if walkingScanEnabled {
 		gazeYaw, gazePitch = tc.WalkingScanBase()
@@ -317,7 +317,7 @@ func (tc *TickContext) ApplyEasedLook(WantsToMove bool, yawMax, pitchMax float32
 	// can never perturb the state the easing converges toward.
 	ampYaw := float32(0.22)
 	ampPitch := float32(0.28)
-	if WantsToMove {
+	if wantsMove {
 		ampYaw = 0.08
 		ampPitch = 0.10
 	}
@@ -345,12 +345,12 @@ func (tc *TickContext) ApplyEasedLook(WantsToMove bool, yawMax, pitchMax float32
 	if tc.IsLadderActive {
 		bodyCap = 22.0
 	}
-	if WantsToMove {
+	if wantsMove {
 		bodyEase = 0.30
 		bodyMin = 0.50
 	}
 	bodyTargetYaw := tc.HeadYaw
-	if WantsToMove {
+	if wantsMove {
 		bodyTargetYaw = tc.TargetYaw
 	}
 	bodySpd := SmoothSpeedMultiplier(tc.Tick, speedAmp, 4.3)

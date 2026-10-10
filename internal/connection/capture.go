@@ -71,10 +71,10 @@ type packetCapture struct {
 // newPacketCapture opens the capture file and pre-builds the packet ID name
 // maps from gophertunnel's pools.
 func newPacketCapture(path string) (*packetCapture, error) {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, err
 	}
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
 		return nil, err
 	}
@@ -91,20 +91,6 @@ func newPacketCapture(path string) (*packetCapture, error) {
 		"wall":  time.Now().Format(time.RFC3339Nano),
 	})
 	return c, nil
-}
-
-func (c *packetCapture) close() {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.file != nil {
-		c.writeLocked(map[string]any{
-			"event":   "capture-end",
-			"written": c.writtenCount,
-			"read":    c.readCount,
-		})
-		_ = c.file.Close()
-		c.file = nil
-	}
 }
 
 // setRemote records the server address so record() can classify direction.

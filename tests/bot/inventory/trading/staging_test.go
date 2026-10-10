@@ -31,7 +31,7 @@ func TestTradeAddressesTheTradeContainersNotTheWindowID(t *testing.T) {
 	if got.slot != trading.SlotIngredientOne {
 		t.Errorf("placed into window slot %d, want %d", got.slot, trading.SlotIngredientOne)
 	}
-	if byte(got.containerID) == bot.openWindowID {
+	if got.containerID == bot.openWindowID {
 		t.Error("the placement used the window ID as a container ID")
 	}
 
@@ -46,7 +46,7 @@ func TestTradeAddressesTheTradeContainersNotTheWindowID(t *testing.T) {
 	if take.slot != trading.SlotResult {
 		t.Errorf("took from window slot %d, want %d", take.slot, trading.SlotResult)
 	}
-	if byte(take.containerID) == bot.openWindowID {
+	if take.containerID == bot.openWindowID {
 		t.Error("the take used the window ID as a container ID")
 	}
 }

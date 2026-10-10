@@ -19,15 +19,10 @@ import (
 	"strings"
 )
 
-type member struct {
-	file string
-	line int
-}
-
 func main() {
 	root := "internal"
 	dirs := map[string]bool{}
-	filepath.Walk(root, func(p string, i os.FileInfo, err error) error {
+	if err := filepath.Walk(root, func(p string, i os.FileInfo, err error) error {
 		if err != nil || i.IsDir() {
 			return nil
 		}
@@ -35,9 +30,12 @@ func main() {
 			dirs[filepath.Dir(p)] = true
 		}
 		return nil
-	})
+	}); err != nil {
+		fmt.Fprintln(os.Stderr, "testexport: walk failed:", err)
+		os.Exit(1)
+	}
 
-	dirList := []string{}
+	dirList := make([]string, 0, len(dirs))
 	for d := range dirs {
 		dirList = append(dirList, d)
 	}
@@ -52,7 +50,7 @@ func main() {
 		methods := map[string]bool{}
 
 		fset := token.NewFileSet()
-		pkgs, _ := parser.ParseDir(fset, dir, func(fi os.FileInfo) bool {
+		pkgs, _ := parser.ParseDir(fset, dir, func(fi os.FileInfo) bool { //nolint:staticcheck // best-effort export scanner for a dev script
 			return !strings.HasSuffix(fi.Name(), "_test.go")
 		}, 0)
 		for _, pkg := range pkgs {

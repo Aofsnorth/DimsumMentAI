@@ -21,8 +21,6 @@ import (
 // about packet ordering — arm, click, confirm, close — so a fake that remembers
 // the calls is the only way to pin it without a live server.
 type fakeTableBot struct {
-	table protocol.BlockPos
-
 	clicks    []protocol.BlockPos
 	clickOK   bool
 	clickWhy  string

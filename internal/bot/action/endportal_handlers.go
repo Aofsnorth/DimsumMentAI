@@ -152,7 +152,7 @@ func RouteEndPortalState(state dimension.PortalState) EndPortalPlan {
 // name the world cache reported. A map rather than a slice because every
 // question asked of it — which cells are taken, what is this one called — is a
 // lookup, and because the scan builds it in whatever order the cache hands back.
-type endPortalCells map[[3]int32]string
+type EndPortalCells map[[3]int32]string
 
 // PosLess orders block positions bottom-first. Bottom-first is not cosmetic: the
 // ring is five blocks tall and the bot can only reach its lower half from the
@@ -199,8 +199,8 @@ func isFilledFrameName(name string) bool {
 // not-ok and contribute nothing — which is what keeps half a ring from being
 // mistaken for a whole one. Nothing here assumes a shape: the orientation, and
 // even the size, are read back out of what the world actually has.
-func ScanEndPortal(lookup BlockLookup, seed protocol.BlockPos, radius, dyMin, dyMax int32) endPortalCells {
-	cells := make(endPortalCells)
+func ScanEndPortal(lookup BlockLookup, seed protocol.BlockPos, radius, dyMin, dyMax int32) EndPortalCells {
+	cells := make(EndPortalCells)
 	for dx := -radius; dx <= radius; dx++ {
 		for dy := dyMin; dy <= dyMax; dy++ {
 			for dz := -radius; dz <= radius; dz++ {
@@ -275,7 +275,7 @@ func clusterReaches(group []protocol.BlockPos, pos protocol.BlockPos) bool {
 // the whole rectangle (where to stand and what to classify), the frames still
 // empty (what an eye of ender can go into), and the cells already filled (what
 // somebody else, or a previous run, did). All three are position-sorted.
-func PortalParts(cells endPortalCells) (rect, frames, open []protocol.BlockPos) {
+func PortalParts(cells EndPortalCells) (rect, frames, open []protocol.BlockPos) {
 	all := make([]protocol.BlockPos, 0, len(cells))
 	for key, name := range cells {
 		if !isEndPortalBlockName(name) {
@@ -303,7 +303,7 @@ func PortalParts(cells endPortalCells) (rect, frames, open []protocol.BlockPos) 
 // CellNames renders the classified rectangle back into block names, so the
 // decision about what was found goes through dimension.Classify like every
 // other portal in this bot instead of through a private reimplementation of it.
-func CellNames(cells endPortalCells, rect []protocol.BlockPos) []string {
+func CellNames(cells EndPortalCells, rect []protocol.BlockPos) []string {
 	names := make([]string, 0, len(rect))
 	for _, pos := range rect {
 		if name, ok := cells[[3]int32{pos.X(), pos.Y(), pos.Z()}]; ok {

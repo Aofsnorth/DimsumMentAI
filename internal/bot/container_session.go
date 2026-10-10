@@ -243,11 +243,6 @@ func (b *Bot) CloseContainerWindow(windowID byte) {
 	b.Mu.Unlock()
 }
 
-// containerTransferContext is shared plumbing for the two transfer directions.
-type containerTransferContext struct {
-	windowID byte
-}
-
 // firstFreeInventorySlot returns the lowest free slot in the combined
 // hotbar+inventory (0..35). Callers hold b.Mu.
 func (b *Bot) firstFreeInventorySlot() (uint32, bool) {
@@ -278,32 +273,6 @@ func (b *Bot) findInventorySlotFor(itemName string) (uint32, bool) {
 		}
 	}
 	return b.firstFreeInventorySlot()
-}
-
-// findContainerSlotFor picks where an item should land inside an open
-// container: the first stack of the same item that still has room, otherwise
-// the first empty slot. Callers hold b.Mu.
-func (b *Bot) findContainerSlotFor(items map[uint32]protocol.ItemInstance, itemName string) (uint32, bool) {
-	want := strings.ToLower(itemName)
-	for slot := uint32(0); slot < 27; slot++ {
-		item, ok := items[slot]
-		if !ok || item.Stack.Count <= 0 {
-			continue
-		}
-		if int(item.Stack.Count) >= MaxStackSize {
-			continue
-		}
-		if strings.Contains(strings.ToLower(b.ItemNames[item.Stack.NetworkID]), want) {
-			return slot, true
-		}
-	}
-	for slot := uint32(0); slot < 27; slot++ {
-		item, ok := items[slot]
-		if !ok || item.Stack.Count <= 0 {
-			return slot, true
-		}
-	}
-	return 0, false
 }
 
 // TakeFromContainerSlot moves up to count items from one slot of an open

@@ -224,13 +224,12 @@ func (nc *NvidiaClient) Ask(user, systemPrompt, message string) (string, error) 
 // prepareMessages builds the message sequence for a chat request, including
 // recent conversation history and the new user message.
 func (nc *NvidiaClient) prepareMessages(user, systemPrompt, message string) []Message {
-	var rawMessages []Message
-	rawMessages = append(rawMessages, Message{Role: "system", Content: systemPrompt})
-
 	hist := nc.History.GetHistory(user)
 	if len(hist) > 10 {
 		hist = hist[len(hist)-10:]
 	}
+	rawMessages := make([]Message, 0, len(hist)+2)
+	rawMessages = append(rawMessages, Message{Role: "system", Content: systemPrompt})
 	rawMessages = append(rawMessages, hist...)
 	rawMessages = append(rawMessages, Message{Role: "user", Content: fmt.Sprintf("<%s> %s", user, message)})
 
@@ -313,7 +312,7 @@ func (nc *NvidiaClient) doCompletionRequest(req ChatCompletionRequest) (string, 
 // the planner's agentic loop for plan generation and step re-evaluation, so
 // internal planner messages don't pollute the player's chat context.
 func (nc *NvidiaClient) AskPlanner(systemPrompt, message string) (string, error) {
-	var rawMessages []Message
+	rawMessages := make([]Message, 0, 2)
 	rawMessages = append(rawMessages, Message{Role: "system", Content: systemPrompt})
 	rawMessages = append(rawMessages, Message{Role: "user", Content: message})
 

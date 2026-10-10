@@ -309,7 +309,7 @@ type outputStack struct {
 // server has filled it.
 func (fm *Manager) readOutput() (outputStack, bool) {
 	for slot, item := range fm.bot.ContainerItems() {
-		if uint32(slot) != SlotOutput || item.Stack.Count <= 0 {
+		if slot != SlotOutput || item.Stack.Count <= 0 {
 			continue
 		}
 		return outputStack{

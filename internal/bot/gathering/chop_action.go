@@ -56,7 +56,6 @@ func (tc *TreeChopper) chopTree(ctx context.Context, basePos protocol.BlockPos, 
 			// the default is to skip.
 			if tc.maybeScaffoldToLogs(ctx, left, basePos) {
 				tc.chopLogBlocks(ctx, left)
-				left = tc.stillLogs(left)
 			}
 			break
 		}

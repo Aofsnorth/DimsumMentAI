@@ -702,34 +702,6 @@ func ComputeCrafts(desiredCount, outputPerCraft int) int {
 	return crafts
 }
 
-// handleTake is the legacy single-container give, kept for callers that reach
-// it directly. The labelled search in storage_handlers.go is what the "take"
-// label uses; this one still reports so a plan step is never left waiting.
-func handleTake(b *bot.Bot, param, user string) {
-	go func() {
-		if strings.TrimSpace(param) == "" {
-			ReportStatus(b, user, event.ActionStatus{
-				Action:  "take",
-				Success: false,
-				Error:   "butuh nama barang, contoh: take:oak_log,3",
-			})
-			return
-		}
-		parts := strings.Split(param, ",")
-		itemName := NormalizeItemName(parts[0])
-		count := int32(0)
-		if len(parts) >= 2 {
-			var parsed int
-			if _, err := fmt.Sscanf(parts[1], "%d", &parsed); err == nil {
-				count = safecast.To[int32](parsed)
-			}
-		}
-		success := b.InventoryMgr.Chest().GiveItem(context.Background(), itemName, user, count)
-		b.Logger.Debug("take action complete", "success", success, "item", itemName)
-		reportBoolOutcome(b, user, "take", itemName, success, fmt.Sprintf("gagal mengambil %s", itemName))
-	}()
-}
-
 // handleGive hands items to a player. The chest manager returns whether the
 // handoff actually happened, so the step reports that rather than assuming the
 // toss landed.

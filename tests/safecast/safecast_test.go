@@ -130,7 +130,7 @@ func TestNamedAndBuiltInSourcesAgree(t *testing.T) {
 		{"int8", func(v nInt32) int64 { return int64(safecast.To[int8](v)) }, func(v int32) int64 { return int64(safecast.To[int8](v)) }},
 		{"int16", func(v nInt32) int64 { return int64(safecast.To[int16](v)) }, func(v int32) int64 { return int64(safecast.To[int16](v)) }},
 		{"int32", func(v nInt32) int64 { return int64(safecast.To[int32](v)) }, func(v int32) int64 { return int64(safecast.To[int32](v)) }},
-		{"int64", func(v nInt32) int64 { return int64(safecast.To[int64](v)) }, func(v int32) int64 { return int64(safecast.To[int64](v)) }},
+		{"int64", func(v nInt32) int64 { return safecast.To[int64](v) }, func(v int32) int64 { return safecast.To[int64](v) }},
 		{"uint", func(v nInt32) int64 { return int64(safecast.To[uint](v)) }, func(v int32) int64 { return int64(safecast.To[uint](v)) }},
 		{"uint8", func(v nInt32) int64 { return int64(safecast.To[uint8](v)) }, func(v int32) int64 { return int64(safecast.To[uint8](v)) }},
 		{"uint16", func(v nInt32) int64 { return int64(safecast.To[uint16](v)) }, func(v int32) int64 { return int64(safecast.To[uint16](v)) }},

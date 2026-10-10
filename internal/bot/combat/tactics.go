@@ -21,11 +21,6 @@ import (
 
 // Distances at which the tactics change, in blocks.
 const (
-	// creeperPanicDistance is how close a creeper may get before the bot runs.
-	// Its blast reaches roughly three blocks, so this sits one block outside
-	// the blast: close enough that the bot fights a creeper normally until the
-	// moment it must not.
-	creeperPanicDistance float32 = 3.0
 	// CreeperSafeDistance is where fleeing stops. Past it the explosion cannot
 	// reach even if the creeper detonates at the moment the bot turns around.
 	CreeperSafeDistance float32 = 6.0

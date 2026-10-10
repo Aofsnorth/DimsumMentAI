@@ -61,7 +61,7 @@ func dumpStacks(b *bot.Bot) {
 	buf = buf[:runtime.Stack(buf, true)]
 	_ = os.MkdirAll("logs", 0o755)
 	path := fmt.Sprintf("logs/stall_%s.txt", time.Now().Format("150405"))
-	if err := os.WriteFile(path, buf, 0o644); err != nil {
+	if err := os.WriteFile(path, buf, 0o600); err != nil {
 		b.Logger.Warn("stall stack dump failed", slog.String("error", err.Error()))
 		return
 	}

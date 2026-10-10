@@ -3,7 +3,6 @@ package facing
 import (
 	"fmt"
 	"log/slog"
-	"time"
 
 	"github.com/go-gl/mathgl/mgl32"
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
@@ -30,11 +29,6 @@ type Bot interface {
 	// oriented by something that is not looking at what it built.
 	LookAt(pos mgl32.Vec3)
 }
-
-// aimDelay is how long the writer waits after turning toward a block before
-// sending the update, so the head has arrived and the server sees a coherent
-// player.
-const aimDelay = 180 * time.Millisecond
 
 // Writer sends orientation updates to the server.
 type Writer struct {

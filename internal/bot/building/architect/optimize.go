@@ -101,7 +101,7 @@ func sortBlocks(blocks []common.BlockEntry, less func(a, b common.BlockEntry) bo
 }
 
 func (ea *EnhancedAIArchitect) sortWallsLayers(walls []common.BlockEntry, width, depth, height int) []common.BlockEntry {
-	var sortedWalls []common.BlockEntry
+	sortedWalls := make([]common.BlockEntry, 0, len(walls))
 	for y := 1; y < height; y++ {
 		var front, left, back, right []common.BlockEntry
 		for _, b := range walls {

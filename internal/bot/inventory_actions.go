@@ -194,47 +194,6 @@ const dropVerifyTimeout = 2500 * time.Millisecond
 // first and loses the rest.
 const dropItemGap = 120 * time.Millisecond
 
-// dropViaCursor drops through the cursor: take the stack to the cursor, then
-// drop it from there. Geyser never answered the direct slot drop (the request
-// sat unanswered until the 5s timeout and nothing appeared in the world), but it
-// does answer take and cursor-drop, the two steps the vanilla screen sends.
-//
-// Kept as a fallback because it is the only other path known to at least be
-// accepted, but it is no longer the Geyser default: see dropViaHeldSlot.
-func (b *Bot) dropViaCursor(name string, slot uint32, item protocol.ItemInstance, dropped uint16) error {
-	if err := b.openPersonalInventory(); err != nil {
-		return fmt.Errorf("drop %q: %w", name, err)
-	}
-	defer b.closePersonalInventory()
-	source := PlayerStackRequestSlot(slot, item.StackNetworkID)
-	takeID, takeCh := b.beginStackRequest(0)
-	takeResult, err := b.sendStackRequest(takeID, takeCh, []protocol.StackRequestAction{BuildTakeToCursorAction(source, int(dropped))}, name)
-	if err != nil {
-		return fmt.Errorf("drop %d %q: move to cursor: %w", dropped, name, err)
-	}
-	cursorID := takeResult.stackNetworkID(protocol.ContainerCursor, 0)
-	if cursorID == 0 {
-		cursorID = takeID
-	}
-
-	dropAction, err := BuildDropCursorAction(cursorID, int(dropped))
-	if err != nil {
-		_ = b.returnCursorToInventory(cursorID, slot, int(dropped), item.Stack.NetworkID, name)
-		return fmt.Errorf("drop %d %q from cursor: %w", dropped, name, err)
-	}
-	b.Logger.Info("dropping via cursor (geyser)", "item", name, "slot", slot, "count", dropped, "cursor_stack_id", cursorID)
-	if err := b.Conn.WritePacket(BuildDropSwing(b.Conn.GameData().EntityRuntimeID)); err != nil {
-		_ = b.returnCursorToInventory(cursorID, slot, int(dropped), item.Stack.NetworkID, name)
-		return fmt.Errorf("drop %d %q: send drop swing: %w", dropped, name, err)
-	}
-	dropID, dropCh := b.beginStackRequest(0)
-	if _, err := b.sendStackRequest(dropID, dropCh, []protocol.StackRequestAction{dropAction}, name); err != nil {
-		_ = b.returnCursorToInventory(cursorID, slot, int(dropped), item.Stack.NetworkID, name)
-		return fmt.Errorf("drop %d %q from cursor: %w", dropped, name, err)
-	}
-	return nil
-}
-
 func (b *Bot) InjectAIEvent(msg string) {
 	b.Logger.Info("AI Event injected", "msg", msg)
 	if b.AiClient == nil {

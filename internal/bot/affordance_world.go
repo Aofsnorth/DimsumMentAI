@@ -155,8 +155,8 @@ func (b *Bot) forEachBlockWithin(pos mgl32.Vec3, reach int32, visit func(name st
 		return
 	}
 	x, y, z := blockcell.XYZ(pos.X(), pos.Y(), pos.Z())
-	for dx := int32(-reach); dx <= reach; dx++ {
-		for dz := int32(-reach); dz <= reach; dz++ {
+	for dx := -reach; dx <= reach; dx++ {
+		for dz := -reach; dz <= reach; dz++ {
 			for dy := int32(-3); dy <= 2; dy++ {
 				cx, cy, cz := x+dx, y+dy, z+dz
 				// A solid cell cannot be looked into or reached into, so a block

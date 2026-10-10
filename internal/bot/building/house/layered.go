@@ -28,7 +28,7 @@ func sortLayered(solidBlocks, liquidBlocks []common.BlockEntry, minX, maxX, minY
 		}
 	}
 
-	var finalSorted []common.BlockEntry
+	finalSorted := make([]common.BlockEntry, 0, len(solidBlocks)+len(liquidBlocks))
 	finalSorted = append(finalSorted, sortByLayerThenNearest(floorBlocks)...)
 	finalSorted = append(finalSorted, sortByLayerThenNearest(wallBlocks)...)
 	finalSorted = append(finalSorted, sortByLayerThenNearest(interiorBlocks)...)
