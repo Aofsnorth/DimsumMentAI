@@ -30,6 +30,9 @@ debug-090ce4.log
 # Persistent device identity (per install)
 data/device_identity.json
 
+# Bot persistent memory (changes every run)
+data/bot_memory.json
+
 data\bot_state.json
 .codex
 
