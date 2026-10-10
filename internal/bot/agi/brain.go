@@ -121,6 +121,12 @@ type Snapshot struct {
 	// the state text so Jev is deciding with the plan in view rather than
 	// picking a bounded action at random.
 	PlanSummary string
+	// MemoryText is the curated long-term memory block players dictated with
+	// !remember. It reaches Jev's state because dictated rules are standing
+	// constraints on the DECIDER, not just on the talker: a brain that never
+	// sees "kalau masih di lobby, klik NPC di depan" will keep choosing rest
+	// in that lobby forever while the chat LLM could recite the rule perfectly.
+	MemoryText string
 	// Craftable is how many distinct recipes the bot could make right now. It
 	// gates the craft activity, because a bot asked to craft with no ingredients
 	// fails every time and the failure is visible.

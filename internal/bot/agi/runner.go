@@ -151,6 +151,11 @@ type Runner struct {
 	// of sliding forward by a tick every time the clock is read.
 	idleUntil time.Time
 	idleMode  IdleMode
+	// consecutiveIdles is how many rest windows have been opened back to back
+	// without a real activity in between. Idle refuses to open another once it
+	// passes the cap and drifts instead — the anti-statue exit for a bot that
+	// keeps choosing rest in a spot with nothing to do.
+	consecutiveIdles int
 	// activityLog is a short history of the activities the brain has already
 	// chosen. It exists so the loop can notice it is repeating itself: a model
 	// that keeps picking the same activity is not deciding, and the caller
@@ -463,8 +468,29 @@ func (r *Runner) Tick(ctx context.Context) {
 	}
 	if reflex.Kind != ReflexNone {
 		r.runReflex(ctx, reflex)
-		// A reflex consumed this tick. Acting and deliberating in the same
-		// breath is how a bot ends up eating while it flees.
+		// A survival reflex consumed this tick. Acting and deliberating in the
+		// same breath is how a bot ends up eating while it flees.
+		if reflex.Kind == ReflexFlee || reflex.Kind == ReflexSurface {
+			return
+		}
+		// Eat and Look are routine, not emergencies. Jev was already paid for
+		// this tick, so throwing its activity answer away and returning here
+		// meant a hungry bot in a lobby paid for a decision every second and
+		// then stood still forever — the reflex fires every tick while hunger
+		// cannot actually be satisfied. The paid-for activity still runs; the
+		// reflex only claimed the body this tick, not the whole brain.
+		if judgement.Known && judgement.Activity != "" {
+			activity := judgement.Activity
+			if r.recentActivity(activity) {
+				activity = r.AlternativeActivity(activity)
+			}
+			r.GoalProgress(activity)
+			r.applyLocomotion(judgement.Locomotion)
+			r.b.SetAppetite(judgement.Appetite)
+			r.rememberAffordance(judgement.Affordance)
+			r.applyGaze(judgement.Gaze)
+			r.doActivity(activity)
+		}
 		return
 	}
 
@@ -681,6 +707,11 @@ func takeAffordanceParam(label string) string {
 func (r *Runner) doActivity(activity string) {
 	who := r.audience()
 	r.recordActivity(activity)
+	if activity != jev.ActivityRest {
+		// A real activity breaks the rest chain: the next Idle starts fresh
+		// instead of immediately hitting the drift cap.
+		r.resetIdleStreak()
+	}
 
 	// The verb the model chose out of the affordance set runs first, when it is
 	// a real registry action.
@@ -829,7 +860,10 @@ func (r *Runner) GoalProgress(activity string) {
 // maybeWander starts an idle drift, but only when nothing else wants the bot.
 // Wandering while busy would fight whatever it is already doing.
 func (r *Runner) maybeWander() {
-	if r.b.Explorer != nil && r.b.Explorer.IsExploring() {
+	// b nil is a bare test runner; Explorer nil is a bot with no navigation.
+	// Neither can wander, and reading r.b.Explorer on a nil b would panic —
+	// the Idle rest-budget path reaches here from exactly that state.
+	if r.b == nil || r.b.Explorer == nil || r.b.Explorer.IsExploring() {
 		return
 	}
 	r.Wander()
@@ -1234,6 +1268,11 @@ func DescribeState(s Snapshot) string {
 	if s.PlanSummary != "" && s.PlanSummary != "no plan" {
 		fmt.Fprintf(&sb, "Active plan:\n%s", s.PlanSummary)
 	}
+	if s.MemoryText != "" {
+		// Dictated rules sit directly under the goal: both are constraints on
+		// what to do next, and a rule a player typed outranks the menu.
+		fmt.Fprintf(&sb, "%s\n", s.MemoryText)
+	}
 	fmt.Fprintf(&sb, "Holding: %s.\nInventory: %s.\n", s.HeldItem, s.Inventory)
 	if s.EpisodeText != "" {
 		fmt.Fprintf(&sb, "Episode: %s\n", s.EpisodeText)
@@ -1496,6 +1535,7 @@ func (r *Runner) Observe() Snapshot {
 		VisibleSigns:   r.visibleSignText(),
 		GoalSummary:    DescribeGoal(r.CurrentGoal()),
 		PlanSummary:    RenderPlan(r.CurrentPlan()),
+		MemoryText:     b.MemoryContext(),
 		Features:       perception.VisibleFeatures(b, r.cfg.BlockScanDistance),
 		Craftable:      r.craftableCount(),
 		LogsHeld:       b.CountInventoryItemsFor("oak_log") + b.CountInventoryItemsFor("birch_log") + b.CountInventoryItemsFor("spruce_log"),
@@ -1913,7 +1953,11 @@ func (r *Runner) snapshotHP() int {
 func (r *Runner) lookAt(name string) {
 	r.mu.Lock()
 	// Acknowledge first: this is what stops the reflex re-firing, so it must not
-	// depend on the head turn succeeding.
+	// depend on the head turn succeeding. The window is the SOCIAL cooldown, not
+	// the gaze cooldown: with a 15s window the look reflex re-fired on the same
+	// person four times a minute, each fire consuming a whole tick and each
+	// "acknowledged" line indistinguishable from a stuck metronome. One
+	// arrival is one look for the next couple of minutes.
 	r.greeted[strings.ToLower(name)] = time.Now()
 	r.greetedAt = time.Now()
 
@@ -1932,11 +1976,13 @@ func (r *Runner) lookAt(name string) {
 }
 
 // greetedRecently reports whether the vision reflex has already reacted to a
-// player within the gaze cooldown.
+// player. The window is the social cooldown (minutes), deliberately longer
+// than the gaze cooldown: the reflex consumes a whole tick, so re-firing it on
+// the same person every gaze cycle starved the decision layer.
 func (r *Runner) greetedRecently(name string) bool {
-	window := time.Duration(r.cfg.VisionCooldownSec) * time.Second
+	window := time.Duration(r.cfg.SocialCooldownSec) * time.Second
 	if window <= 0 {
-		return false
+		window = 90 * time.Second
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -2054,6 +2100,8 @@ func (r *Runner) Wander() {
 	if r == nil || !r.cfg.Wander || r.b.Explorer == nil {
 		return
 	}
+	// Wandering is movement, so it also retires the rest chain.
+	r.resetIdleStreak()
 	r.mu.Lock()
 	r.seed++
 	seed := r.seed

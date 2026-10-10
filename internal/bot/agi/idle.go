@@ -67,6 +67,15 @@ const (
 	MaxStillIdleSec = 55
 )
 
+// resetIdleStreak clears the consecutive-idle counter. It lives on its own so
+// every "the bot actually did something" path can share one line instead of
+// each re-deriving when the counter is allowed to reset.
+func (r *Runner) resetIdleStreak() {
+	r.mu.Lock()
+	r.consecutiveIdles = 0
+	r.mu.Unlock()
+}
+
 // ChooseIdle decides what kind of nothing to do, for a given seed.
 //
 // It is a pure function of the seed so the whole decision is testable and
@@ -191,6 +200,15 @@ func (r *Runner) ShouldIdle(snap Snapshot) bool {
 // An idle already in progress is simply carried, not restarted. Restarting it
 // every tick would stretch a rest period by thirty seconds each time, which
 // means it never ends — the same trap as a deadline read fresh from config.
+//
+// Consecutive rest windows are also capped. Each expiry used to reopen a fresh
+// window from the same branch, and because the idle nudges shift the body a
+// block or two, lastMoved kept refreshing — so ShouldDrift's 90-second test
+// never fired and a lobby bot stood in one spot through rest after rest. After
+// maxConsecutiveIdles the rest is refused and the caller is sent to drift
+// instead; a new activity resets the count.
+const maxConsecutiveIdles = 3
+
 func (r *Runner) Idle(snap Snapshot) {
 	now := nowish(snap)
 
@@ -202,6 +220,7 @@ func (r *Runner) Idle(snap Snapshot) {
 	active := r.ShouldIdle(snap)
 	r.mu.Lock()
 	mode := r.idleMode
+	consecutive := r.consecutiveIdles
 	r.mu.Unlock()
 
 	if active {
@@ -213,11 +232,22 @@ func (r *Runner) Idle(snap Snapshot) {
 		return
 	}
 
+	// The rest budget is spent. Drift is the honest next move — the caller gets
+	// the wander it would have had from ShouldDrift, just earlier and on purpose.
+	if consecutive >= maxConsecutiveIdles {
+		r.log().Info("AGI: rest budget spent, drifting instead",
+			slog.Int("consecutive_idles", consecutive))
+		r.resetIdleStreak()
+		r.maybeWander()
+		return
+	}
+
 	pick := r.planIdle(now)
 
 	r.mu.Lock()
 	r.idleUntil = now.Add(pick.Duration)
 	r.idleMode = pick.Mode
+	r.consecutiveIdles = consecutive + 1
 	r.mu.Unlock()
 
 	r.log().Info("AGI: idling",

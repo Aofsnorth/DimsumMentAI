@@ -305,6 +305,11 @@ func (r *Runner) FreePlay(snap Snapshot, judgement Judgement) {
 	}
 
 	// Something worth doing and nothing pressing: take it.
+	//
+	// A confident REST alone is not taken at face value forever: rest windows
+	// are short, and a lobby bot that reopens one every time it expires reads
+	// as a statue. FreePlay falls through to the drift check below when rest
+	// is chosen while the body has been parked too long — see ShouldDrift.
 	if judgement.Known && judgement.Activity != "" && judgement.Engaged {
 		r.applyLocomotion(judgement.Locomotion)
 		r.applyDrop(judgement.DropOK)

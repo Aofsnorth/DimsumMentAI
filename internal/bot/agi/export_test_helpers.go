@@ -178,6 +178,16 @@ func (r *Runner) SetExecuteForTest(capture *[]DispatchedVerb) func() {
 // runner dispatched rather than what its helpers would have produced.
 func (r *Runner) DoActivityForTest(activity string) { r.doActivity(activity) }
 
+// RecordActivityForTest records an activity choice the way doActivity does,
+// including the rest-does-not-reset-the-idle-streak rule, so the idle-cap tests
+// can stage a history without a bot or a model.
+func (r *Runner) RecordActivityForTest(activity string) {
+	r.recordActivity(activity)
+	if activity != "rest" {
+		r.resetIdleStreak()
+	}
+}
+
 // InstallPlanForTest runs the real installPlan, so a test can observe the
 // carry-over rules without reaching the planner goroutine that normally calls it.
 //
