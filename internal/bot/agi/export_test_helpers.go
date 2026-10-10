@@ -188,6 +188,14 @@ func (r *Runner) RecordActivityForTest(activity string) {
 	}
 }
 
+// MarkDeepThinkForTest stamps the last full-model consultation, so the pacing
+// test can stage a history without waiting out the real interval.
+func (r *Runner) MarkDeepThinkForTest(at time.Time) {
+	r.mu.Lock()
+	r.lastDeepThink = at
+	r.mu.Unlock()
+}
+
 // InstallPlanForTest runs the real installPlan, so a test can observe the
 // carry-over rules without reaching the planner goroutine that normally calls it.
 //

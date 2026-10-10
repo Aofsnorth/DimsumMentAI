@@ -144,7 +144,7 @@ func (r *Runner) NaturalTick(ctx context.Context, snap Snapshot, judgement Judge
 	case episode.Objective == "":
 		// No brief yet. The bot is expected to be playing for hours before
 		// anybody hands it one, so this is the normal state and not a gap.
-		r.FreePlay(snap, judgement)
+		r.FreePlay(ctx, snap, judgement)
 
 	case episode.Over(snap.Now):
 		r.endEpisode(episode, snap)
@@ -275,7 +275,32 @@ func (r *Runner) PlayAlong(snap Snapshot, _ Judgement) {
 // something new, or stand still for a while. Inventing a goal here would produce
 // a bot that is permanently busy for no reason, which is the exact thing that
 // makes a long recording tiring to watch.
-func (r *Runner) FreePlay(snap Snapshot, judgement Judgement) {
+// deepThinkInterval is how often free play hands a decision to the full LLM
+// instead of Jev. Jev is the per-tick reflex brain and answers in a fixed
+// vocabulary; deliberate() is the only path that carries dictated !remember
+// rules into a prompt, so without this turn the bot could recite "klik NPC di
+// depan" in chat and never do it. Long enough that it is a consultation
+// rhythm rather than a second brain, short enough that a dictated instruction
+// is acted on within a minute or two of being given.
+const deepThinkInterval = 45 * time.Second
+
+// DueForDeepThink reports whether the full-model consultation is due: the bot
+// is free (not busy, not exploring), an LLM client exists to consult, and the
+// pacing window has passed.
+func (r *Runner) DueForDeepThink(snap Snapshot) bool {
+	if r.b == nil || r.b.AiClient == nil {
+		return false
+	}
+	if snap.Busy || snap.Exploring {
+		return false
+	}
+	r.mu.Lock()
+	last := r.lastDeepThink
+	r.mu.Unlock()
+	return last.IsZero() || nowish(snap).Sub(last) >= deepThinkInterval
+}
+
+func (r *Runner) FreePlay(ctx context.Context, snap Snapshot, judgement Judgement) {
 	// Diagnostic: log the decision inputs so a frozen bot is never a mystery.
 	// INFO level so it is visible without enabling debug.
 	r.log().Info("AGI: freePlay",
@@ -300,6 +325,21 @@ func (r *Runner) FreePlay(snap Snapshot, judgement Judgement) {
 	if style := r.OneBlockStyle(snap.NearBlocks); style != "normal" {
 		if r.IsOneBlockWorld() {
 			r.oneBlockStep(snap)
+			return
+		}
+	}
+
+	// Periodically hand the free-play decision to the FULL model, not just Jev.
+	// Jev answers in a fixed vocabulary and cannot read dictated rules like
+	// "klik NPC di depan buat ke survival" — deliberate() is the only path that
+	// carries the !remember memory into a prompt the model can act on. Paced
+	// deepThinkInterval so this is a consultation rhythm, not a second brain
+	// firing every second alongside Jev.
+	if r.DueForDeepThink(snap) {
+		r.lastDeepThink = nowish(snap)
+		r.deliberate(ctx, snap, judgement)
+		// The deliberation may have dispatched actions; give them the tick.
+		if snap.Busy || BodyCommitted(r.Observe()) {
 			return
 		}
 	}

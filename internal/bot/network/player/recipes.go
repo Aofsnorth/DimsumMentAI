@@ -273,8 +273,17 @@ func handleUpdateAttributes(b *bot.Bot, p *packet.UpdateAttributes) {
 			feetY := int32(math.Floor(float64(b.Pos.Y())))
 			feetZ := int32(math.Floor(float64(b.Pos.Z())))
 
-			b.WorldModel.SetHazard(feetX, feetY-1, feetZ, true)
+			b.WorldModel.SetTempHazard(feetX, feetY-1, feetZ, 10*time.Second)
 			b.Logger.Warn("bot took damage! marking block below feet as hazard", "x", feetX, "y", feetY-1, "z", feetZ)
+			// The hazard is a guess, so it expires. Damage here has no source
+			// packet to read: it could be a mob, or it could be the fall every
+			// fall/step_jump link in an explore route produces. A permanent mark
+			// on the block the bot is STANDING ON poisoned the world model — A*
+			// then refused routes through its own feet, every explore waypoint
+			// became unreachable, and the bot reported "stuck" while standing on
+			// perfectly good grass. Ten seconds outlives any real attacker's
+			// swing cycle and clears long before the next path search wants the
+			// cell back.
 
 			// Only re-path if the bot actually has somewhere to go. Re-pathing an
 			// idle bot wastes a full A* budget over terrain that may not be loaded

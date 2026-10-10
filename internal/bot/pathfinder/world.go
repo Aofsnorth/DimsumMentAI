@@ -31,7 +31,10 @@ type LocalWorldModel struct {
 	passableBlocks  map[int64]bool // mined/placed passable overrides (persistent)
 	bodyClearance   map[int64]bool // bot AABB cells for the current tick only
 	tempSolidBlocks map[int64]time.Time
-	chunkQuerier    ChunkQuerier
+	// tempHazardBlocks are damage-reaction guesses that expire on read. See
+	// SetTempHazard.
+	tempHazardBlocks map[int64]time.Time
+	chunkQuerier     ChunkQuerier
 
 	AllowScaffold bool
 
@@ -195,11 +198,12 @@ func (w *LocalWorldModel) IsBreakable(x, y, z int32) bool {
 
 func NewLocalWorldModel() *LocalWorldModel {
 	return &LocalWorldModel{
-		solidBlocks:     make(map[int64]bool),
-		hazardBlocks:    make(map[int64]bool),
-		passableBlocks:  make(map[int64]bool),
-		bodyClearance:   make(map[int64]bool),
-		tempSolidBlocks: make(map[int64]time.Time),
+		solidBlocks:      make(map[int64]bool),
+		hazardBlocks:     make(map[int64]bool),
+		passableBlocks:   make(map[int64]bool),
+		bodyClearance:    make(map[int64]bool),
+		tempSolidBlocks:  make(map[int64]time.Time),
+		tempHazardBlocks: make(map[int64]time.Time),
 	}
 }
 
@@ -312,6 +316,7 @@ func (w *LocalWorldModel) Reset() {
 	w.passableBlocks = make(map[int64]bool)
 	w.bodyClearance = make(map[int64]bool)
 	w.tempSolidBlocks = make(map[int64]time.Time)
+	w.tempHazardBlocks = make(map[int64]time.Time)
 	// The chunk querier and the path bounds are not facts about the world: they
 	// are where to ask and what the current trip is. Those survive.
 }
@@ -415,12 +420,16 @@ func (w *LocalWorldModel) IsLoaded(x, y, z int32) bool {
 	defer w.mu.RUnlock()
 
 	// Explicit overrides are knowledge in their own right: the bot mined or
-	// placed these cells, or a stuck-recovery penalty marked them.
+	// placed these cells, or a stuck-recovery penalty marked them. Temporary
+	// hazards count too — an unexpired damage guess is still knowledge.
 	k := PackBlockKey(x, y, z)
 	if w.solidBlocks[k] || w.passableBlocks[k] || w.hazardBlocks[k] {
 		return true
 	}
 	if _, marked := w.tempSolidBlocks[k]; marked {
+		return true
+	}
+	if _, live := w.tempHazardExpiry(k); live {
 		return true
 	}
 
@@ -442,6 +451,32 @@ func (w *LocalWorldModel) SetHazard(x, y, z int32, hazard bool) {
 	} else {
 		delete(w.hazardBlocks, k)
 	}
+}
+
+// SetTempHazard marks a cell hazardous for a bounded window, then lets it
+// expire on read. It exists for the damage-reaction path: damage with no
+// identified source is a GUESS about where danger is, and a permanent guess
+// poisons the model — the bot marked the grass under its own feet after every
+// fall and A* then refused routes through cells it was standing on.
+//
+// A real hazard discovered by scanning is still SetHazard; this is only for
+// guesses that must not outlive the moment that produced them.
+func (w *LocalWorldModel) SetTempHazard(x, y, z int32, duration time.Duration) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.tempHazardBlocks[PackBlockKey(x, y, z)] = time.Now().Add(duration)
+}
+
+// tempHazardExpiry reads the temporary hazard map under its own helper so
+// IsHazard stays a single lock acquisition. Expired marks are deleted lazily —
+// the map is small (one entry per damage event) and the read path is hot.
+func (w *LocalWorldModel) tempHazardExpiry(k int64) (time.Time, bool) {
+	expiry, ok := w.tempHazardBlocks[k]
+	if ok && time.Now().After(expiry) {
+		delete(w.tempHazardBlocks, k)
+		return time.Time{}, false
+	}
+	return expiry, ok
 }
 
 // nameAwareQuerier is implemented by caches that remember resolved block names.
@@ -480,8 +515,12 @@ func (w *LocalWorldModel) IsHazard(x, y, z int32) bool {
 	w.mu.RLock()
 	defer w.mu.RUnlock()
 
-	// 1. Check self-learned hazards
+	// 1. Check self-learned hazards — permanent (scanned) and temporary
+	// (damage-reaction guesses that expire) alike.
 	if w.hazardBlocks[PackBlockKey(x, y, z)] {
+		return true
+	}
+	if _, live := w.tempHazardExpiry(PackBlockKey(x, y, z)); live {
 		return true
 	}
 

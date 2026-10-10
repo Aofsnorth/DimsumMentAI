@@ -56,6 +56,13 @@ type Runner struct {
 	mu        sync.Mutex
 	lastSpoke time.Time
 	lastGaze  time.Time
+	// lastDeepThink is when the LLM last got a free-play turn. The natural loop
+	// otherwise runs Jev every tick and NEVER consults the model that reads the
+	// dictated !remember rules — Jev answers in a fixed vocabulary (rest,
+	// explore, ...) and cannot execute prose like "klik NPC di depan buat ke
+	// survival". This paces that consultation so the bot keeps its System One
+	// reflexes while still acting on the rules players dictated.
+	lastDeepThink time.Time
 	// greeted remembers who the vision reflex has already reacted to, and
 	// greetedAt when. The record outlives the gaze on purpose: ReflexLook
 	// consumes an entire tick, so re-firing it every time a gaze lapses starves
@@ -2010,6 +2017,9 @@ func (r *Runner) shouldDeliberate(snap Snapshot, judgement Judgement) bool {
 // ago on the same snapshot, and a second call would be both slower and able to
 // disagree with the one that gated this very decision.
 func (r *Runner) deliberate(ctx context.Context, snap Snapshot, judgement Judgement) {
+	if r == nil || r.b == nil || r.b.AiClient == nil {
+		return
+	}
 	if !r.canSpeakNow(snap, judgement) {
 		// The model can still hand back an action tag even when it must not
 		// speak, so this is a gate on words only — not on the whole call.

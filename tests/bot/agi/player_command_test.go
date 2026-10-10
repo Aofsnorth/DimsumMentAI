@@ -75,7 +75,7 @@ func TestFreePlayLeavesAWalkAlone(t *testing.T) {
 	r.SetLastMoved(now)
 
 	walking := agi.Snapshot{Now: now, HP: 20, Coords: "X:10 Y:64 Z:0", NearBlocks: normalBlocks, Busy: true}
-	r.FreePlay(walking, agi.Judgement{})
+	r.FreePlay(context.TODO(), walking, agi.Judgement{})
 	if r.ShouldIdle(walking) {
 		t.Error("free play opened a rest period while the bot was walking to a player")
 	}
@@ -83,7 +83,7 @@ func TestFreePlayLeavesAWalkAlone(t *testing.T) {
 	// The same runner with a free body does rest, so the assertion above is
 	// about the commitment and not about free play being broken.
 	resting := agi.Snapshot{Now: now, HP: 20, Coords: "X:10 Y:64 Z:0", NearBlocks: normalBlocks}
-	r.FreePlay(resting, agi.Judgement{})
+	r.FreePlay(context.TODO(), resting, agi.Judgement{})
 	if !r.ShouldIdle(resting) {
 		t.Fatal("a free bot no longer rests; the guard above would pass for the wrong reason")
 	}
@@ -98,7 +98,7 @@ func TestAnExplorationDriftIsNotCancelledByIdle(t *testing.T) {
 	r := newMotorRunner(t)
 	now := time.Now()
 	snap := agi.Snapshot{Now: now, HP: 20, Coords: "X:10 Y:64 Z:0", NearBlocks: normalBlocks, Exploring: true}
-	r.FreePlay(snap, agi.Judgement{})
+	r.FreePlay(context.TODO(), snap, agi.Judgement{})
 	if r.ShouldIdle(snap) {
 		t.Error("free play rested the bot in the middle of an exploration")
 	}
@@ -120,7 +120,7 @@ func TestAFreeBotRestsAndThenGetsUp(t *testing.T) {
 
 	// It has just arrived somewhere, so it stays.
 	r.SetLastMoved(start)
-	r.FreePlay(world, agi.Judgement{})
+	r.FreePlay(context.TODO(), world, agi.Judgement{})
 	if !r.ShouldIdle(world) {
 		t.Fatal("a bot with nothing to do and no reason to move did not rest")
 	}
