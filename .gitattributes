@@ -1,0 +1,10 @@
+# Normalize line endings so gofmt/golangci-lint behave identically on
+# Windows (CRLF working tree) and Linux CI (LF checkout).
+* text=auto
+*.go text eol=lf
+*.mod text eol=lf
+*.sum text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.json text eol=lf
+*.sh text eol=lf
