@@ -151,7 +151,7 @@ func mineScaffoldObstruction(b *bot.Bot, step scaffold.Step) {
 	// The tier of the best pickaxe carried, for the same reason the place path
 	// uses it: a pickaxe in the bag is a pickaxe the bot has.
 	tier := b.BestPickaxeTier()
-	for _, cell := range [2]protocol.BlockPos{step.Feet, protocol.BlockPos{step.Feet.X(), step.Feet.Y() + 1, step.Feet.Z()}} {
+	for _, cell := range [2]protocol.BlockPos{step.Feet, {step.Feet.X(), step.Feet.Y() + 1, step.Feet.Z()}} {
 		name, occupied := scaffold.Occupied(b, cell)
 		if !occupied {
 			continue

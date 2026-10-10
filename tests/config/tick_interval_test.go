@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"bedrock-ai/internal/config"
+
 	"gopkg.in/yaml.v3"
 )
 

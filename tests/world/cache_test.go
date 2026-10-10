@@ -267,7 +267,6 @@ func TestGeyserMergedPaletteShiftsVanillaIndices(t *testing.T) {
 		if merged.IsRIDSolid(got) != c.solid {
 			t.Errorf("%s solid = %v, want %v", c.name, !c.solid, c.solid)
 		}
-
 	}
 }
 

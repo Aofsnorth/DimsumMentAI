@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"bedrock-ai/internal/connection"
+
 	"github.com/df-mc/go-nethernet/discovery"
 	"github.com/sandertv/gophertunnel/minecraft"
 )

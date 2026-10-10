@@ -7,6 +7,7 @@ import (
 	"bedrock-ai/internal/bot"
 	"bedrock-ai/internal/bot/perception"
 	"bedrock-ai/internal/bot/world"
+
 	"github.com/df-mc/dragonfly/server/block/cube"
 	"github.com/df-mc/dragonfly/server/world/chunk"
 	"github.com/go-gl/mathgl/mgl32"

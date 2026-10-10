@@ -4,9 +4,10 @@ import (
 	"bedrock-ai/internal/bot"
 	"bedrock-ai/internal/bot/action"
 	"bedrock-ai/internal/bot/world"
+	"testing"
+
 	"github.com/df-mc/dragonfly/server/block/cube"
 	"github.com/df-mc/dragonfly/server/world/chunk"
-	"testing"
 )
 
 // Fast regression: semantic navigation cannot turn received chunks into xray.

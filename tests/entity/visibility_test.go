@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"bedrock-ai/internal/bot/entity"
+
 	"github.com/go-gl/mathgl/mgl32"
 )
 

@@ -301,7 +301,6 @@ import (
 // TestSensor_PassesARealRootWithoutViolations is the other direction, so the
 // fix cannot pass by flagging everything.
 func TestSensor_PassesARealRootWithoutViolations(t *testing.T) {
-
 	root := t.TempDir()
 	writeGoFile(t, root, "internal/event/bus.go", `package event
 

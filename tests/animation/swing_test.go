@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"bedrock-ai/internal/bot/movement/animation"
+
 	"github.com/sandertv/gophertunnel/minecraft/protocol/packet"
 )
 

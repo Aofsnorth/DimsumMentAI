@@ -46,11 +46,11 @@ func TestPlanMineStepRejectsHiddenBlock(t *testing.T) {
 func TestPlanMineStepAcceptsExposedVisibleBlock(t *testing.T) {
 	target := protocol.BlockPos{0, 0, 0}
 	world := testMineWorld{cells: map[protocol.BlockPos]mineWorldCell{
-		target:                     {loaded: true, solid: true},
-		protocol.BlockPos{1, 0, 0}: {loaded: true},
-		protocol.BlockPos{2, 0, 0}: {loaded: true},
-		protocol.BlockPos{1, 1, 0}: {loaded: true},
-		protocol.BlockPos{2, 1, 0}: {loaded: true},
+		target:    {loaded: true, solid: true},
+		{1, 0, 0}: {loaded: true},
+		{2, 0, 0}: {loaded: true},
+		{1, 1, 0}: {loaded: true},
+		{2, 1, 0}: {loaded: true},
 	}}
 
 	step, ok := gathering.PlanMineStep(world, mgl32.Vec3{2, 0, 0}, target)
@@ -85,8 +85,8 @@ func TestPlanMineStepRejectsUnknownExposure(t *testing.T) {
 func TestPlanMineStepRejectsUnknownSightCell(t *testing.T) {
 	target := protocol.BlockPos{0, 0, 0}
 	world := testMineWorld{cells: map[protocol.BlockPos]mineWorldCell{
-		target:                     {loaded: true, solid: true},
-		protocol.BlockPos{1, 0, 0}: {loaded: true},
+		target:    {loaded: true, solid: true},
+		{1, 0, 0}: {loaded: true},
 	}}
 
 	if step, ok := gathering.PlanMineStep(world, mgl32.Vec3{2, 0, 0}, target); ok {

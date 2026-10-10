@@ -2,9 +2,8 @@ package pathfinder_test
 
 import (
 	"bedrock-ai/internal/bot/pathfinder"
+	"testing"
 )
-
-import "testing"
 
 func TestNode_Equal_SameCoords(t *testing.T) {
 	t.Parallel()

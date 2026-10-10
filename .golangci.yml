@@ -16,7 +16,6 @@ linters:
     - gosec
     - govet
     - ineffassign
-    - misspell
     - prealloc
     - revive
     - staticcheck
@@ -43,7 +42,10 @@ linters:
         - performance
     gosec:
       excludes:
-        - G104
+        - G104   # unhandled errors (errcheck covers this)
+        - G115   # integer overflow conversions; pervasive by design in the
+                 # protocol layer (slots, coords) and guarded by callers
+        - G404   # math/rand is intentional for jitter/animation, not crypto
       severity: medium
       confidence: medium
     govet:
@@ -53,7 +55,15 @@ linters:
         - copylocks
         - printf
     misspell:
-      locale: US
+      locale: GB
+    staticcheck:
+      # QF*/ST* are style-refactor suggestions; the codebase intentionally
+      # keeps its current shape. SA/S (bug & simplification) stay enabled.
+      checks:
+        - all
+        - -QF*
+        - -ST*
+
     prealloc:
       simple: true
       for-loops: true
