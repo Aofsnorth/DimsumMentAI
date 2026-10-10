@@ -1,6 +1,6 @@
 ---
 name: agi-passive-idle-loop
-description: Use when this Go bot's AGI runs and Jev decides every tick but the body stays passive — activity=rest forever, "hungry, eating" spam every tick, repeated "acknowledged a player" lines, or dictated !remember rules that the bot seems to ignore. Distinct from a deadlock: decisions ARE produced, they are just consumed or discarded.
+description: Use when this Go bot's AGI runs and Jev decides every tick but the body stays passive or "stuck" — activity=rest forever, "hungry, eating" spam, repeated "acknowledged a player" lines, A* giving up short on routes through the bot's own feet, dictated !remember rules recited in chat but never executed, or "nyangkut/stuck" self-reports during explore. Distinct from a deadlock: decisions ARE produced, they are just consumed, poisoned, or never reach a model that can act on prose.
 ---
 
 # AGI passive while alive: the idle/reflex consumption loop
@@ -42,6 +42,20 @@ description: Use when this Go bot's AGI runs and Jev decides every tick but the 
    to it blindly): speak_threshold 0.75 was above every observed score (0.15–0.32) and
    engage_threshold 0.4 above most. Live Jev scores sat at speak≈0.2, so the bot never spoke
    and never counted as engaged. Local-only change: speak 0.55, engage 0.3.
+6. **Damage poisoning the world model (network/player/recipes.go)**: every damage event
+   permanently marked the block under the bot's feet as hazard. Falls produced by the explore
+   route's own fall/step_jump links count as damage — so the bot marked the grass it STOOD ON,
+   A* refused routes through its own feet ("A* gave up short" + "A* frontier" warnings), and
+   every explore waypoint became "stuck". Fix: `LocalWorldModel.SetTempHazard(x,y,z,dur)` —
+   a `tempHazardBlocks map[int64]time.Time` that expires on read — used by the damage path
+   (10s). Permanent `SetHazard` remains for scanned hazards (lava/fire).
+7. **The prose-reading model never consulted in natural free play (natural.go)**: Jev answers
+   in a fixed vocabulary (rest/explore/…) and CANNOT execute dictated rules like "klik NPC di
+   depan". `deliberate()` is the only path carrying !remember memory into a prompt, and the
+   natural loop never called it. Fix: `deepThinkInterval` (45s) — `FreePlay` now hands the
+   decision to `deliberate` via `DueForDeepThink` (gated on: client exists, not busy, not
+   exploring, window elapsed). Result: dictated navigation instructions are acted on within
+   a minute or two instead of only being recited in chat.
 
 ## Reading the log (fast triage)
 
@@ -52,6 +66,11 @@ description: Use when this Go bot's AGI runs and Jev decides every tick but the 
 - `idling mode=... for=...` repeating every 6–55s without a wander in between → idle streak
   cap missing or being reset by rest.
 - `acknowledged a player` same name, every 15s → greeted window too short.
+- `bot took damage! marking block below feet as hazard` followed by repeated
+  `A* gave up short` / `A* frontier: what stopped the climb` and self-reported "stuck" chat →
+  permanent damage hazards poisoning the world model; damage path must use SetTempHazard.
+- Bot recites a dictated rule in chat but keeps choosing explore/rest → deep-think turn
+  missing from natural FreePlay; check DueForDeepThink wiring and that AiClient is non-nil.
 
 ## Procedure
 
@@ -66,8 +85,11 @@ description: Use when this Go bot's AGI runs and Jev decides every tick but the 
 ## Verification
 
 - `go build ./...`, `go vet ./...` clean.
-- `go test -count=1 ./tests/bot/agi/... ./tests/agi/...` pass, including
-  TestIdleRefusesToOpenAFourthConsecutiveWindow and TestDoingSomethingResetsTheIdleStreak.
+- `go test -count=1 ./tests/bot/agi/... ./tests/agi/... ./tests/pathfinder/...` pass, including
+  TestIdleRefusesToOpenAFourthConsecutiveWindow, TestDeepThinkIsDueBeforeTheFirstAndThenPaced,
+  and TestTempHazardBlocksWhileLiveAndClearsAfter.
 - `golangci-lint run --timeout 5m` → 0 issues.
 - Live: within ~4 minutes of idle the bot must log `rest budget spent, drifting instead` or a
-  wander, and dictated `!remember` lines must appear in Jev's decision context.
+  wander, dictated `!remember` lines must appear in Jev's decision context, an
+  `AGI: unprompted message` or an executed action must follow a deep-think turn within ~90s,
+  and "A* gave up short" must not repeat right after a damage log line.
