@@ -51,17 +51,25 @@ func (bm *BlockMiner) equipBestTool(resolvedName string) {
 		return
 	}
 	if !bm.equipToolByType(requiredType) {
-		_ = bm.rg.bot.UnequipItem()
+		if err := bm.rg.bot.UnequipItem(); err != nil {
+			// The hand keeps whatever it held — a hoe digging dirt is exactly
+			// what a silent failure here looked like in the live log.
+			bm.logger.Warn("equipBestTool: no tool found and unequip failed",
+				"type", requiredType, "block", resolvedName, "err", err.Error())
+		}
 	}
 }
 
-func (bm *BlockMiner) requiredToolType(resolvedName string) string {
+// ToolTypeForBlock maps a block name to the tool class that mines it well.
+// Exported so the mapping rule is testable without a live bot.
+func ToolTypeForBlock(resolvedName string) string {
 	if strings.Contains(resolvedName, "stone") || strings.Contains(resolvedName, "ore") ||
 		strings.Contains(resolvedName, "brick") || strings.Contains(resolvedName, "cobble") {
 		return "pickaxe"
 	}
 	if strings.Contains(resolvedName, "dirt") || strings.Contains(resolvedName, "sand") ||
-		strings.Contains(resolvedName, "gravel") || strings.Contains(resolvedName, "clay") {
+		strings.Contains(resolvedName, "gravel") || strings.Contains(resolvedName, "clay") ||
+		strings.Contains(resolvedName, "grass") {
 		return "shovel"
 	}
 	if strings.Contains(resolvedName, "log") || strings.Contains(resolvedName, "wood") ||
@@ -69,6 +77,10 @@ func (bm *BlockMiner) requiredToolType(resolvedName string) string {
 		return "axe"
 	}
 	return ""
+}
+
+func (bm *BlockMiner) requiredToolType(resolvedName string) string {
+	return ToolTypeForBlock(resolvedName)
 }
 
 func (bm *BlockMiner) equipToolByType(requiredType string) bool {
@@ -110,6 +122,31 @@ func (bm *BlockMiner) equipToolByType(requiredType string) bool {
 			}
 			_ = bot.EquipItem(slot)
 			return true
+		}
+	}
+	// Custom servers rename tools, so after the vanilla tiers fail, accept any
+	// name shaped like the required tool at all. A bot holding only a renamed
+	// shovel used to dig with whatever was in its hand instead.
+	fallback := []string{requiredType}
+	if requiredType == "shovel" {
+		fallback = append(fallback, "sekop")
+	}
+	for _, toolName := range fallback {
+		for slot := uint32(0); slot < 64; slot++ {
+			item, held := inv[slot]
+			if !held || item.Count <= 0 {
+				continue
+			}
+			name := strings.ToLower(names[item.NetworkID])
+			if strings.Contains(name, "hoe") || strings.Contains(name, "cangkul") {
+				// A hoe is never an acceptable stand-in: it is the one tool that
+				// looks tool-shaped in the log and digs worst.
+				continue
+			}
+			if strings.Contains(name, toolName) {
+				_ = bot.EquipItem(slot)
+				return true
+			}
 		}
 	}
 	return false

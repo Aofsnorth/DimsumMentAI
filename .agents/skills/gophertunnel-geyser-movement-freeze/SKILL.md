@@ -390,3 +390,25 @@ the body. Partial floors (snow/slab/carpet) are not air so they still anchor.
 Also: `handleChangeDimension` ignores Geyser's fake position (y=32767); new Info logs
 `server teleported idle bot` and `self respawn position` expose raw/feet Y to find the origin of
 the +1 (still unidentified - read these logs after a /tpa).
+
+## 11. Reset storm during a drop chase (2026-10-09)
+
+Signature: alternating `server moved bot (teleport/reset)` / `server teleported idle bot`
+with a CONSTANT server position, the local body oscillating (sometimes falling into the
+hole), repeating every ~2s until the job dies. Live run: the scaffold stock miner dug the
+two surface blocks of the DIAGONALLY ADJACENT column (the old underfoot guard only excluded
+the bot's exact column), the dirt drops fell into the shaft, and the drop chase re-planned
+a `fall` route back into it while the server kept resetting the body — 17 seconds, zero logs.
+
+Three fixes, all in place:
+1. `gathering.UnderminesFooting` (miner.go): no candidate at/below feet level within a 3x3
+   ring of the bot's column — the rim cannot be undermined any more.
+2. `ApplySelfMovePlayer` (network/player/move.go): an ack'd reset that moves the body
+   >0.5 blocks during a walk clears `CurrentPath`/`PathIndex` (mirrors
+   `handleCorrectPrediction`) — the stale route no longer resumes from the pre-reset spot.
+   Also counts `b.ServerResets` (exposed via `ServerResetCount()`).
+3. Storm bail-outs: `NavigateToBlock` (movement/path.go) returns false after >=2 resets
+   during one wait; the looter marks the drop `attempted` after >=1 reset during its chase
+   (optional-interface `serverResetDelta` in chopper.go). `gatherBlocks` now returns
+   (collected, mined) and `ensureScaffoldStock` stops after a trip that MINED anything —
+   the inventory delta alone said "failed" whenever the drops sat uncollected.

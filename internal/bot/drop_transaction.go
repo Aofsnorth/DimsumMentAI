@@ -7,6 +7,15 @@ import (
 	"github.com/sandertv/gophertunnel/minecraft/protocol/packet"
 )
 
+// ClampDropCount is the shared drop-count rule: a non-positive request drops
+// the whole stack, a request larger than the stack drops everything there is.
+func ClampDropCount(stackCount uint16, requestedCount int) uint16 {
+	if requestedCount > 0 && requestedCount < int(stackCount) {
+		return uint16(requestedCount)
+	}
+	return stackCount
+}
+
 // BuildDropStackAction builds the vanilla server-authoritative drop action.
 //
 // On inventory-authoritative Bedrock servers (the same servers that require
@@ -27,10 +36,7 @@ func BuildDropStackAction(slot uint32, item protocol.ItemInstance, requestedCoun
 		return nil, 0, errors.New("authoritative stack network ID is missing")
 	}
 
-	dropped := item.Stack.Count
-	if requestedCount > 0 && requestedCount < int(item.Stack.Count) {
-		dropped = uint16(requestedCount)
-	}
+	dropped := ClampDropCount(item.Stack.Count, requestedCount)
 
 	action := &protocol.DropStackRequestAction{
 		Count:    byte(dropped),
@@ -69,5 +75,56 @@ func BuildDropSwing(entityRuntimeID uint64) *packet.Animate {
 		ActionType:      packet.AnimateActionSwingArm,
 		EntityRuntimeID: entityRuntimeID,
 		SwingSource:     packet.AnimateSwingSourceDropItem,
+	}
+}
+
+// BuildDropTransaction builds one Q-press: a NORMAL InventoryTransaction whose
+// two actions hand `drop` items out of the held slot into the world.
+//
+// This is the only drop shape a Geyser front-end implements. Its
+// PlayerAction translator handles just RESPAWN, STOP_SLEEP and
+// DIMENSION_CHANGE_SUCCESS, so a PlayerAction DropItem is read and discarded,
+// and a DropStackRequestAction is the inventory-screen drop a host never
+// processes while no inventory is open. Geyser's InventoryTransaction
+// translator reads this shape directly: the container action's slot is matched
+// against the Java held slot, and the world action's item count decides
+// between drop-one (1) and drop-the-stack (>1).
+//
+// stack is the server's own view of the slot (identity and count); `drop` is
+// how many of them leave. The old/new pair keeps the transaction balanced for
+// hosts that validate the actions instead of just executing them.
+func BuildDropTransaction(heldSlot uint32, stackNetworkID int32, stack protocol.ItemStack, drop uint16) *packet.InventoryTransaction {
+	oldCount := stack.Count
+	after := int32(oldCount) - int32(drop)
+	if after < 0 {
+		after = 0
+	}
+
+	worldStack := stack
+	worldStack.Count = drop
+	var newItem protocol.ItemInstance
+	if after > 0 {
+		remaining := stack
+		remaining.Count = uint16(after)
+		newItem = protocol.ItemInstance{StackNetworkID: stackNetworkID, Stack: remaining}
+	}
+
+	return &packet.InventoryTransaction{
+		Actions: []protocol.InventoryAction{
+			{
+				SourceType:    protocol.InventoryActionSourceContainer,
+				WindowID:      protocol.Option(int8(protocol.WindowIDInventory)),
+				InventorySlot: heldSlot,
+				OldItem:       protocol.ItemInstance{StackNetworkID: stackNetworkID, Stack: stack},
+				NewItem:       newItem,
+			},
+			{
+				SourceType:  protocol.InventoryActionSourceWorld,
+				SourceFlags: protocol.Option(uint32(1)), // InventorySource.Flag.DROP_ITEM
+				OldItem:     protocol.ItemInstance{},
+				NewItem:     protocol.ItemInstance{StackNetworkID: stackNetworkID, Stack: worldStack},
+			},
+		},
+		TransactionData: &protocol.NormalTransactionData{},
 	}
 }

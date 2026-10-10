@@ -68,6 +68,17 @@ func Parse(reply string) ParsedReply {
 	reply = unclosedThinkRegex.ReplaceAllString(reply, "")
 	reply = strings.TrimSpace(reply)
 
+	// A reply carrying the <silent/> marker means "say nothing". Normalizing it
+	// HERE, once, is what keeps the marker out of chat: every reader of
+	// CleanReply already treats an empty reply as silence, but the live status
+	// narrator shipped the literal string "<silent/>" to a player because this
+	// was the one place nobody had taught the marker to. A silent answer also
+	// carries no work — its action tags are the model thinking out loud, not a
+	// task.
+	if strings.Contains(strings.ToLower(reply), "<silent") {
+		return ParsedReply{}
+	}
+
 	// Extract <plan> steps BEFORE stripping tags, so we can detect a plan
 	// even when the LLM also emits <action> tags.
 	planMatch := planRegex.FindStringSubmatch(reply)

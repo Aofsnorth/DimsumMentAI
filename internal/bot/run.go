@@ -209,7 +209,16 @@ func (b *Bot) runSession(ctx context.Context) sessionResult {
 	// with a new seed. Keeping the old chunks would let pathfinding walk through
 	// terrain that does not exist any more.
 	b.ResetSessionState()
-	b.noteServer(b.ServerHost)
+	// The address the session is about to speak for: the switch target after a
+	// transfer, the configured host on a first dial. Passing b.ServerHost here
+	// instead would re-run every session against the config host — the server
+	// compat flags and the memory bucket would keep answering for a server the
+	// bot left behind.
+	address := b.CurrentServer()
+	if address == "" {
+		address = b.ServerHost
+	}
+	b.noteServer(address)
 
 	b.initSpawn(gd)
 	defer b.SaveLastStandingPosition()

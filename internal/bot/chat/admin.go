@@ -12,7 +12,26 @@ import (
 )
 
 // HandleAdminCommand executes special administrative actions prefixed with '!'
+//
+// Every verb here is operator territory: !say speaks as the bot, !stop cancels
+// its work, !remember writes into its long-term memory, !cmd runs a server
+// command through its connection. A stranger who could reach this layer could
+// puppet the bot and poison what it believes, so the whole surface is gated on
+// the linked players (main_players) the bot already answers to — the same rule
+// the whitelist, guard and episode commands enforce individually. Gate the
+// layer once, here, rather than trusting every handler to remember.
 func HandleAdminCommand(b *bot.Bot, cmd string, user string) {
+	if !isOperator(b, user) {
+		// Name the command in the log so a refused line is distinguishable from
+		// one that never arrived.
+		attempt := cmd
+		if parts := strings.SplitN(strings.TrimPrefix(cmd, "!"), " ", 2); parts[0] != "" {
+			attempt = parts[0]
+		}
+		b.Logger.Warn("admin command ignored: not the configured operator",
+			"from", user, "action", attempt)
+		return
+	}
 	cmd = strings.TrimPrefix(cmd, "!")
 	parts := strings.SplitN(cmd, " ", 2)
 	act := strings.ToLower(strings.TrimSpace(parts[0]))
@@ -31,6 +50,9 @@ func HandleAdminCommand(b *bot.Bot, cmd string, user string) {
 }
 
 // adminCommandHandlers maps admin command names to their handlers.
+//
+// isOperator (the operator gate used above) is shared with the episode command
+// and lives in episode.go — same package, one definition.
 var adminCommandHandlers = map[string]func(b *bot.Bot, param, user string){
 	"say":        handleAdminSay,
 	"status":     handleAdminStatus,

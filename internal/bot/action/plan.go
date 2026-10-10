@@ -66,7 +66,7 @@ func ExecuteAndWait(b *bot.Bot, label, param, user string) event.ActionStatus {
 // dead at ninety seconds and re-running it over the top of the first try.
 func actionReportTimeout(label string) time.Duration {
 	switch strings.ToLower(strings.TrimSpace(label)) {
-	case "gather", "chop", "automine", "fish", "harvest", "explore":
+	case "gather", "chop", "treefarm", "automine", "fish", "harvest", "explore":
 		return 45 * time.Minute
 	}
 	return statusTimeout
@@ -139,7 +139,7 @@ func waitForActionSettled(b *bot.Bot, label string) {
 		// loop, so its end is observable; the timeout only bounds the wait for
 		// a loop that is not running.
 		waitForEmoteSettled(b, 5*time.Second)
-	case "gather", "chop", "mine", "automine", "loot", "clear", "scan":
+	case "gather", "chop", "treefarm", "mine", "automine", "loot", "clear", "scan":
 		// Event-driven: the wait returns the moment the gatherer stops. The
 		// long cap exists for jobs like "200 kayu" that legitimately run for
 		// many minutes — cutting them at ninety seconds started the next plan

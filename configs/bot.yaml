@@ -4,8 +4,8 @@
 
 # --- Server Settings ---
 server:
-  host: "play.nexusone.fun"
-  port: 19132
+  host: "hansprojects.my.id"
+  port: 25621
   offline: false # true = no Xbox Live auth (local server)
   lan_discovery: false # auto-discover the single-player world opened to LAN (direct RakNet to a client-hosted world is rejected with invalidSkin — the host requires the Nonce from its advertisement)
   lan_world: "A" # optional: only join a world with this exact name
@@ -39,7 +39,7 @@ server:
 bot:
   name: "Luna" # In-game display name
   aliases: ["Luna", "luna", ".ShigaLucifer", "ShigaLucifer"] # Tag nicknames recognized in chat (bisa diubah-ubah, tidak harus pakai nama Xbox)
-  language: "Indonesian" # AI reply language, e.g. "English", "Indonesian", "Japanese"
+  language: "All-Language" # AI reply language, e.g. "English", "Indonesian", "Japanese"
   log_level: "info" # debug, info, warn, or error (debug writes logs/debug-090ce4.log — flip it on when diagnosing)
   memory_path: "data/bot_memory.json" # Curated long-term memories (facts + named places)
   debug: false # Enable visualizer debug features (break, place, inventory buttons)
@@ -109,7 +109,7 @@ bot:
 #   - Butuh AI provider aktif. Tanpa itu planning mode diam-diam jadi default.
 #     Cek baris "AGI loop started" di log untuk mode yang benar-benar jalan.
 agi:
-  enabled: false
+  enabled: true
   # "default" | "planning" | "natural". Alias: plan, long_horizon, natural_mode,
   # episode, record. Typo jatuh ke "default".
   #
@@ -296,14 +296,9 @@ ai:
   main_player: "Synterix"
   main_players:
     - "Synterix"
-    - "SotoLamongan"
-    - "sfasging"
-    - "trimak_keceh"
-    - "Apet"
-    - "SIAGUS"
-  respond_only_to_linked_player: true
+  respond_only_to_linked_player: false
   respond_only_when_tagged: true # true = only respond when tagged/named in chat (e.g. Luna or @Luna)
-  only_tag_aliases: false # true = only names in tag_aliases can be tagged (ignores default bot name/gamertag)
+  only_tag_aliases: true # true = only names in tag_aliases can be tagged (ignores default bot name/gamertag)
   tag_aliases:
     - "Luna"
     - "luna"

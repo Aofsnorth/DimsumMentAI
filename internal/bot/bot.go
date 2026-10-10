@@ -420,6 +420,25 @@ type Bot struct {
 	ServerSupportY  float32
 	ServerSupportAt time.Time
 
+	// Missing-support reconciliation. When the host keeps standing the body a
+	// full block above what the world model decoded, the model is missing a
+	// block — and every physics tick that sinks the body into that cell earns
+	// another server reset, another stall probe, and a step-up that never
+	// lands. After enough agreeing corrections the cell is written into the
+	// world model as a temporary solid so grounding, pathfinding and scaffold
+	// placements all agree with the server's world instead of fighting it.
+	ServerSupportHits         int
+	ServerSupportHitsY        float32
+	ServerSupportReconciledAt time.Time
+
+	// ServerResets counts ack'd server corrections (MovePlayer teleport/reset
+	// modes and far echoes) — every "the server moved the body out from under
+	// the current plan" event. The drop chase and the navigation wait read it
+	// as a storm signal: two resets during one walk means the route leads
+	// somewhere the server's collision refuses, and waiting longer just burns
+	// the caller's budget.
+	ServerResets int
+
 	// TeleportAckPending is true when the server teleported the bot (via MovePlayer
 	// or Respawn) and the next PlayerAuthInput packet must acknowledge it at the
 	// exact teleported position with InputFlagHandledTeleport set.

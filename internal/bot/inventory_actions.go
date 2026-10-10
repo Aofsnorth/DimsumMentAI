@@ -56,12 +56,20 @@ func (b *Bot) DropItem(name string, count int) error {
 	geyser := b.GeyserCompat
 	b.Mu.Unlock()
 
+	// The Geyser branch runs BEFORE the strict builder on purpose. Geyser's
+	// drop path reads only the world action's count and the container action's
+	// slot — never the item instances — and this host's slot syncs carry no
+	// stack network IDs at all (the tracker deletes the entry, so the ID reads
+	// zero). The old order called BuildDropStackAction first, whose zero-ID
+	// guard killed every Geyser drop/give with "authoritative stack network ID
+	// is missing" before a single packet reached the wire.
+	if geyser {
+		return b.dropViaHeldSlot(name, targetSlot, item, ClampDropCount(item.Stack.Count, count))
+	}
+
 	action, dropped, err := BuildDropStackAction(targetSlot, item, count)
 	if err != nil {
 		return fmt.Errorf("drop %q from inventory slot %d: %w", name, targetSlot, err)
-	}
-	if geyser {
-		return b.dropViaHeldSlot(name, targetSlot, item, dropped)
 	}
 
 	// Face-direction swing for viewers, then the authoritative drop request.
@@ -84,62 +92,106 @@ func (b *Bot) DropItem(name string, count int) error {
 	return nil
 }
 
-// dropViaHeldSlot drops with the PlayerAction DropItem the real client sends
-// when you press Q.
+// dropViaHeldSlot drops with the NORMAL InventoryTransaction the real client
+// sends when you press Q: a container action out of the held hotbar slot plus a
+// world action carrying the DROP_ITEM flag.
 //
-// The cursor path was built because Geyser never answered a direct slot drop,
-// and it does answer take and cursor-drop — but an accepted answer is not a
-// dropped item. The live run showed the host reply OK to both steps and then
-// re-sync slot 0 with the pickaxe still sitting in it: the request was read, the
-// inventory was untouched. Q is the one thing every host has to honour, it needs
-// no inventory screen to be open, and it drops from the held slot, so the stack
-// is selected into the hand first when it is not already there.
+// The wire history here is instructive. A direct slot DropStackRequestAction
+// went unanswered (it is the inventory-SCREEN drop; with no inventory open the
+// host never processes it), the take-to-cursor path was answered OK but never
+// spawned an item, and PlayerAction DropItem — the old Q packet — is simply
+// not handled by Geyser's PlayerAction translator at all. Only this
+// transaction shape maps to a real Java-side drop, so the stack is selected
+// into the hand first (EquipItem, server-confirmed on Geyser) and every toss
+// is verified against the authoritative inventory afterwards.
 func (b *Bot) dropViaHeldSlot(name string, slot uint32, item protocol.ItemInstance, dropped uint16) error {
+	// The container action must address a hotbar slot (0-8): Geyser matches it
+	// against the Java held slot, and its fallback path offsets the slot by 36
+	// before clicking. A main-inventory slot number would click the wrong Java
+	// slot, so anything not in the hand is moved into the hand first.
+	if err := b.EquipItem(slot); err != nil {
+		return fmt.Errorf("drop %q: select slot %d: %w", name, slot, err)
+	}
+
 	b.Mu.Lock()
 	held := b.HeldSlot
 	b.Mu.Unlock()
-
-	if held != slot {
-		// Q drops whatever the hand is holding, so the stack has to be in the
-		// hand first. The stack is the server's own view of the slot, so the
-		// selection packet carries the truth rather than an empty hand.
-		b.Mu.Lock()
-		b.HeldSlot = slot
-		b.Mu.Unlock()
-		if err := b.Conn.WritePacket(&packet.MobEquipment{
-			EntityRuntimeID: b.Conn.GameData().EntityRuntimeID,
-			NewItem:         item,
-			InventorySlot:   byte(slot),
-			HotBarSlot:      byte(slot),
-			WindowID:        0,
-		}); err != nil {
-			return fmt.Errorf("drop %q: select slot %d: %w", name, slot, err)
-		}
+	if held >= 9 {
+		return fmt.Errorf("drop %q: slot %d never reached the hotbar", name, slot)
 	}
 
-	// Face-direction swing for viewers, paired with each Q, the way the client
-	// renders a throw.
-	swing := BuildDropSwing(b.Conn.GameData().EntityRuntimeID)
-	runtimeID := b.Conn.GameData().EntityRuntimeID
-	for i := uint16(0); i < dropped; i++ {
-		if err := b.Conn.WritePacket(&packet.PlayerAction{
-			EntityRuntimeID: runtimeID,
-			ActionType:      protocol.PlayerActionDropItem,
-		}); err != nil {
-			return fmt.Errorf("drop %d %q: send drop action: %w", dropped, name, err)
+	sent := 0
+	for remaining := dropped; remaining > 0; {
+		b.Mu.Lock()
+		stack, ok := b.InventoryMap[held]
+		stackNetID := b.StackNetworkIDs[held]
+		b.Mu.Unlock()
+		if !ok || stack.Count == 0 {
+			break
 		}
-		_ = b.Conn.WritePacket(swing)
-		if i+1 < dropped {
+
+		// Geyser reads the world action's item count as the whole decision:
+		// count 1 drops a single item, anything above drops the entire stack.
+		// A partial request therefore goes out as one packet per item, while a
+		// request that covers the whole stack is a single packet.
+		batch := remaining
+		if stack.Count > remaining {
+			batch = 1
+		}
+
+		if err := b.Conn.WritePacket(BuildDropTransaction(held, stackNetID, stack, batch)); err != nil {
+			return fmt.Errorf("drop %d %q: send drop transaction: %w", batch, name, err)
+		}
+		_ = b.Conn.WritePacket(BuildDropSwing(b.Conn.GameData().EntityRuntimeID))
+		sent += int(batch)
+		remaining -= batch
+		if remaining > 0 {
 			time.Sleep(dropItemGap)
 		}
 	}
-	b.Logger.Info("dropped via held slot (geyser)", "item", name, "slot", slot, "count", dropped)
+	if sent == 0 {
+		return fmt.Errorf("drop %q: hand slot %d is empty on the server's side", name, held)
+	}
+
+	// The toss is only real once the authoritative inventory says so: the host
+	// answers with a slot/content resync after the Java server confirms the
+	// drop. Before this check, a host that silently ignored the transaction
+	// (the PlayerAction era) still reported success while the item sat in the
+	// inventory.
+	deadline := time.Now().Add(dropVerifyTimeout)
+	for {
+		b.Mu.Lock()
+		stack, ok := b.InventoryMap[held]
+		count := uint16(0)
+		if ok {
+			count = stack.Count
+		}
+		b.Mu.Unlock()
+		if int(count) <= int(item.Stack.Count)-int(dropped) {
+			break
+		}
+		if time.Now().After(deadline) {
+			gone := int(item.Stack.Count) - int(count)
+			if gone < 0 {
+				gone = 0
+			}
+			return fmt.Errorf("server did not process the drop: %d of %d %s left the inventory", gone, dropped, name)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	b.Logger.Info("dropped via held slot transaction", "item", name, "slot", held, "count", dropped, "packets", sent)
 	return nil
 }
 
-// dropItemGap separates consecutive Q presses. Dropping a stack is not one
-// packet carrying a count, it is one packet per item, and sending them back to
-// back is how a host processes the first and drops the rest on the floor.
+// dropVerifyTimeout is how long the held-slot drop waits for the server's
+// authoritative inventory resync before declaring the toss lost.
+const dropVerifyTimeout = 2500 * time.Millisecond
+
+// dropItemGap separates consecutive drop packets. Geyser maps each packet's
+// world-action count onto Java drop-one/drop-stack, so a partial toss of N
+// items is N packets, and back-to-back sends are how a host processes the
+// first and loses the rest.
 const dropItemGap = 120 * time.Millisecond
 
 // dropViaCursor drops through the cursor: take the stack to the cursor, then

@@ -307,17 +307,41 @@ func (tc *TreeChopper) logSelectedCandidate(best treeCandidate, attempt int) {
 	)
 }
 
-// haltWalk stops the legs without cancelling the running gather. The
+// haltWalk stops the legs without cancelling the running gather. See
+// haltWalkOnly — this is the chopper's wrapper over the shared helper.
+func (tc *TreeChopper) haltWalk() {
+	haltWalkOnly(tc.rg.bot)
+}
+
+// haltWalkOnly stops the legs without cancelling the running gather. The
 // movement-layer StopMovement routes through Stop, which cancels the activity
 // context — and the gather's context IS that activity: the chop cancelled
 // itself the instant it arrived at the tree, reporting a felled trunk and
 // zero logs, every single time the tree needed walking to.
-func (tc *TreeChopper) haltWalk() {
-	if h, ok := tc.rg.bot.(interface{ HaltWalk() }); ok {
+//
+// Every job-internal "stop walking" inside this package must go through here.
+// The scaffold stock-miner and the drop sweeper both run as goroutines inside
+// a chop/gather job; either of them calling StopMovement murders the job that
+// is running it — the live 200-log run died mid-sweep with "Wood broken but
+// not picked up" the moment the stock miner told the legs to stop.
+func haltWalkOnly(b Bot) {
+	if h, ok := b.(interface{ HaltWalk() }); ok {
 		h.HaltWalk()
 		return
 	}
-	tc.rg.bot.StopMovement()
+	b.StopMovement()
+}
+
+// serverResetDelta reports how many ack'd server corrections moved the body
+// since the caller's snapshot. Optional capability: the gathering.Bot interface
+// stays implementable by test fakes without knowing about reset tracking, and
+// a bot without the counter simply reports zero (the caller keeps its older
+// bail-outs).
+func serverResetDelta(b Bot, before int) int {
+	if r, ok := b.(interface{ ServerResetCount() int }); ok {
+		return r.ServerResetCount() - before
+	}
+	return 0
 }
 
 // ChopTreeAt walks to startPos and fells that trunk. It reports whether the base
@@ -338,8 +362,15 @@ func (tc *TreeChopper) ChopTreeAt(ctx context.Context, startPos protocol.BlockPo
 	// "reached" — the chopTree BFS will handle the rest.
 	for attempt := 0; attempt < 3; attempt++ {
 		if tc.rg.bot.NavigateToBlock(startPos.X(), startPos.Y(), startPos.Z(), 3.5) {
-			reached = true
-			break
+			// Tolerance is a 3D sphere, so "reached" used to include standing a
+			// full two blocks BELOW the base (dy 2 leaves horizontal ≤ 2.87 inside
+			// a 3.5 sphere) — the chop then ran from below and pillared for a
+			// step a walk would have climbed. The normal chopping stance has the
+			// feet within one block of the base level.
+			if feet := tc.rg.bot.GetCoords().Y(); math.Abs(float64(feet-float32(startPos.Y()))) <= 1.0 {
+				reached = true
+				break
+			}
 		}
 		tc.logger.Debug("Navigate attempt failed, retrying", "attempt", attempt+1, "pos", startPos)
 		time.Sleep(300 * time.Millisecond)

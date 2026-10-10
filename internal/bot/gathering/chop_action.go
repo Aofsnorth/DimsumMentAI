@@ -329,7 +329,14 @@ func (tc *TreeChopper) chopLogBlock(ctx context.Context, pos protocol.BlockPos, 
 	botPos := bot.GetCoords()
 
 	if !withinBreakReach(botPos, pos) {
-		tc.repositionForLog(ctx, pos)
+		if !tc.repositionForLog(ctx, pos) {
+			return false
+		}
+		// The reposition detours (stock mining, tower equips) leave a shovel, a
+		// hoe or a scaffold block in the hand; the old code chopped the rest of
+		// the trunk with whatever was held. The early-return inside makes this
+		// a no-op when the axe is already up.
+		tc.equipBestAxe()
 	}
 
 	// Plan the break the way the miner does: an exposed face the bot can
@@ -369,11 +376,12 @@ func (tc *TreeChopper) chopLogBlock(ctx context.Context, pos protocol.BlockPos, 
 	return true
 }
 
-// repositionForLog gets the bot back within breaking reach of a log. Tall logs
-// get a minimal tower — just high enough that the eye reaches the log centre —
-// instead of the old climb-to-one-below-the-log that towered far more than the
-// trunk needed; far logs get a walk back.
-func (tc *TreeChopper) repositionForLog(ctx context.Context, pos protocol.BlockPos) {
+// repositionForLog gets the bot back within breaking reach of a log and
+// reports whether that log is now reachable. Tall logs get a minimal tower —
+// just high enough that the eye reaches the log centre — instead of the old
+// climb-to-one-below-the-log that towered far more than the trunk needed; far
+// logs get a walk back.
+func (tc *TreeChopper) repositionForLog(ctx context.Context, pos protocol.BlockPos) bool {
 	bot := tc.rg.bot
 	botPos := bot.GetCoords()
 	eyeY := botPos.Y() + mineEyeHeight
@@ -389,11 +397,20 @@ func (tc *TreeChopper) repositionForLog(ctx context.Context, pos protocol.BlockP
 		tc.rg.scaffold.TowerUpTo(ctx, targetFeet)
 	} else {
 		tc.returnToReach(ctx, pos)
-		return
+		return true
+	}
+	// The tower was refused, skipped, or not high enough and the log is still
+	// out of reach: walking to it now sends the pathfinder climbing the tree
+	// via its own leaves — the live run logged "A* gave up short" six times
+	// for one trunk this way. Leave the log to the round/skip logic instead.
+	if !withinBreakReach(tc.rg.bot.GetCoords(), pos) {
+		tc.logger.Debug("log still out of reach after reposition, deferring", "pos", pos)
+		return false
 	}
 	// After towering the bot may be several blocks out horizontally; walk
 	// back before swinging or the break is rejected for range.
 	tc.returnToReach(ctx, pos)
+	return true
 }
 
 // chopReachLimit is how far the bot may stand from a log and still break it.
@@ -611,15 +628,28 @@ func immovableBlockName(name string) bool {
 	return false
 }
 
+// IsAxeName reports whether an item name is an axe. The generic tier used a
+// bare substring test, and "pickaxe" contains "axe" — a stone pickaxe sat in
+// the axe slot and the trunk was chopped with the wrong tool while the bot
+// believed it had equipped its best axe. Exported so the matcher rule is
+// testable without a live bot.
+func IsAxeName(name string) bool {
+	n := strings.ToLower(name)
+	if strings.Contains(n, "pickaxe") {
+		return false
+	}
+	return strings.Contains(n, "axe") || strings.Contains(n, "kapak")
+}
+
 func (tc *TreeChopper) equipBestAxe() {
 	bot := tc.rg.bot
 	inv := bot.GetInventorySlots()
 	names := bot.GetItemNames()
 
-	// Tiered: the exact vanilla tiers first, then any name that carries "axe"
-	// or "kapak" anywhere — custom servers (this one included) rename or add
-	// axes, and a matcher keyed to six exact strings declared the gift axe
-	// "item custom aneh-aneh" while it sat in the inventory.
+	// Tiered: the exact vanilla tiers first, then any axe-shaped name — custom
+	// servers (this one included) rename or add axes, and a matcher keyed to
+	// six exact strings declared the gift axe "item custom aneh-aneh" while it
+	// sat in the inventory.
 	tiers := []func(string) bool{
 		func(n string) bool { return strings.Contains(n, "netherite_axe") },
 		func(n string) bool { return strings.Contains(n, "diamond_axe") },
@@ -627,29 +657,43 @@ func (tc *TreeChopper) equipBestAxe() {
 		func(n string) bool { return strings.Contains(n, "stone_axe") },
 		func(n string) bool { return strings.Contains(n, "wooden_axe") },
 		func(n string) bool { return strings.Contains(n, "golden_axe") },
-		// Any axe-shaped name at all, any language.
-		func(n string) bool { return strings.Contains(n, "axe") || strings.Contains(n, "kapak") },
+		// Any axe-shaped name at all, any language — but never a pickaxe.
+		IsAxeName,
 	}
+	bestSlot := ^uint32(0)
 	for _, match := range tiers {
+		for slot := uint32(0); slot < 64; slot++ {
+			item, ok := inv[slot]
+			if !ok || item.Count <= 0 {
+				continue
+			}
+			if match(strings.ToLower(names[item.NetworkID])) {
+				bestSlot = slot
+				break
+			}
+		}
+		if bestSlot != ^uint32(0) {
+			break
+		}
+	}
+	if bestSlot == ^uint32(0) {
+		// Nothing matched: dump what the inventory DOES hold, so the next run's
+		// log says what the server called the axe instead of leaving a silent gap.
+		held := make([]string, 0, len(inv))
 		for slot, item := range inv {
 			if item.Count <= 0 {
 				continue
 			}
-			name := strings.ToLower(names[item.NetworkID])
-			if match(name) {
-				_ = bot.EquipItem(slot)
-				return
-			}
+			held = append(held, fmt.Sprintf("slot=%d name=%q", slot, names[item.NetworkID]))
 		}
+		tc.logger.Warn("equipBestAxe: no axe recognised in inventory", "inventory", strings.Join(held, ", "))
+		return
 	}
-	// Nothing matched: dump what the inventory DOES hold, so the next run's
-	// log says what the server called the axe instead of leaving a silent gap.
-	held := make([]string, 0, len(inv))
-	for slot, item := range inv {
-		if item.Count <= 0 {
-			continue
-		}
-		held = append(held, fmt.Sprintf("slot=%d name=%q", slot, names[item.NetworkID]))
+	// Re-equipping per log must be a no-op when the axe is already up: the
+	// round loop calls this after every detour, and a MobEquipment per call
+	// flickers the hand on the server's view.
+	if bot.GetHeldItemSlot() == bestSlot {
+		return
 	}
-	tc.logger.Warn("equipBestAxe: no axe recognised in inventory", "inventory", strings.Join(held, ", "))
+	_ = bot.EquipItem(bestSlot)
 }

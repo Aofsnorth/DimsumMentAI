@@ -18,6 +18,24 @@ func TestParse_NoActions(t *testing.T) {
 	}
 }
 
+// The <silent/> marker means "say nothing". It must never reach chat as
+// literal text — the live status narrator sent "<silent/>" to a player
+// verbatim before the parser learned the marker. A silent answer also carries
+// no work: its action tags are the model thinking out loud.
+func TestParse_SilentMarkerIsEmptinessNotText(t *testing.T) {
+	t.Parallel()
+
+	for _, reply := range []string{"<silent/>", " <silent/> ", "<silent/ >"} {
+		r := ai.Parse(reply)
+		if r.CleanReply != "" {
+			t.Errorf("Parse(%q).CleanReply = %q, want empty", reply, r.CleanReply)
+		}
+		if len(r.Actions) != 0 || len(r.PlanSteps) != 0 {
+			t.Errorf("Parse(%q) carried work: actions=%v plan=%v, want none", reply, r.Actions, r.PlanSteps)
+		}
+	}
+}
+
 func TestParse_SingleAction(t *testing.T) {
 	t.Parallel()
 	r := ai.Parse("Aku datang! <action>come:Steve</action>")

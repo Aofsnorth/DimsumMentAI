@@ -4,8 +4,8 @@
 
 # --- Server Settings ---
 server:
-  host: "play.hansprojects.my.id"
-  port: 19132
+  host: "hansprojects.my.id"
+  port: 25621
   offline: false # true = no Xbox Live auth (local server)
   lan_discovery: false # auto-discover the single-player world opened to LAN
   lan_world: "A" # optional: only join a world with this exact name

@@ -723,6 +723,7 @@ var ActionHandlers = map[string]ActionHandler{
 	},
 	"give":           handleGive,
 	"drop":           handleDrop,
+	"treefarm":       treefarmHandler,
 	"place":          handlePlace,
 	"list_craftable": handleListCraftable,
 	"eat": func(b *bot.Bot, param, user string) {

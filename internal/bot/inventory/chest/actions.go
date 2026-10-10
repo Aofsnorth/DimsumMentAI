@@ -194,6 +194,14 @@ func (ic *Container) GiveItem(ctx context.Context, itemName string, playerName s
 
 	err := ic.bot.DropItem(names[inv[targetSlot].NetworkID], int(count))
 	if err != nil {
+		// Swallowing this error is how a broken drop path narrated as "deketan
+		// sini dong": the model improvised a distance story because the real
+		// reason never reached a log. Also release the pinned look the aim set.
+		ic.logger.Warn("GiveItem: drop failed",
+			slog.String("item", itemName),
+			slog.String("to", playerName),
+			slog.String("err", err.Error()))
+		ic.bot.ResetLook()
 		return false
 	}
 

@@ -32,7 +32,7 @@ func NewBlockMiner(rg *ResourceGatherer, logger *slog.Logger) *BlockMiner {
 // GatherBlock mines a block type and reports the outcome as an action the
 // player can see.
 func (bm *BlockMiner) GatherBlock(ctx context.Context, blockName string, targetCount int) {
-	collected := bm.gatherBlocks(ctx, blockName, targetCount)
+	collected, _ := bm.gatherBlocks(ctx, blockName, targetCount)
 	bm.rg.bot.ReportActionStatus("", event.ActionStatus{
 		Action:  "mine",
 		Item:    bm.resolveFuzzyName(blockName),
@@ -41,13 +41,14 @@ func (bm *BlockMiner) GatherBlock(ctx context.Context, blockName string, targetC
 	})
 }
 
-// gatherBlocks does the mining and returns how much was collected, without
-// reporting an action status.
-//
-// Internal detours use this — stocking scaffold blocks mid-chop, for example —
-// because a "mine: dirt" status would show up in the conversation for work the
-// player never asked for and derail the answer to what they did ask for.
-func (bm *BlockMiner) gatherBlocks(ctx context.Context, blockName string, targetCount int) int {
+// gatherBlocks does the mining and returns how much was COLLECTED (the
+// inventory delta) and how many blocks were actually MINED, without reporting
+// an action status. The pair matters for internal detours: a trip that mined
+// six blocks but collected nothing is very different from one that found
+// nothing to mine — the first means the drops went somewhere this detour
+// cannot follow, and retrying is the wander the scaffold stock used to die
+// in.
+func (bm *BlockMiner) gatherBlocks(ctx context.Context, blockName string, targetCount int) (collected int, mined int) {
 	bot := bm.rg.bot
 	if targetCount <= 0 {
 		targetCount = 1
@@ -65,11 +66,11 @@ func (bm *BlockMiner) gatherBlocks(ctx context.Context, blockName string, target
 	for currentCount-startCount < targetCount && failedAttempts < 8 {
 		select {
 		case <-ctx.Done():
-			collected := currentCount - startCount
-			if collected < 0 {
-				collected = 0
+			got := currentCount - startCount
+			if got < 0 {
+				got = 0
 			}
-			return collected
+			return got, minedBlocks
 		default:
 		}
 
@@ -88,7 +89,10 @@ func (bm *BlockMiner) gatherBlocks(ctx context.Context, blockName string, target
 				failedAttempts++
 				continue
 			}
-			bot.StopMovement()
+			// Halt the legs only. This detour runs INSIDE another job (the chop
+			// stocking its scaffolder); StopMovement cancels the activity context,
+			// which is the very job paying for this mining trip.
+			haltWalkOnly(bot)
 		}
 
 		beforeCount := bm.inventoryCount(resolvedName)
@@ -100,24 +104,28 @@ func (bm *BlockMiner) gatherBlocks(ctx context.Context, blockName string, target
 
 		dugPositions[mineKey(step.Position)] = true
 		minedBlocks++
-		failedAttempts = 0
 
 		// Program-based timing: brief best-effort sweep that exits the instant
 		// inventory count rises. No waiting for server pickup confirmation.
 		bm.rg.looter.CollectMatchingDropsUntil(ctx, 6.0, resolvedName, beforeCount, 900*time.Millisecond)
 		currentCount = bm.inventoryCount(resolvedName)
-		if currentCount <= beforeCount && step.CountsTowardTarget {
+		// The failure counter only resets when the goal actually advanced. A dig
+		// that breaks the block but never yields a pickup used to wipe it, so a
+		// mine-sweep-fail cycle could run forever and the < 8 guard never fired.
+		if currentCount > beforeCount {
+			failedAttempts = 0
+		} else if step.CountsTowardTarget {
 			failedAttempts++
 			bm.logger.Debug("inventory did not rise after sweep, moving on", "name", resolvedName, "pos", step.Position)
 		}
 	}
 
-	collected := currentCount - startCount
-	if collected < 0 {
-		collected = 0
+	got := currentCount - startCount
+	if got < 0 {
+		got = 0
 	}
-	bm.logger.Info("block gathering complete", "requested", resolvedName, "mined_blocks", minedBlocks, "collected", collected)
-	return collected
+	bm.logger.Info("block gathering complete", "requested", resolvedName, "mined_blocks", minedBlocks, "collected", got)
+	return got, minedBlocks
 }
 
 func (bm *BlockMiner) findBestMineStep(resolvedName string, dugPositions map[string]bool) (MineStep, string, bool) {
@@ -161,11 +169,36 @@ func (bm *BlockMiner) findBestMineStep(resolvedName string, dugPositions map[str
 	return bestStep, bestBlockName, foundCandidate
 }
 
+// UnderminesFooting reports whether mining a candidate cell would hollow out
+// the ground the bot stands on or the rim of that platform: any cell at or
+// below the feet level within one block of the bot's own column. The live run
+// dug the two surface blocks of the diagonally adjacent column (dy -1 and -2,
+// dx +1, dz +1) — the old guard only excluded the bot's exact column — the
+// drops fell into the shaft, and the chase that followed fought the server's
+// position corrections until the job died with zero logs collected. Exported
+// so the footing rule is testable without a live bot.
+func UnderminesFooting(dx, dz int32, targetY, feetY int32) bool {
+	if targetY > feetY-1 {
+		return false // at or above feet level: not part of the footing
+	}
+	adx, adz := dx, dz
+	if adx < 0 {
+		adx = -adx
+	}
+	if adz < 0 {
+		adz = -adz
+	}
+	return adx <= 1 && adz <= 1
+}
+
 func (bm *BlockMiner) evaluateMineCandidate(target protocol.BlockPos, botPos mgl32.Vec3, bx, by, bz int32, resolvedName string, dugPositions map[string]bool, world entity.WorldModel) (MineStep, string, bool) {
 	if dugPositions[mineKey(target)] {
 		return MineStep{}, "", false
 	}
 	if target.X() == bx && target.Z() == bz && (target.Y() == by || target.Y() == by-1) {
+		return MineStep{}, "", false
+	}
+	if UnderminesFooting(target.X()-bx, target.Z()-bz, target.Y(), by) {
 		return MineStep{}, "", false
 	}
 	if !world.IsSolid(target.X(), target.Y(), target.Z()) {
@@ -212,6 +245,9 @@ func (bm *BlockMiner) breakBlock(ctx context.Context, step MineStep, blockName s
 func (bm *BlockMiner) mineSingle(ctx context.Context, step MineStep, blockName string) bool {
 	bot := bm.rg.bot
 	bm.equipBestTool(blockName)
+	// The held tool goes to the log on purpose: the live run dug dirt with a
+	// hoe and nothing in the output said why.
+	bm.logger.Debug("mining block", "block", blockName, "tool", bm.equippedToolName())
 
 	bot.LookAt(step.Aim)
 	if !sleepContext(ctx, 30*time.Millisecond) {

@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"math"
 	"strings"
+	"sync"
 	"time"
 
 	"bedrock-ai/internal/bot/scaffold"
@@ -16,6 +17,14 @@ import (
 type Scaffolder struct {
 	rg     *ResourceGatherer
 	logger *slog.Logger
+
+	mu            sync.Mutex
+	refusedTowers int
+	// stockExhaustedUntil cools down towering after a stock run came up empty:
+	// every unreachable log re-entered TowerUpTo, re-scanned for dirt and
+	// cobblestone, and aborted — eight aborts in half a second on the live
+	// run. During the cooldown TowerUpTo skips silently instead.
+	stockExhaustedUntil time.Time
 }
 
 func NewScaffolder(rg *ResourceGatherer, logger *slog.Logger) *Scaffolder {
@@ -90,10 +99,38 @@ func ScaffoldPlaceAim(feet mgl32.Vec3) mgl32.Vec3 {
 const scaffoldStockTarget = 6
 
 // scaffoldStockBlocks are the blocks mined when the bot has nothing to tower
-// with, in preference order.
-var scaffoldStockBlocks = []string{"dirt", "cobblestone"}
+// with, in preference order. grass_block is on the list because a live run on
+// a plain found "no matching block" for dirt and cobblestone while standing on
+// grass the whole time — a grass block drops dirt, which is what the tower
+// actually needs.
+var scaffoldStockBlocks = []string{"dirt", "grass_block", "cobblestone"}
+
+// scaffoldTowerGiveUpLimit is how many towers in a row may end in "the server
+// never placed the block" before towering is switched off. Each failed tower
+// costs seconds of jumping, placing and verifying; a host that refuses
+// placements keeps refusing, and the live run burned twenty of them on one
+// tree. A single placement that lands resets the count.
+const scaffoldTowerGiveUpLimit = 2
+
+// scaffoldStockCooldown is how long towering stays skipped after a stock run
+// found nothing to mine. Long enough to span one chop's remaining logs, short
+// enough that a later job that picked blocks up is not blocked by it.
+const scaffoldStockCooldown = 2 * time.Minute
 
 func (s *Scaffolder) TowerUpTo(ctx context.Context, targetY float32) {
+	s.mu.Lock()
+	refused := s.refusedTowers
+	exhausted := time.Now().Before(s.stockExhaustedUntil)
+	s.mu.Unlock()
+	if exhausted {
+		s.logger.Debug("scaffold: skipping tower, the stock run recently came up empty")
+		return
+	}
+	if refused >= scaffoldTowerGiveUpLimit {
+		s.logger.Debug("scaffold: skipping tower, placements were refused repeatedly", "refused_towers", refused)
+		return
+	}
+
 	bot := s.rg.bot
 	s.logger.Debug("Towering up", "target_y", targetY)
 	stocked := false
@@ -104,6 +141,7 @@ func (s *Scaffolder) TowerUpTo(ctx context.Context, targetY float32) {
 	// wrong and retrying just burns the stack.
 	const maxAttempts = 3
 	stalled := 0
+	reconciledOnce := false
 
 	for {
 		select {
@@ -128,7 +166,10 @@ func (s *Scaffolder) TowerUpTo(ctx context.Context, targetY float32) {
 				s.ensureScaffoldStock(ctx)
 				continue
 			}
-			s.logger.Warn("No scaffold items found, aborting tower up")
+			s.mu.Lock()
+			s.stockExhaustedUntil = time.Now().Add(scaffoldStockCooldown)
+			s.mu.Unlock()
+			s.logger.Warn("No scaffold items found, aborting tower up (stock mining came up empty)")
 			break
 		}
 
@@ -137,14 +178,37 @@ func (s *Scaffolder) TowerUpTo(ctx context.Context, targetY float32) {
 		}
 
 		placed, reason := s.placeOneBlock(ctx, bot, curPos, item)
+		if !placed && !reconciledOnce && strings.Contains(reason, "the server never placed") {
+			// A refusal like this usually means the cell is solid on the server
+			// while the local model calls it air — the live run had the bot
+			// standing on a big tree's second trunk column it never decoded, and
+			// every placement into that column bounced while the server held the
+			// body on top of it. Reconcile the pin immediately (the echo path
+			// needs three agreeing corrections; a tower attempt gives one) and
+			// retry once from the corrected footing.
+			if r, ok := bot.(interface{ ReconcileServerPinnedSupport() bool }); ok && r.ReconcileServerPinnedSupport() {
+				reconciledOnce = true
+				continue
+			}
+		}
 		if placed {
+			s.mu.Lock()
+			s.refusedTowers = 0
+			s.mu.Unlock()
 			stalled = 0
 			continue
 		}
 		s.logger.Warn("scaffold: could not place a block", "reason", reason, "y", curPos.Y())
 		stalled++
 		if stalled >= maxAttempts {
-			s.logger.Warn("scaffold: giving up on the tower", "attempts", stalled, "y", curPos.Y())
+			s.mu.Lock()
+			s.refusedTowers++
+			refusedNow := s.refusedTowers
+			s.mu.Unlock()
+			s.logger.Warn("scaffold: giving up on the tower", "attempts", stalled, "y", curPos.Y(), "refused_towers", refusedNow)
+			if refusedNow >= scaffoldTowerGiveUpLimit {
+				s.logger.Warn("scaffold: placements keep being refused, towering disabled until one lands")
+			}
 			break
 		}
 	}
@@ -191,6 +255,13 @@ func (s *Scaffolder) placeOneBlock(ctx context.Context, bot Bot, curPos mgl32.Ve
 // ensureScaffoldStock mines a few blocks to tower with. It stops as soon as
 // anything usable is on hand, so a bot that already carries cobblestone never
 // goes mining for dirt.
+//
+// A trip that MINED something but still leaves nothing usable ends the search:
+// the drops went somewhere this detour cannot follow, and the old fall-through
+// to the next block type turned into a second wander — on a hill that dug a
+// pit, chased the drop into it, and burned the chop while the tree stood
+// overhead. Only a trip that found nothing to mine at all (a scan, not a walk)
+// falls through to the next block type.
 func (s *Scaffolder) ensureScaffoldStock(ctx context.Context) {
 	for _, blockName := range scaffoldStockBlocks {
 		if _, _, ok := s.FindScaffoldItem(); ok {
@@ -200,7 +271,15 @@ func (s *Scaffolder) ensureScaffoldStock(ctx context.Context) {
 			"block", blockName, "target", scaffoldStockTarget)
 		// Quiet on purpose: this is an internal detour inside another action, and
 		// a "mine" status here would show the player a task they never asked for.
-		s.rg.miner.gatherBlocks(ctx, blockName, scaffoldStockTarget)
+		collected, mined := s.rg.miner.gatherBlocks(ctx, blockName, scaffoldStockTarget)
+		// One trip per type that MINED anything: either the blocks are in the
+		// inventory now, or the drops went somewhere this detour cannot follow
+		// (a dug shaft, a ledge). The old check read the inventory delta alone,
+		// so a trip whose drops sat uncollected fell through to the next block
+		// type and mined again — the wander the stock detour used to die in.
+		if mined > 0 || collected > 0 {
+			return
+		}
 	}
 }
 

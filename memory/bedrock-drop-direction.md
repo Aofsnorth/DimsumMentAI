@@ -36,3 +36,13 @@ Code: `internal/bot/action/execute_handlers.go` `handleDrop`, and
 `atan2(dz,dx)-90` is correct. `SetLookAngles` + the `EaseAngle`/`EasePitch` `mag<0.05` guard means
 forced angles are preserved (drift <0.5°/tick), so synced angles do reach the server intact.
 Related: [[venity-compat-work]].
+
+## Update 2026-10-08: the packet that actually drops on Geyser
+
+The direction work above only mattered once the right packet was on the wire. On Geyser
+(`is_geyser_server: true`) the ONLY shape that drops is a NORMAL InventoryTransaction with two
+actions (container hand-off from the held hotbar slot + world action with the DROP_ITEM flag).
+`PlayerAction DropItem` is ignored by Geyser's PlayerAction translator, and a
+`DropStackRequestAction` with the inventory closed goes unanswered. World-action count semantics:
+1 = drop one, >1 = drop the whole stack (so partial N = N packets). Full details + wire shape:
+skill `gophertunnel-geyser-drop-normal-transaction`.

@@ -186,6 +186,15 @@ func (b *Bot) noteServer(address string) {
 	}
 	b.Mu.Unlock()
 
+	// Memories are per server, and this is the one place every session start
+	// passes through — a login, a reconnect, and a server switch all re-point
+	// the store here. Without it the rules dictated on one hub would answer for
+	// another: a "jangan grief" recorded on one server is not a rule the next
+	// one agreed to.
+	if b.Memory != nil {
+		b.Memory.SetServer(address)
+	}
+
 	b.join.mu.Lock()
 	defer b.join.mu.Unlock()
 	if b.join.applied == "" {

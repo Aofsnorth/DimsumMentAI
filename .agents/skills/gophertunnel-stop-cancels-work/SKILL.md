@@ -75,6 +75,15 @@ their own contexts deliberately.
 
 - Fixing only the gather call site. `context.Background()` appeared at ~29 sites;
   a partial fix makes stop work for woodcutting and silently not for fishing.
+- **Job-internal `StopMovement()` calls.** `StopMovement` routes through `Stop`
+  → `CancelActivity()`, so any sub-goroutine running INSIDE a job that calls it
+  murders the job that spawned it. The live 200-log run died mid-sweep with
+  "Wood broken but not picked up" the moment the scaffold stock-miner
+  (`internal/bot/gathering/miner.go`) and the drop sweeper
+  (`internal/bot/gathering/looter.go`) told the legs to stop. Every
+  job-internal "stop walking" must go through `haltWalkOnly` in the gathering
+  package (or `Bot.HaltWalk()` directly). Grep `StopMovement()` inside
+  `internal/bot/gathering/` after adding any new detour.
 - Wiring a context into a function that never checks it, then declaring the
   problem solved.
 - Reusing the cancelled context. The next `gather` is born dead and the bot

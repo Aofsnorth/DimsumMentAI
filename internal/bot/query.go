@@ -680,6 +680,64 @@ func (b *Bot) NavigateToBlock(x, y, z int32, tolerance float32) bool {
 	return false
 }
 
+// ServerResetCount reports how many ack'd server corrections have moved the
+// body. Callers snapshot it before a walk and compare after: a jump means the
+// server repositioned the body mid-journey, which is the storm signal the
+// drop chase and the navigation wait bail out on.
+func (b *Bot) ServerResetCount() int {
+	b.Mu.Lock()
+	defer b.Mu.Unlock()
+	return b.ServerResets
+}
+
+// ReconcileServerPinnedSupport immediately writes the server's pinned support
+// cell into the world model when the host is standing the body a full block
+// above what the model decoded. The echo path (network/player's
+// NoteMissingSupport) needs three agreeing corrections to fire; a scaffolder
+// whose placements keep being refused gets one attempt per cell, so it calls
+// this in between. Returns whether a cell was reconciled and the caller may
+// retry.
+//
+// The lift/fraction gates mirror network/player's missing-support constants;
+// the logic is duplicated because the bot package cannot import the network
+// layer back.
+func (b *Bot) ReconcileServerPinnedSupport() bool {
+	b.Mu.Lock()
+	defer b.Mu.Unlock()
+	if !b.ServerSupportReconciledAt.IsZero() && time.Since(b.ServerSupportReconciledAt) < 2*time.Second {
+		return false // just reconciled; give the placement a plain retry first
+	}
+	lift := b.ServerGroundY - b.Pos.Y()
+	if lift < 0.5 || lift > 1.6 {
+		return false
+	}
+	frac := b.ServerGroundY - float32(math.Floor(float64(b.ServerGroundY)))
+	if frac > 0.2 {
+		return false
+	}
+	if b.WorldCache == nil || b.WorldModel == nil {
+		return false
+	}
+	cellX := int32(math.Floor(float64(b.Pos.X())))
+	cellY := int32(math.Floor(float64(b.ServerGroundY))) - 1
+	cellZ := int32(math.Floor(float64(b.Pos.Z())))
+	rid, loaded := b.WorldCache.GetBlockRID(cellX, cellY, cellZ)
+	if !loaded || b.WorldCache.IsRIDSolid(rid) {
+		return false // nothing to reconcile, or the model already agrees
+	}
+	b.WorldModel.SetTempSolid(cellX, cellY, cellZ, 30*time.Second)
+	if time.Since(b.ServerSupportReconciledAt) > 5*time.Second {
+		b.ServerSupportReconciledAt = time.Now()
+		if b.Logger != nil {
+			b.Logger.Info("server-pinned support reconciled into the world model (placement refusal)",
+				"cell", fmt.Sprintf("%d,%d,%d", cellX, cellY, cellZ),
+				"server_y", b.ServerGroundY,
+				"local_y", b.Pos.Y())
+		}
+	}
+	return true
+}
+
 func (b *Bot) WritePacket(pk packet.Packet) error {
 	// On servers that negotiated server-authoritative block breaking, break
 	// actions must ride the next PlayerAuthInput instead of going out as

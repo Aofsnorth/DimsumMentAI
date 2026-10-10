@@ -96,6 +96,144 @@ func resetLogDue() bool {
 	return true
 }
 
+// missing-support reconciliation constants. The signature is narrow on
+// purpose: a body the server repeatedly stands a full block above the decoded
+// ground, while it is quiescent, means the model is missing a block. Anything
+// slabbier (feet mid-cell) stays with the support-hold machinery.
+// maxLift 2.2 covers the Y-fight's second resting level — the body standing on
+// the model's own ground one-two blocks under the pin (live run: rest at
+// 121.0, pin at 123.06, lift 2.06 — discarded by the old 1.6 cap, so the
+// strongest evidence never counted).
+const (
+	missingSupportMinLift     = 0.5
+	missingSupportMaxLift     = 2.2
+	missingSupportMaxFrac     = 0.2
+	missingSupportJitter      = 0.3
+	missingSupportHitsNeeded  = 3
+	missingSupportHold        = 30 * time.Second
+	missingSupportLogInterval = 5 * time.Second
+)
+
+// reconcilePinnedSupportCell writes the server's pinned support cell into the
+// world model when the local model demonstrably lacks it: the cell under the
+// pinned feet is loaded and reads non-solid. Returns whether a cell was
+// marked. Caller MUST hold b.Mu.
+func reconcilePinnedSupportCell(b *bot.Bot, localPos, serverPos mgl32.Vec3) bool {
+	if b.WorldCache == nil || b.WorldModel == nil {
+		return false
+	}
+	cellX := int32(math.Floor(float64(serverPos.X())))
+	cellY := int32(math.Floor(float64(serverPos.Y()))) - 1
+	cellZ := int32(math.Floor(float64(serverPos.Z())))
+	rid, loaded := b.WorldCache.GetBlockRID(cellX, cellY, cellZ)
+	if !loaded {
+		// Undecoded cells abstain: the model cannot outvote the host about
+		// ground it has not seen, but there is also nothing to reconcile.
+		return false
+	}
+	if b.WorldCache.IsRIDSolid(rid) {
+		return false // the model already agrees — nothing is missing
+	}
+	// No floor-depth check here on purpose: the live cases had the server's
+	// block floating over model-air too (a tree trunk the model never decoded,
+	// with air beneath it in the model's view). A decoded-air cell the server
+	// demonstrably stands the body on IS the decode gap, however deep the
+	// model's next floor is. The freshness, displacement and fraction gates on
+	// the callers are what keep a transient echo from conjuring ground.
+	b.WorldModel.SetTempSolid(cellX, cellY, cellZ, missingSupportHold)
+	if time.Since(b.ServerSupportReconciledAt) > missingSupportLogInterval {
+		b.ServerSupportReconciledAt = time.Now()
+		if b.Logger != nil {
+			b.Logger.Info("server-pinned support reconciled into the world model",
+				"cell", fmt.Sprintf("%d,%d,%d", cellX, cellY, cellZ),
+				"server_y", serverPos.Y(),
+				"local_y", localPos.Y(),
+				"lift", serverPos.Y()-localPos.Y())
+		}
+	}
+	return true
+}
+
+// NoteMissingSupport watches persistent server corrections that stand the body
+// a full block above the decoded ground, and after enough of them agree,
+// writes the missing support cell into the world model as a temporary solid.
+//
+// The live run that shaped this: a tree two blocks up a slope. The host held
+// the feet at ~101.1 while the model had air from 100 up; every physics tick
+// sank the body, every server echo pushed it back, the step-jump never landed,
+// and the scaffolder burned twenty placements on a cell the server already
+// considered occupied. Trusting the server's world here is also the fair-play
+// answer: the bot stops clipping into a block that is really there.
+// Caller MUST hold b.Mu.
+func NoteMissingSupport(b *bot.Bot, localPos, serverPos mgl32.Vec3) {
+	lift := serverPos.Y() - localPos.Y()
+	if lift < -0.05 {
+		// The server put the body BELOW the local view — the opposite of a
+		// missing floor (a pit, a real fall). Contradicts the hypothesis.
+		b.ServerSupportHits = 0
+		return
+	}
+	if lift < missingSupportMinLift || lift > missingSupportMaxLift {
+		// Ordinary echo (the ground agrees), or the small-lift stair/slab case
+		// the support hold already covers. Neither confirms nor contradicts.
+		return
+	}
+	frac := serverPos.Y() - float32(math.Floor(float64(serverPos.Y())))
+	if frac > missingSupportMaxFrac {
+		// Feet land mid-cell: a partial block top, not a missing full cube.
+		return
+	}
+
+	if math.Abs(float64(serverPos.Y()-b.ServerSupportHitsY)) > missingSupportJitter {
+		b.ServerSupportHitsY = serverPos.Y()
+		b.ServerSupportHits = 1
+		return
+	}
+	b.ServerSupportHits++
+	if b.ServerSupportHits < missingSupportHitsNeeded {
+		return
+	}
+	b.ServerSupportHits = 0
+	reconcilePinnedSupportCell(b, localPos, serverPos)
+}
+
+// ReconcileServerPinnedSupportNow immediately writes the server's pinned
+// support cell into the world model when the host is standing the body a full
+// block above what the model decoded. The echo path (NoteMissingSupport) needs
+// three agreeing corrections to fire, and a scaffolder whose placements keep
+// being refused gets exactly one attempt per cell — the live tower burned all
+// of them on a cell the server already had a tree trunk in. Returns whether a
+// cell was reconciled and the caller may retry.
+//
+// The lift is measured against the ground the MODEL can stand the body on
+// under the pin column, not against the falling body: during a Y-fight the
+// body's two quiescent levels sit exactly at a body-lift window's edges (at
+// the pin, lift ~0; on the model ground, lift ~2) and the window interior is
+// only ever traversed mid-fall, so a body-lift gate misses deterministically.
+func ReconcileServerPinnedSupportNow(b *bot.Bot) bool {
+	b.Mu.Lock()
+	defer b.Mu.Unlock()
+	if time.Since(b.ServerSupportReconciledAt) < 2*time.Second {
+		return false // just reconciled; give the placement a plain retry first
+	}
+	// The pin must be fresh: a stale ServerGroundY says nothing about the
+	// column the tower is fighting right now.
+	if b.ServerGroundAt.IsZero() || time.Since(b.ServerGroundAt) > 2*time.Second {
+		return false
+	}
+	frac := b.ServerGroundY - float32(math.Floor(float64(b.ServerGroundY)))
+	if frac > missingSupportMaxFrac {
+		return false
+	}
+	// Only reject gross displacement (a real teleport far from the pin); the
+	// Y-fight's two resting levels — held at the pin (lift ~0) and standing on
+	// the model ground one-two blocks down (lift ~2) — must both pass.
+	if d := b.ServerGroundY - b.Pos.Y(); d < -0.5 || d > 2.3 {
+		return false
+	}
+	return reconcilePinnedSupportCell(b, b.Pos, mgl32.Vec3{b.Pos.X(), b.ServerGroundY, b.Pos.Z()})
+}
+
 // ApplySelfMovePlayer updates bot position and teleport acknowledgement state
 // for a confirmed local player movement packet. Caller MUST hold b.Mu.
 func ApplySelfMovePlayer(b *bot.Bot, mode byte, newPos mgl32.Vec3) bool {
@@ -118,27 +256,41 @@ func ApplySelfMovePlayer(b *bot.Bot, mode byte, newPos mgl32.Vec3) bool {
 			slog.Any("server_column", probeResetColumn(b, newPos)),
 		)
 	}
+	// Flight state decides both the adoption below and which of the two
+	// support notes may record anything: a body mid-jump or mid-knockback is
+	// integrating assigned motion, and its echoes are stale arc floors, not
+	// ground truth.
+	dxD, dyD, dzD := newPos.X()-b.Pos.X(), newPos.Y()-b.Pos.Y(), newPos.Z()-b.Pos.Z()
+	realTeleport := dxD*dxD+dyD*dyD+dzD*dzD > teleportAckDistance*teleportAckDistance
+	inFlight := b.VelY > 0.05 || b.VelY < -0.05 || b.KnockbackX != 0 || b.KnockbackZ != 0 || time.Now().Before(b.KnockbackUntil)
 	if ack {
+		b.ServerResets++
 		// A host that resets the body a little ABOVE where it stood is holding it
 		// on a surface the local model cannot represent (a carpet, a stair step).
 		// Geyser delivers that as a MovePlayer reset, not a correction packet.
 		NoteServerSupport(b, b.Pos.Y(), newPos.Y())
+		// In-flight corrections are stale arc floors, not ground truth — EXCEPT
+		// an idle body falling through model-air: that fall is the Y-fight's own
+		// signature (the server holds the body on a block the model lacks), and
+		// its echoes are precisely the ones that land inside the lift window.
+		// Rising echoes stay skipped, so a tower jump's stale pre-arc echo can
+		// never re-arm the counter; knockback keeps full protection.
+		idleFalling := b.MovementState == "idle" && b.VelY < -0.05 &&
+			b.KnockbackX == 0 && b.KnockbackZ == 0 && !time.Now().Before(b.KnockbackUntil)
+		if !inFlight || idleFalling {
+			NoteMissingSupport(b, b.Pos, newPos)
+			// A reset that actually moves the body while a route is active
+			// invalidates that route: it is anchored to the pre-reset position,
+			// and resuming it walks the body straight back to where the server
+			// just refused it — the live drop-chase-into-the-dug-shaft loop
+			// fought the server for seventeen seconds this way.
+			// handleCorrectPrediction drops its route the same way.
+			if b.MovementState != "idle" && dxD*dxD+dyD*dyD+dzD*dzD > 0.25 {
+				b.CurrentPath = nil
+				b.PathIndex = 0
+			}
+		}
 	}
-	// During a live knockback the server has assigned this body motion and a
-	// real client integrates it — rising on the hop, sliding on the push. The
-	// echo still reflects where the server saw us a couple of ticks ago, so
-	// adopting it (and zeroing the hop velocity it came with) is what erased
-	// every "kok ga kena knockback" before the slide could ever be seen:
-	// claimed, overwritten within 200ms, corrected back to the stale spot.
-	// Once the carried motion has decayed, the echo is authority again.
-	//
-	// The same protection covers any vertical flight, jump included: an echo
-	// landing mid-arc carries the pre-arc floor, and adopting it is what cut
-	// jumps to a fraction of their height. A REAL teleport is far away — those
-	// adopt regardless of flight, because nothing about them is a nudge.
-	dxD, dyD, dzD := newPos.X()-b.Pos.X(), newPos.Y()-b.Pos.Y(), newPos.Z()-b.Pos.Z()
-	realTeleport := dxD*dxD+dyD*dyD+dzD*dzD > teleportAckDistance*teleportAckDistance
-	inFlight := b.VelY > 0.05 || b.VelY < -0.05 || b.KnockbackX != 0 || b.KnockbackZ != 0 || time.Now().Before(b.KnockbackUntil)
 	if (ack && realTeleport) || (!inFlight && (ack || b.MovementState == "idle")) {
 		b.Pos = newPos
 		b.VelY = 0.0

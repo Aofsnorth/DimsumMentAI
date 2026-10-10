@@ -154,6 +154,52 @@ var affirmativeWords = []string{
 	"sebentar", "bntar", "baik", "lanjut", "mau", "akan", "i'll", "got it",
 }
 
+// isQuestion reports whether a player message asks whether something is
+// possible rather than asking for it to be done.
+//
+// The intent fallback acts whenever the model's reply sounds willing and the
+// message names a verb — and a question names the same verb as a command.
+// "bisa klik npc didepan gak?" carries the same word "klik" as "klik npc
+// didepan", which is how a status report about a failed click turned into a
+// silent retry the player never asked for: they asked IF it could be done and
+// the bot answered by doing it again.
+//
+// The markers are punctuation and position, not vocabulary. A trailing "?" is
+// a question in every phrasing; spoken chat drops it constantly, so a bare
+// interrogative particle in the tail ("...gak", "...ga", "...nggak") and a
+// leading interrogative ("apa ...", "bisakah ...") count too. Everything else
+// stays a command: "klik npc yang bisa ditekan" carries its interrogative
+// mid-sentence, where it modifies a noun and not the request.
+func isQuestion(msg string) bool {
+	trimmed := strings.TrimSpace(msg)
+	if strings.HasSuffix(trimmed, "?") {
+		return true
+	}
+	words := strings.Fields(strings.ToLower(trimmed))
+	if len(words) == 0 {
+		return false
+	}
+	if questionLeadingWords[words[0]] {
+		return true
+	}
+	return questionTailWords[words[len(words)-1]]
+}
+
+// questionLeadingWords are sentence-openers that make a message a question
+// however it ends. Exact-word matches only: "apain" starts with "apa" and is
+// a command.
+var questionLeadingWords = map[string]bool{
+	"apa": true, "apakah": true, "bisakah": true, "gimana": true,
+	"bagaimana": true, "kenapa": true, "kok": true,
+}
+
+// questionTailWords are the particles Indonesian hangs on the end of a
+// question when the "?" is left out of chat.
+var questionTailWords = map[string]bool{
+	"gak": true, "ga": true, "gk": true, "nggak": true, "ngga": true, "ngk": true,
+	"bukan": true, "kah": true, "bisagak": true,
+}
+
 // isAffirmativeReply reports whether the LLM's reply text contains a word
 // indicating it committed to performing an action.
 //
@@ -271,6 +317,14 @@ var countRegex = regexp.MustCompile(`\d+`)
 func inferActionIntent(msg, reply string) []action.Step {
 	lower := strings.ToLower(msg)
 	replyLower := strings.ToLower(reply)
+
+	// A question is never a request. "bisa klik npc didepan gak?" shares every
+	// verb with "klik npc didepan", and this function keys on verbs — which is
+	// how the answer to "can you?" became the act itself. The gate lives here,
+	// at the synthesiser, so every caller inherits it.
+	if isQuestion(msg) {
+		return nil
+	}
 
 	if containsAny(lower, "klik", "click", "interact", "tekan", "pencet", "sentuh") ||
 		(containsAny(lower, "buka") && (containsAny(lower, "pintu", "door", "chest", "peti", "trapdoor", "gerbang", "gate", "barrel"))) {

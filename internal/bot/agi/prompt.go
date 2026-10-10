@@ -4,7 +4,23 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"bedrock-ai/internal/bot"
 )
+
+// memoryBlock renders the bot's curated long-term memories for the decision
+// prompt, or "" when there is nothing stored.
+//
+// Rules a player dictated — "don't grief", "the NPC for random teleport is on
+// the left" — are facts about this world, and a brain asked to act without them
+// re-derives its own, which is how a bot on a server with rules reads as a bot
+// without any.
+func memoryBlock(b *bot.Bot) string {
+	if b == nil {
+		return ""
+	}
+	return b.MemoryContext()
+}
 
 // BuildDecisionPrompt asks the model what to do with itself, and — just as
 // importantly — tells it that doing nothing is a valid answer.
@@ -40,6 +56,14 @@ func (r *Runner) BuildDecisionPrompt(snap Snapshot) (systemPrompt, prompt string
 			b.GetHeldItem(),
 			b.GetInventorySummary(),
 		)
+		// Memory rides in the system prompt, the same placement the chat path
+		// uses (appendMemoryContext). Rules a player dictated are standing
+		// constraints, not transient situation, and a brain asked to act without
+		// them re-derives its own — which is how a bot on a server with rules
+		// reads as a bot without any.
+		if mem := memoryBlock(b); mem != "" {
+			preamble += "\n\n" + mem
+		}
 	}
 
 	people := DescribePeople(snap.Nearby)
@@ -69,6 +93,7 @@ Situasi sekarang:
 - Player di dekatmu: %s
 - Isi tas: %s%s
 - Sign di sekitar: %s
+	%s
 %s
 %s
 %s
@@ -101,7 +126,7 @@ ATURAN PENTING:
 - Maksimal 1-2 kalimat kalau ngomong.
 - Jangan pernah menyebut kamu sebagai AI, bot, atau assistant.`,
 		snap.Now.Format("15:04"), coords, hp, hunger, people, inventory, alone, signSummary,
-		episodeBlock(snap), planBlock(snap), goalBlock(snap), worldBlock(snap))
+		episodeBlock(snap), planBlock(snap), goalBlock(snap), worldBlock(snap), memoryBlock(b))
 
 	return preamble, decision
 }

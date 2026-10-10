@@ -411,13 +411,25 @@ func NavigateToBlock(b *bot.Bot, x, y, z int32, tolerance float32) bool {
 	// the path finishes without reaching tolerance.
 	lastDist := float32(math.MaxFloat32)
 	stalledPolls := 0
+	b.Mu.Lock()
+	resetsBefore := b.ServerResets
+	b.Mu.Unlock()
 	for i := 0; i < navMaxPolls; i++ {
 		time.Sleep(navPollInterval)
 		b.Mu.Lock()
 		curPos := b.Pos
 		mState := b.MovementState
 		hasPath := b.CurrentPath != nil
+		resets := b.ServerResets
 		b.Mu.Unlock()
+
+		// The server keeps repositioning the body mid-walk: this route leads
+		// somewhere its collision refuses (a shaft the bot just dug, unloaded
+		// terrain). Waiting longer just burns the caller's budget — bail out
+		// and let the caller write the destination off.
+		if resets-resetsBefore >= 2 {
+			return false
+		}
 
 		dx := curPos.X() - block.X()
 		dy := curPos.Y() - block.Y()

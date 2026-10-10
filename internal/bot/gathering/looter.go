@@ -161,13 +161,31 @@ func (l *Looter) collectDrop(ctx context.Context, collected *int, deadline time.
 		ly := int32(math.Floor(float64(pos.Y())))
 		lz := int32(math.Floor(float64(pos.Z())))
 
+		// Snapshot the server-reset counter before the walk: a jump during the
+		// chase means the server refused the route (see the verdict below).
+		resetsBefore := serverResetDelta(l.rg.bot, 0)
+
 		if !l.rg.bot.NavigateToBlock(lx, ly, lz, dropTolerance) {
 			// Nowhere left to walk. The bot is either already standing on the drop
 			// — in which case the next poll confirms the pickup — or the drop is
 			// out of reach from anywhere it can stand. Keep polling in the first
 			// case, because walking nowhere on a timer is the spin this whole
 			// change exists to remove.
-			l.rg.bot.StopMovement()
+			// Halt the legs only: the sweep runs inside whatever job asked for it
+			// (the post-chop collection), and StopMovement would cancel that job
+			// from underneath itself.
+			haltWalkOnly(l.rg.bot)
+			// The server repositioned the bot while it walked toward this drop —
+			// its collision refused the route (the dug-shaft chase: the bot dug a
+			// hole, the drop fell in, and re-pathing walked straight back in while
+			// the server kept resetting the body for seventeen seconds). Re-pathing
+			// would re-enter the same refusal, so the drop is written off.
+			if serverResetDelta(l.rg.bot, resetsBefore) >= 1 {
+				l.logger.Debug("drop chase fought a server reset, writing the drop off",
+					"id", closestItem.ID, "pos", pos)
+				attempted[closestItem.ID] = true
+				return false
+			}
 			if l.distance(l.rg.bot.GetCoords(), pos) > DropPickupReach {
 				l.logger.Debug("drop is out of pickup range of any reachable tile, skipping",
 					"id", closestItem.ID, "pos", pos)

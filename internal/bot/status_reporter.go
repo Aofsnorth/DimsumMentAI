@@ -55,6 +55,11 @@ var quietSuccessActions = map[string]bool{
 	"potion": true, "run": true, "stroll": true, "force_walk": true,
 	"equip": true, "drop": true, "place": true, "eat": true, "shoot": true,
 	"bow": true, "crossbow": true, "tame": true, "shear": true, "milk": true,
+	// The whole click family: the player pointed at the thing and watched the
+	// bot walk over and click it. The live run said "Siap, aku klik ya!" and
+	// then "Udah diklik nih npc-nya." — a promise plus a report for one click,
+	// which is the double status log the humanizer exists to kill.
+	"interact": true, "click": true, "use": true, "talk": true, "press": true,
 	//
 	// Deliberately absent: status, inventory, todo, lookat. Those are admin
 	// commands the player typed, and going silent in reply to a direct question
@@ -209,6 +214,7 @@ func reportActionStatusAsync(b *Bot, user string, status event.ActionStatus) {
 		"You are a Minecraft player who just did the thing below. You are writing chat to a friend who can probably SEE you doing it.\n" +
 		"- First question: is this even worth saying? If the player watched it happen (walked there, typed the command, equipped the thing) the human answer is <silent/> — say NOTHING. Silence after visible actions is what people do.\n" +
 		"- If it IS worth saying: react first like a gamer (\"wkwk\", \"gila\", \"udah\", \"done\"), one short fragment. NEVER open with a report phrase like \"udah aku ketik\", \"sudah selesai\", \"aku sudah\" — that is a status log, not a person.\n" +
+		"- Vary the shape: not every line gets a reaction word plus a particle. One-word lines (\"done\", \"aman\") are fine. Match the player's punctuation — most of the time that means no commas, no periods.\n" +
 		"- Reply in natural Indonesian matching the player's tone; never translate internal action labels into speech.\n" +
 		"- Report concrete outcomes only when the player is waiting on them (a count they asked for, a thing you crafted for them). Never turn waypoints into found items.\n" +
 		"- DO NOT use action tags (<action>, <plan>, <followup>, etc.).\n" +

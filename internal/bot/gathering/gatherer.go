@@ -168,6 +168,14 @@ func (rg *ResourceGatherer) GatherWoodType(ctx context.Context, preferred string
 	rg.chopper.GatherWood(ctx, targetCount, preferred)
 }
 
+// TreeFarm runs the chop → replant → bone-meal cycle until the supplies run
+// dry (or maxCycles laps). maxCycles <= 0 means "until supplies run out".
+func (rg *ResourceGatherer) TreeFarm(ctx context.Context, maxCycles int) (trees, logs int) {
+	rg.SetGathering(true)
+	defer rg.SetGathering(false)
+	return rg.chopper.TreeFarm(ctx, maxCycles, "")
+}
+
 func (rg *ResourceGatherer) GatherBlock(ctx context.Context, blockName string, targetCount int) {
 	rg.SetGathering(true)
 	defer rg.SetGathering(false)

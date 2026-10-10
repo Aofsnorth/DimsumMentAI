@@ -12,6 +12,7 @@ import (
 
 	"bedrock-ai/internal/bot"
 	"bedrock-ai/internal/bot/entity"
+	"bedrock-ai/internal/bot/gathering"
 	"bedrock-ai/internal/bot/rand"
 	"bedrock-ai/internal/event"
 	"bedrock-ai/internal/safecast"
@@ -754,6 +755,34 @@ func handleGive(b *bot.Bot, param, user string) {
 		success := b.InventoryMgr.Chest().GiveItem(context.Background(), itemName, user, count)
 		b.Logger.Debug("give action complete", "success", success, "item", itemName)
 		reportBoolOutcome(b, user, "give", itemName, success, fmt.Sprintf("gagal memberi %s ke %s", itemName, user))
+	}()
+}
+
+// treefarmHandler runs the chop → replant → bone-meal cycle: fell a tree,
+// plant the sapling that the chop swept up, force-grow it with bone meal, and
+// repeat until the meals or the saplings run out. An empty parameter means
+// "until supplies run out"; a number caps the laps.
+func treefarmHandler(b *bot.Bot, param, user string) {
+	go func() {
+		cycles := 0
+		if raw := strings.TrimSpace(param); raw != "" {
+			_, _ = fmt.Sscanf(raw, "%d", &cycles)
+		}
+		// The activity context, not Background: a farm the player cannot stop
+		// keeps felling trees after they said stop.
+		ctx := b.ActivityContext()
+		trees, logs := b.Gatherer.TreeFarm(ctx, cycles)
+		success, summary := gathering.TreeFarmCount(trees, logs)
+		status := event.ActionStatus{
+			Action:  "treefarm",
+			Item:    "log",
+			Count:   logs,
+			Success: success,
+		}
+		if !success {
+			status.Error = summary
+		}
+		ReportStatus(b, user, status)
 	}()
 }
 
