@@ -233,6 +233,15 @@ func ApplyInventorySlot(b *bot.Bot, p *packet.InventorySlot) bool {
 	}
 	offset := ContainerSlotOffset(containerID)
 	globalSlot := offset + p.Slot
+	// The slot index comes straight off the wire. A server or proxy that sends
+	// 50000 used to create map entry 50000: the inventory grew without bound and
+	// queries saw slots that cannot exist. The largest legal slot is the offhand
+	// (40); anything past it is dropped.
+	if globalSlot > bot.MaxInventorySlot {
+		b.Logger.Warn("inventory: ignoring out-of-range slot",
+			"container", containerID, "slot", p.Slot, "global_slot", globalSlot)
+		return false
+	}
 
 	b.Mu.Lock()
 	defer b.Mu.Unlock()
@@ -459,6 +468,9 @@ func processItemStackResponse(b *bot.Bot, resp protocol.ItemStackResponse) {
 			})
 			if IsPlayerInventoryContainer(containerID) {
 				globalSlot := offset + uint32(slotInfo.Slot)
+				if globalSlot > bot.MaxInventorySlot {
+					continue
+				}
 				applySlotUpdate(b, slotInfo, globalSlot, craftOutputNetID)
 			}
 		}

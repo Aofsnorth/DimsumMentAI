@@ -19,36 +19,48 @@ func TestDurabilityIsSwappedBeforeItBreaks(t *testing.T) {
 		t.Error("a fresh tool was marked for replacement")
 	}
 
-	for i := 0; i < 100; i++ {
+	for i := 0; i < 40; i++ {
 		d.Record(0)
 	}
 	if d.ShouldReplace(0, "minecraft:wooden_pickaxe") {
-		t.Error("a tool at 100/132 uses was marked for replacement; 80% is the line")
+		t.Error("a wooden pickaxe at 40/59 uses was marked for replacement; 80% is the line")
 	}
 
-	for i := 0; i < 10; i++ {
+	for i := 0; i < 8; i++ {
 		d.Record(0)
 	}
 	if !d.ShouldReplace(0, "minecraft:wooden_pickaxe") {
-		t.Error("a tool at 110/132 uses was not marked for replacement; it breaks mid-vein")
+		t.Error("a wooden pickaxe at 48/59 uses was not marked for replacement; it breaks mid-vein")
 	}
 }
 
-// TestEveryTierOfAToolSharesABudget keeps the decision honest. An iron pickaxe
-// and a wooden one do not break at the same moment and the tracker should not
-// pretend they do.
-func TestEveryTierOfAToolSharesABudget(t *testing.T) {
+// TestTiersHaveTheirOwnBudget keeps the decision honest. An iron pickaxe (250
+// uses) and a wooden one (59) do not break at the same moment, and the tracker
+// must not pretend they do: a shared 132-use budget marked a diamond pickaxe at
+// 105 uses and left a golden one to shatter at 32.
+func TestTiersHaveTheirOwnBudget(t *testing.T) {
 	t.Parallel()
 
-	d := durability.NewTracker()
-	for i := 0; i < 110; i++ {
-		d.Record(0)
+	cases := []struct {
+		name    string
+		uses    int
+		replace bool
+	}{
+		{"minecraft:wooden_pickaxe", 48, true},    // 59 uses: 80% = 47
+		{"minecraft:golden_pickaxe", 26, true},    // 32 uses: 80% = 25
+		{"minecraft:stone_pickaxe", 105, true},    // 131 uses: 80% = 104
+		{"minecraft:iron_pickaxe", 110, false},    // 250 uses: 80% = 200
+		{"minecraft:iron_pickaxe", 205, true},     //
+		{"minecraft:diamond_pickaxe", 110, false}, // 1561 uses
 	}
-	if !d.ShouldReplace(0, "minecraft:iron_pickaxe") {
-		t.Error("an iron pickaxe at the same use count was not flagged; tiers share one budget")
-	}
-	if !d.ShouldReplace(0, "minecraft:diamond_pickaxe") {
-		t.Error("a diamond pickaxe was not flagged at the same count")
+	for _, c := range cases {
+		d := durability.NewTracker()
+		for i := 0; i < c.uses; i++ {
+			d.Record(0)
+		}
+		if got := d.ShouldReplace(0, c.name); got != c.replace {
+			t.Errorf("%s at %d uses: ShouldReplace = %v, want %v", c.name, c.uses, got, c.replace)
+		}
 	}
 }
 

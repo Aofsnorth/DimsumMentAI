@@ -11,14 +11,17 @@ import (
 	"github.com/sandertv/gophertunnel/minecraft/protocol/packet"
 
 	"bedrock-ai/internal/bot"
+	"bedrock-ai/internal/bot/entity"
 	"bedrock-ai/internal/bot/network/player"
 )
 
 func newNPCBot() *bot.Bot {
 	return &bot.Bot{
-		Name:          "Luna",
-		Logger:        slog.New(slog.NewTextHandler(io.Discard, nil)),
-		PlayerTracker: bot.NewPlayerTracker(),
+		Name:                "Luna",
+		Logger:              slog.New(slog.NewTextHandler(io.Discard, nil)),
+		PlayerTracker:       bot.NewPlayerTracker(),
+		UniqueIDToRuntimeID: make(map[int64]uint64),
+		Actors:              make(map[uint64]*entity.Info),
 	}
 }
 

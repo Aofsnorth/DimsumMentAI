@@ -1,6 +1,6 @@
 ---
 name: agi-passive-idle-loop
-description: Use when this Go bot's AGI runs and Jev decides every tick but the body stays passive or "stuck" — activity=rest forever, "hungry, eating" spam, repeated "acknowledged a player" lines, A* giving up short on routes through the bot's own feet, dictated !remember rules recited in chat but never executed, or "nyangkut/stuck" self-reports during explore. Distinct from a deadlock: decisions ARE produced, they are just consumed, poisoned, or never reach a model that can act on prose.
+description: "Use when this Go bot's AGI runs and Jev decides every tick but the body stays passive or \"stuck\" — activity=rest forever, \"hungry, eating\" spam, repeated \"acknowledged a player\" lines, A* giving up short on routes through the bot's own feet, dictated !remember rules recited in chat but never executed, or \"nyangkut/stuck\" self-reports during explore. Distinct from a deadlock: decisions ARE produced, they are just consumed, poisoned, or never reach a model that can act on prose."
 ---
 
 # AGI passive while alive: the idle/reflex consumption loop

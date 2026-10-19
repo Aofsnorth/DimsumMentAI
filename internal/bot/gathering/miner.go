@@ -32,13 +32,24 @@ func NewBlockMiner(rg *ResourceGatherer, logger *slog.Logger) *BlockMiner {
 // GatherBlock mines a block type and reports the outcome as an action the
 // player can see.
 func (bm *BlockMiner) GatherBlock(ctx context.Context, blockName string, targetCount int) {
-	collected, _ := bm.gatherBlocks(ctx, blockName, targetCount)
-	bm.rg.bot.ReportActionStatus("", event.ActionStatus{
+	collected, mined := bm.gatherBlocks(ctx, blockName, targetCount)
+	// Success is not a constant. Reporting true for every trip meant a mine that
+	// found nothing nearby (or whose drops were never picked up) was announced to
+	// the player as a completed job.
+	status := event.ActionStatus{
 		Action:  "mine",
 		Item:    bm.resolveFuzzyName(blockName),
 		Count:   collected,
-		Success: true,
-	})
+		Success: collected > 0,
+	}
+	if !status.Success {
+		if mined > 0 {
+			status.Error = fmt.Sprintf("mined %d blocks but none reached the inventory", mined)
+		} else {
+			status.Error = "no matching block found nearby"
+		}
+	}
+	bm.rg.bot.ReportActionStatus("", status)
 }
 
 // gatherBlocks does the mining and returns how much was COLLECTED (the

@@ -5,7 +5,6 @@ import (
 	"math"
 
 	"bedrock-ai/internal/debuglog"
-	"bedrock-ai/internal/safecast"
 )
 
 type PriorityQueue []*Node
@@ -36,16 +35,22 @@ func (pq *PriorityQueue) Pop() interface{} {
 // PackKey encodes a 3D block coordinate into a single int64 for use as a
 // map key. This is ~10x faster than fmt.Sprintf-based string keys and
 // eliminates GC pressure from string allocations during pathfinding.
-// Coordinate range: x/z ±2,097,151 (21 bits), y -2048..+2047 (12 bits).
+// Coordinate range: x/z ±33,554,431 (26 bits, the full Minecraft world),
+// y -2048..+2047 (12 bits).
 func PackKey(x, y, z int32) int64 {
-	// Bit-cast int32→uint64 via uint32 (two's complement) instead of
-	// safecast.To: negative coordinates are the norm around spawn, and
+	// Bit-cast, not safecast: negative coordinates are the norm around spawn, and
 	// safecast clamps them all to 0, collapsing every negative-x/z node
 	// into the same key and making A* think all neighbors are duplicates.
-	ux := safecast.To[uint64](int64(x) & 0x1FFFFF)
-	uy := safecast.To[uint64](int64(y) & 0xFFF)
-	uz := safecast.To[uint64](int64(z) & 0x1FFFFF)
-	return safecast.To[int64](ux<<33 | uy<<21 | uz)
+	//
+	// The masks are applied to the uint64 view of the int32, so a negative
+	// coordinate keeps its two's-complement bits. Masking the int64 first left the
+	// sign bit set, and converting that to uint64 then clamping it to 0 put every
+	// negative x and z back into the same key — the exact collision this comment
+	// warns about, reintroduced by the conversion order.
+	ux := uint64(x) & 0x3FFFFFF
+	uy := uint64(y) & 0xFFF
+	uz := uint64(z) & 0x3FFFFFF
+	return int64(ux<<38 | uy<<26 | uz)
 }
 
 // FindPath executes the A* algorithm in 3D grid space using the provided world walkability rules

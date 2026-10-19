@@ -56,6 +56,12 @@ type combatFakeBot struct {
 	// items here without building a second fake.
 	inventory map[uint32]protocol.ItemStack
 	itemNames map[int32]string
+	// equipped records every hand change, which is how a test can tell a
+	// defensive answer (nothing equipped) from a duel (best weapon equipped).
+	equipped []uint32
+	// navigations records every walk order, so a test can prove a defensive
+	// answer stands its ground instead of chasing.
+	navigations []mgl32.Vec3
 }
 
 func newCombatFakeBot(origin mgl32.Vec3, loaded, solid func(x, y, z int32) bool) *combatFakeBot {
@@ -89,9 +95,22 @@ func (f *combatFakeBot) WritePacket(pk packet.Packet) error {
 	f.packets = append(f.packets, pk)
 	return nil
 }
-func (f *combatFakeBot) NavigateTo(pos mgl32.Vec3) {}
-func (f *combatFakeBot) StopMovement()             {}
-func (f *combatFakeBot) LookAt(pos mgl32.Vec3)     {}
+func (f *combatFakeBot) NavigateTo(pos mgl32.Vec3) {
+	f.mu.Lock()
+	f.navigations = append(f.navigations, pos)
+	f.mu.Unlock()
+}
+
+// navigateCalls reports how many times the bot was told to walk somewhere,
+// which is how a test can tell standing one's ground from chasing.
+func (f *combatFakeBot) navigateCalls() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.navigations)
+}
+
+func (f *combatFakeBot) StopMovement()         {}
+func (f *combatFakeBot) LookAt(pos mgl32.Vec3) {}
 func (f *combatFakeBot) InjectAIEvent(msg string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -108,7 +127,20 @@ func (f *combatFakeBot) GetItemNames() map[int32]string {
 	defer f.mu.Unlock()
 	return f.itemNames
 }
-func (f *combatFakeBot) EquipItem(slot uint32) error                               { return nil }
+func (f *combatFakeBot) EquipItem(slot uint32) error {
+	f.mu.Lock()
+	f.equipped = append(f.equipped, slot)
+	f.mu.Unlock()
+	return nil
+}
+
+// equipCalls reports how many times the bot was asked to change hands, so a
+// test can prove a defensive answer never draws a weapon.
+func (f *combatFakeBot) equipCalls() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.equipped)
+}
 func (f *combatFakeBot) SendChat(msg string)                                       {}
 func (f *combatFakeBot) ReportActionStatus(user string, status event.ActionStatus) {}
 func (f *combatFakeBot) GetEntityRuntimeID() uint64                                { return 999 }

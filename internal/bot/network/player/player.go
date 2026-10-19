@@ -40,6 +40,8 @@ var packetHandlers = map[uint32]func(*bot.Bot, packet.Packet) bool{
 	packet.IDLevelEvent:                  handleLevelEvent,
 	packet.IDActorEvent:                  bot.HandleActorEvent,
 	packet.IDSetActorData:                handleSetActorData,
+	packet.IDAnimate:                     handleAnimate,
+	packet.IDSetLastHurtBy:               handleSetLastHurtBy,
 	packet.IDUpdateTrade:                 handleUpdateTrade,
 	packet.IDPlayerEnchantOptions:        handlePlayerEnchantOptions,
 	packet.IDTransfer:                    handleTransfer,

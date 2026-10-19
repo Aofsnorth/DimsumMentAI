@@ -127,7 +127,17 @@ func (b *Bot) SendWhisper(player, msg string) error {
 		// whisper command is answered with silence because the reply goes to the
 		// recipient, not to the sender. Waiting would cost a second per message
 		// and then send the same line twice.
-		if err := b.writeCommandLine(commandWireLine(line, b.commandPrefixStyle())); err != nil {
+		// Respect the same server-specific order SendCommand uses. In "auto" mode
+		// this used to pick the bare form unconditionally, which a slash-first
+		// front-end (Geyser) ignores — the DM was never delivered.
+		style := b.commandPrefixStyle()
+		if style == CommandPrefixAuto {
+			style = CommandPrefixNone
+			if b.CommandPrefixOrder == CommandPrefixSlashFirst {
+				style = CommandPrefixSlash
+			}
+		}
+		if err := b.writeCommandLine(commandWireLine(line, style)); err != nil {
 			return fmt.Errorf("whisper ke %s: %w", target, err)
 		}
 		if b.Logger != nil {
@@ -150,11 +160,14 @@ func (b *Bot) SendReply(user, msg string) {
 	}
 	if b.whisperMatches(user) {
 		if err := b.SendWhisper(user, msg); err != nil {
+			// Never fall back to public chat here: the whole point of a whisper is
+			// that the conversation is private, and publishing the reply leaks it
+			// to every player in range. The failure is logged so the operator can
+			// see the DM was not delivered.
 			if b.Logger != nil {
-				b.Logger.Warn("whisper reply failed, falling back to public chat",
+				b.Logger.Warn("whisper reply failed; not falling back to public chat",
 					slog.String("to", user), slog.String("error", err.Error()))
 			}
-			b.SendSafeChat(msg)
 			return
 		}
 		return

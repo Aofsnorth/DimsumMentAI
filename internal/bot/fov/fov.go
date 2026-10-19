@@ -66,8 +66,12 @@ func Within(point, eye mgl32.Vec3, headYaw float32) bool {
 		return true
 	}
 
-	horizontal := float32(math.Hypot(float64(dx), float64(dz)))
-	if horizontal <= CloseRadius {
+	// Distance is 3D, not horizontal. Comparing only the horizontal component
+	// made a point straight above or below the bot visible at any height — a
+	// player 100 blocks down a shaft counted as "close" because their x/z were
+	// the same.
+	dist := float32(math.Sqrt(float64(dx*dx + dy*dy + dz*dz)))
+	if dist <= CloseRadius {
 		return true
 	}
 

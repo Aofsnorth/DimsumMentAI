@@ -86,6 +86,11 @@ type Bot interface {
 	CloseContainerWindow(windowID byte)
 
 	PlaceIntoContainerSlot(windowID byte, containerSlot uint32, destStackNetID int32, srcSlot uint32, count int) error
+	// PlaceIntoContainerSlotIn addresses a specific container by its protocol
+	// container ID. A furnace is not "the window": the server resolves the
+	// target against ContainerFurnaceIngredient/Fuel, so windowID here meant the
+	// transfer was refused on every real server.
+	PlaceIntoContainerSlotIn(containerID byte, containerSlot uint32, destStackNetID int32, srcSlot uint32, count int) error
 	TakeFromContainerSlot(windowID byte, slot uint32, count int, stackNetID int32, itemName string) error
 }
 
@@ -168,7 +173,7 @@ func (fm *Manager) SmeltItem(ctx context.Context, itemName string) bool {
 		fm.bot.ResetLook()
 	}()
 
-	if err := fm.loadFurnace(windowID, rawSlot, rawCount, rawName); err != nil {
+	if err := fm.loadFurnace(rawSlot, rawCount, rawName); err != nil {
 		fm.logger.Warn("SmeltItem: could not load furnace", "item", itemName, "err", err)
 		return false
 	}
@@ -237,11 +242,11 @@ func (fm *Manager) openFurnace(ctx context.Context, pos protocol.BlockPos) (byte
 // loadFurnace moves the raw material and one fuel item into the window through
 // ItemStackRequests. Each placement is server-validated; nothing is assumed to
 // have moved.
-func (fm *Manager) loadFurnace(windowID byte, rawSlot uint32, rawCount int, rawName string) error {
+func (fm *Manager) loadFurnace(rawSlot uint32, rawCount int, rawName string) error {
 	// destStackNetID 0 is the empty-slot convention the container session
 	// already uses: the server cross-checks it, and a non-empty value here would
 	// name a stack that does not exist yet.
-	if err := fm.bot.PlaceIntoContainerSlot(windowID, SlotInput, 0, rawSlot, rawCount); err != nil {
+	if err := fm.bot.PlaceIntoContainerSlotIn(protocol.ContainerFurnaceIngredient, SlotInput, 0, rawSlot, rawCount); err != nil {
 		return fmt.Errorf("place %s in input: %w", rawName, err)
 	}
 
@@ -254,7 +259,7 @@ func (fm *Manager) loadFurnace(windowID byte, rawSlot uint32, rawCount int, rawN
 	if fuelCount > 1 {
 		fuelCount = 1
 	}
-	if err := fm.bot.PlaceIntoContainerSlot(windowID, SlotFuel, 0, fuelSlot, fuelCount); err != nil {
+	if err := fm.bot.PlaceIntoContainerSlotIn(protocol.ContainerFurnaceFuel, SlotFuel, 0, fuelSlot, fuelCount); err != nil {
 		return fmt.Errorf("place %s in fuel slot: %w", fuelName, err)
 	}
 	return nil

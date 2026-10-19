@@ -166,6 +166,26 @@ func (c *packetCapture) writeLocked(entry map[string]any) {
 	_ = json.NewEncoder(c.file).Encode(entry)
 }
 
+// Close stops recording and releases the file handle.
+//
+// The handle used to be opened on every dial and never closed. Nothing in this
+// package or its callers closed it, so every reconnect (and every failed dial,
+// and every LAN attempt that fell back to RakNet) leaked a file descriptor for
+// the life of the process.
+func (c *packetCapture) Close() error {
+	if c == nil {
+		return nil
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.file == nil {
+		return nil
+	}
+	err := c.file.Close()
+	c.file = nil
+	return err
+}
+
 // poolNames builds an ID → short type name map from a gophertunnel packet pool.
 func poolNames(pool packet.Pool) map[uint32]string {
 	names := make(map[uint32]string, len(pool))

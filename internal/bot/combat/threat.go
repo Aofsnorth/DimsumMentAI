@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -62,8 +63,23 @@ type ThreatDetector struct {
 	// between "didiemin" and "bunuh aja ya".
 	guardMode      bool
 	guardProtector string
-	// lastRetaliate gates the player-hit self-defence engage to one per window.
-	lastRetaliate time.Time
+	// hits is the proportionate-defence ladder: how many times this attacker
+	// has hit the bot inside one scuffle, and therefore what they have earned.
+	hits HitTracker
+	// lastSwingID and lastSwingAt are the most recent arm swing observed from
+	// another player. A swing is the evidence that damage came from a person
+	// rather than from a fall, a cactus or a mob — the bot used to guess that
+	// from "a player happens to be nearby", which is how it ended up attacking
+	// its owner over fall damage.
+	lastSwingID uint64
+	lastSwingAt time.Time
+	// lastHurtByPlayerAt is when the server's SetLastHurtBy said a player dealt
+	// the damage. It carries no runtime ID, so it corroborates an attribution
+	// rather than naming one.
+	lastHurtByPlayerAt time.Time
+	// isAlly marks players the bot never fights: the ones it answers to and
+	// the ones they granted access to. Nil means nobody is an ally.
+	isAlly func(name string) bool
 }
 
 func NewThreatDetector(bot Bot, cm *CombatManager, logger *slog.Logger) *ThreatDetector {
@@ -169,9 +185,20 @@ func (td *ThreatDetector) handleThreat(closestHostile *entity.Info, closestDist 
 	}
 }
 
-// damageRetaliateCooldown keeps one painful second from re-triggering the
-// self-defence engage over and over while the health attribute catches up.
-const damageRetaliateCooldown = 5 * time.Second
+// Attribution windows and reach.
+const (
+	// playerHitReach is how close a player has to be to plausibly be the one
+	// who hit the bot. It is slightly past melee reach, because the server
+	// reports the attacker's position a tick or two behind the swing.
+	playerHitReach float32 = 4.5
+	// swingAttributionWindow is how recently a player must have swung for the
+	// damage to be read as theirs. One client tick of slack keeps a fast
+	// attacker from escaping attribution by swinging between packets.
+	swingAttributionWindow = 900 * time.Millisecond
+	// lastHurtByWindow is how long the server's SetLastHurtBy verdict stays
+	// relevant.
+	lastHurtByWindow = 2 * time.Second
+)
 
 // nearestTrackedPlayerReader is the optional view of the bot that can look up
 // tracked players directly. Players are not actors (handleAddPlayer never
@@ -182,36 +209,131 @@ type nearestTrackedPlayerReader interface {
 	NearestTrackedPlayer(origin mgl32.Vec3, maxDist float32) (name string, id uint64, pos mgl32.Vec3, ok bool)
 }
 
-// OnDamaged is the self-defence reflex for player hits. A mob that walks up
-// is the scan's problem; a player who just swung is a duel that already
-// started, so the bot engages the nearest tracked player instead of standing
-// there being farmed.
+// NotePlayerSwing records an arm swing observed from another player.
 //
-// Fair-play shape: only players the bot can actually see, only inside melee
-// conversation range, one engage per cooldown window. Damage with no player
-// nearby (falls, mobs, poison) is left to the existing paths — hitting back
-// at nobody is how a bot looks like it is cheating.
-func (td *ThreatDetector) OnDamaged(botPos mgl32.Vec3) {
-	td.mu.Lock()
-	if time.Since(td.lastRetaliate) < damageRetaliateCooldown {
-		td.mu.Unlock()
+// A swing is the only packet-level evidence that a human meant to hit
+// something, and it is what separates "a player hit me" from "I fell over
+// while a player was standing next to me". The runtime ID is kept so the hit
+// can be attributed to that specific player rather than to whoever is closest.
+func (td *ThreatDetector) NotePlayerSwing(runtimeID uint64) {
+	if runtimeID == 0 {
 		return
 	}
-	td.lastRetaliate = time.Now()
+	td.mu.Lock()
+	td.lastSwingID = runtimeID
+	td.lastSwingAt = time.Now()
 	td.mu.Unlock()
+}
 
+// NotePlayerDamage records the server's SetLastHurtBy verdict that the damage
+// just taken came from a player. It is a corroborating signal, not a naming
+// one: the packet carries an entity type, never a username.
+func (td *ThreatDetector) NotePlayerDamage() {
+	td.mu.Lock()
+	td.lastHurtByPlayerAt = time.Now()
+	td.mu.Unlock()
+}
+
+// SetAllyFilter installs the never-fight list — the linked players the bot
+// answers to, and whoever they granted access to. A poke from an ally is a
+// conversation, never a fight.
+func (td *ThreatDetector) SetAllyFilter(isAlly func(name string) bool) {
+	td.mu.Lock()
+	defer td.mu.Unlock()
+	td.isAlly = isAlly
+}
+
+// IsAlly reports whether the player is on the never-fight list.
+func (td *ThreatDetector) IsAlly(name string) bool {
+	td.mu.Lock()
+	filter := td.isAlly
+	td.mu.Unlock()
+	return filter != nil && filter(name)
+}
+
+// hitsFromThisAttacker reports whether the damage just taken can be pinned on
+// this player. The nearest player being close is not enough: falls, mobs and
+// poison all arrive as the same health drop.
+func (td *ThreatDetector) hitsFromThisAttacker(id uint64) bool {
+	now := time.Now()
+	td.mu.Lock()
+	defer td.mu.Unlock()
+	if id != 0 && td.lastSwingID == id && !td.lastSwingAt.IsZero() && now.Sub(td.lastSwingAt) <= swingAttributionWindow {
+		return true
+	}
+	return !td.lastHurtByPlayerAt.IsZero() && now.Sub(td.lastHurtByPlayerAt) <= lastHurtByWindow
+}
+
+// OnDamaged is the self-defence reflex for player hits.
+//
+// It answers proportionately, not maximally. One punch earns a reaction, not a
+// duel: the bot turns, says something, and keeps its hands to itself. A short
+// burst of hits earns a defensive answer — hit back from where it stands, with
+// what it already holds, a few swings at most. Only somebody who keeps coming
+// earns the ordinary duel doctrine.
+//
+// Two things must hold before anything is thrown at all. The damage has to be
+// attributable to the player: the nearest player being nearby is not evidence,
+// because falls, mobs and poison all arrive as the same health drop, and reading
+// closeness as guilt is how the bot attacked whoever happened to be standing
+// next to it. And the player must not be on the never-fight list — hitting the
+// person the bot answers to is never a self-defence reflex, it is a bug.
+func (td *ThreatDetector) OnDamaged(botPos mgl32.Vec3) {
 	reader, ok := td.bot.(nearestTrackedPlayerReader)
 	if !ok {
 		return
 	}
-	attacker, _, _, found := reader.NearestTrackedPlayer(botPos, 4.5)
+	attacker, id, attackerPos, found := reader.NearestTrackedPlayer(botPos, playerHitReach)
 	if !found {
 		return
 	}
 
-	td.logger.Info("ThreatDetector: retaliating against player hit", "player", attacker)
-	td.combat.EngagePlayer(attacker)
-	td.bot.InjectAIEvent("[SYSTEM EVENT: You were just hit by " + attacker + " and are now fighting back. Tell the player naturally in chat, briefly.]")
+	// Turn to face whoever did it. Looking at somebody who just hit you is the
+	// visible half of the reaction, and it is the only thing a warning-level
+	// answer does with the body.
+	td.bot.LookAt(attackerPos.Add(mgl32.Vec3{0, 1.2, 0}))
+
+	if td.IsAlly(attacker) {
+		td.logger.Info("ThreatDetector: hit by an ally, never fighting back", "player", attacker)
+		td.hits.Reset()
+		td.bot.InjectAIEvent("[SYSTEM EVENT: " + attacker + " — the player you answer to — just hit you. You are NOT fighting back and must not start. React naturally in chat with ONE short line (mungkin becanda, mungkin protes ringan), no action tags.]")
+		return
+	}
+
+	if !td.hitsFromThisAttacker(id) {
+		td.logger.Info("ThreatDetector: damage had no player behind it, not retaliating",
+			"nearest_player", attacker)
+		return
+	}
+
+	level, hits, fresh := td.hits.Record(attacker, time.Now())
+	if fresh {
+		// One line per scuffle, before the per-level lines, so the ladder reads
+		// in order afterwards without a line for every swing.
+		td.logger.Info("ThreatDetector: scuffle started", "player", attacker)
+	}
+	switch level {
+	case RetaliationWarn:
+		td.logger.Info("ThreatDetector: first hit, warning only",
+			"player", attacker, "hits", hits)
+		td.bot.InjectAIEvent("[SYSTEM EVENT: " + attacker + " just hit you once. You are NOT fighting back. React naturally in chat with ONE short line — kaget, protes, atau warning ringan — and keep doing whatever you were doing. No action tags.]")
+
+	case RetaliationDefend:
+		td.logger.Info("ThreatDetector: repeated hits, hitting back defensively",
+			"player", attacker, "hits", hits)
+		if td.combat.EngageDefender(attacker) {
+			td.bot.InjectAIEvent("[SYSTEM EVENT: " + attacker + " keeps hitting you. You are hitting back defensively — standing your ground, not chasing. Say ONE short line about it in chat, no action tags.]")
+		}
+
+	case RetaliationDuel:
+		td.logger.Info("ThreatDetector: sustained attack, engaging properly",
+			"player", attacker, "hits", hits)
+		td.combat.EngagePlayer(attacker)
+		td.bot.InjectAIEvent("[SYSTEM EVENT: " + attacker + " has hit you " + strconv.Itoa(hits) + " times and is not stopping. You are fighting back for real now. Tell the player naturally in chat, briefly.]")
+
+	default:
+		return
+	}
 }
 
 // guardEngageRadius is how far from the protected player (or the bot) a

@@ -113,3 +113,30 @@ func TestPeripheralTargetsStayVisible(t *testing.T) {
 		t.Error("a chest 30 degrees off the heading was reported as unseen")
 	}
 }
+
+// TestCloseRadiusIsMeasuredInThreeDimensions is the regression guard for the
+// vertical blind spot.
+//
+// CloseRadius was compared against the horizontal distance only, so anything
+// directly above or below the bot counted as "close" no matter how far away it
+// was: a player 100 blocks down a shaft shares the bot's x/z. The radius has to
+// be a sphere, not an infinite vertical column.
+func TestCloseRadiusIsMeasuredInThreeDimensions(t *testing.T) {
+	t.Parallel()
+
+	directlyBelow := eye.Add(mgl32.Vec3{0, -100, 0})
+	if fov.Within(directlyBelow, eye, 0) {
+		t.Error("a point 100 blocks straight below was reported as visible; " +
+			"CloseRadius is only 3 blocks")
+	}
+
+	directlyAbove := eye.Add(mgl32.Vec3{0, 100, 0})
+	if fov.Within(directlyAbove, eye, 0) {
+		t.Error("a point 100 blocks straight above was reported as visible")
+	}
+
+	// The sphere still has to behave at close range, including vertically.
+	if !fov.Within(eye.Add(mgl32.Vec3{0, -2, 0}), eye, 0) {
+		t.Error("a block 2 blocks below the eye is inside CloseRadius and must be visible")
+	}
+}

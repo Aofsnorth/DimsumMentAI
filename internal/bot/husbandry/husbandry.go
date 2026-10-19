@@ -155,7 +155,7 @@ func (m *Manager) FindNearbyAnimals(radius float32) []*entity.Info {
 
 	var animals []*entity.Info
 	for _, ent := range entities {
-		if ent.Health <= 0 {
+		if ent == nil || ent.Health <= 0 {
 			continue
 		}
 		if !passiveMobs[entity.NormalizeName(ent.Type)] {

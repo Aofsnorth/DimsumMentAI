@@ -438,23 +438,40 @@ func handleCorrectPrediction(b *bot.Bot, p *packet.CorrectPlayerMovePrediction) 
 	}
 	b.Mu.Unlock()
 
-	syncServerTick(b, p.Tick, "CorrectPlayerMovePrediction")
+	// Tick 0 is not a tick: it is the field's zero value in a packet that was
+	// built without one. Syncing to it set ServerTick to 1 and TickSynced=true,
+	// so the clock jumped backwards and every later prediction looked "ahead".
+	// The MovePlayer path already guards this; this one did not.
+	if p.Tick > 0 {
+		b.Mu.Lock()
+		prevTick := b.ServerTick
+		b.Mu.Unlock()
+		syncServerTick(b, p.Tick, "CorrectPlayerMovePrediction")
+		b.Mu.Lock()
+		newTick := b.ServerTick
+		b.MovementSyncPending = b.RewindMovement
+		entityID := b.Conn.GameData().EntityUniqueID
+		b.Mu.Unlock()
+		// #region agent log
+		debuglog.Log("H", "move.go:handleCorrectPrediction", "synced server tick", map[string]any{
+			"prevTick":   prevTick,
+			"serverTick": p.Tick,
+			"newTick":    newTick,
+			"srvY":       correctedPos.Y(),
+			"localY":     localY,
+			"srvRawY":    p.Position.Y(),
+			"runId":      "tick-fix-v2",
+		})
+		// #endregion
+		if b.RewindMovement {
+			sendMovementPredictionSync(b, entityID)
+		}
+		return
+	}
 	b.Mu.Lock()
-	prevTick := b.ServerTick
 	b.MovementSyncPending = b.RewindMovement
 	entityID := b.Conn.GameData().EntityUniqueID
 	b.Mu.Unlock()
-	// #region agent log
-	debuglog.Log("H", "move.go:handleCorrectPrediction", "synced server tick", map[string]any{
-		"prevTick":   prevTick,
-		"serverTick": p.Tick,
-		"newTick":    p.Tick + 1,
-		"srvY":       correctedPos.Y(),
-		"localY":     localY,
-		"srvRawY":    p.Position.Y(),
-		"runId":      "tick-fix-v2",
-	})
-	// #endregion
 	if b.RewindMovement {
 		sendMovementPredictionSync(b, entityID)
 	}

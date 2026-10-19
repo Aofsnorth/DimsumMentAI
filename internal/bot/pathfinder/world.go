@@ -465,18 +465,44 @@ func (w *LocalWorldModel) SetTempHazard(x, y, z int32, duration time.Duration) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	w.tempHazardBlocks[PackBlockKey(x, y, z)] = time.Now().Add(duration)
+	w.pruneTempHazardsLocked()
+}
+
+// tempHazardsPruneAt bounds the temporary hazard map. A damage event adds one
+// entry, and entries are only overwritten when the same cell is hit again, so a
+// long session would otherwise keep every guess it ever made.
+const tempHazardsPruneAt = 256
+
+// pruneTempHazardsLocked drops expired marks. It runs from the write path so
+// readers stay lock-free of mutation: an earlier version deleted expired entries
+// from tempHazardExpiry while callers held only RLock, which let two concurrent
+// readers mutate the map and turned into the runtime's fatal "concurrent map read
+// and map write" crash on the A* hot path.
+func (w *LocalWorldModel) pruneTempHazardsLocked() {
+	if len(w.tempHazardBlocks) < tempHazardsPruneAt {
+		return
+	}
+	now := time.Now()
+	for k, expiry := range w.tempHazardBlocks {
+		if now.After(expiry) {
+			delete(w.tempHazardBlocks, k)
+		}
+	}
 }
 
 // tempHazardExpiry reads the temporary hazard map under its own helper so
-// IsHazard stays a single lock acquisition. Expired marks are deleted lazily —
-// the map is small (one entry per damage event) and the read path is hot.
+// IsHazard stays a single lock acquisition. Expired marks are ignored on read
+// and deleted later by pruneTempHazardsLocked from the write path.
+//
+// This helper must stay read-only: callers hold w.mu.RLock, and deleting here
+// corrupts the map when two readers race (fatal "concurrent map read and map
+// write", not a recoverable panic).
 func (w *LocalWorldModel) tempHazardExpiry(k int64) (time.Time, bool) {
 	expiry, ok := w.tempHazardBlocks[k]
-	if ok && time.Now().After(expiry) {
-		delete(w.tempHazardBlocks, k)
+	if !ok || time.Now().After(expiry) {
 		return time.Time{}, false
 	}
-	return expiry, ok
+	return expiry, true
 }
 
 // nameAwareQuerier is implemented by caches that remember resolved block names.

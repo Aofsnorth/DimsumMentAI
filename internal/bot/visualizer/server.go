@@ -5,6 +5,7 @@ import (
 	"io"
 	"math"
 	"net/http"
+	"net/url"
 	"strconv"
 	"sync"
 	"time"
@@ -20,13 +21,35 @@ import (
 )
 
 var upgrader = websocket.Upgrader{
-	CheckOrigin: func(r *http.Request) bool { return true },
+	// The visualizer is a local debugging tool, so the only browser origins
+	// allowed to open a socket are the Vite dev server and the page served from
+	// loopback. Accepting every origin let any web page the operator visited
+	// drive the bot through this socket.
+	CheckOrigin: func(r *http.Request) bool {
+		origin := r.Header.Get("Origin")
+		if origin == "" {
+			// Non-browser client (the test harness, curl, a local script).
+			return true
+		}
+		u, err := url.Parse(origin)
+		if err != nil {
+			return false
+		}
+		host := u.Hostname()
+		return host == "localhost" || host == "127.0.0.1" || host == "::1"
+	},
 }
 
 type Server struct {
 	b        *bot.Bot
 	clients  map[*websocket.Conn]bool
 	clientMu sync.Mutex
+
+	// writeMu serialises every WriteMessage to a client. gorilla/websocket
+	// permits one concurrent writer per connection; the connect snapshot and the
+	// broadcast loop used to write through different locks, which panics with
+	// "concurrent write to websocket connection" when a client joins mid-tick.
+	writeMu sync.Mutex
 }
 
 func StartServer(b *bot.Bot) {
@@ -45,7 +68,17 @@ func StartServer(b *bot.Bot) {
 	mux.HandleFunc("/api/debug/inventory", s.handleDebugInventory)
 
 	handler := func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
+		// Only echo CORS for the local dev origins. A wildcard let any page the
+		// operator had open read the bot's state and POST to the mutation routes.
+		if origin := r.Header.Get("Origin"); origin != "" {
+			if u, err := url.Parse(origin); err == nil {
+				host := u.Hostname()
+				if host == "localhost" || host == "127.0.0.1" || host == "::1" {
+					w.Header().Set("Access-Control-Allow-Origin", origin)
+					w.Header().Set("Vary", "Origin")
+				}
+			}
+		}
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
 		if r.Method == http.MethodOptions {
@@ -58,7 +91,9 @@ func StartServer(b *bot.Bot) {
 
 	go func() {
 		srv := &http.Server{
-			Addr:         ":8080",
+			// Loopback only: this server can walk the bot and write blocks, and
+			// it has no authentication of its own.
+			Addr:         "127.0.0.1:8080",
 			Handler:      http.HandlerFunc(handler),
 			ReadTimeout:  5 * time.Second,
 			WriteTimeout: 10 * time.Second,
@@ -90,7 +125,9 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 
 	// Send an immediate snapshot so the UI is in sync on connect.
 	if msg, err := json.Marshal(s.buildState(true)); err == nil {
+		s.writeMu.Lock()
 		_ = conn.WriteMessage(websocket.TextMessage, msg)
+		s.writeMu.Unlock()
 	}
 
 	for {
@@ -144,6 +181,7 @@ func (s *Server) broadcastLoop() {
 		}
 
 		s.clientMu.Lock()
+		s.writeMu.Lock()
 		for conn := range s.clients {
 			if err := conn.SetWriteDeadline(time.Now().Add(time.Second)); err != nil {
 				conn.Close()
@@ -155,6 +193,7 @@ func (s *Server) broadcastLoop() {
 				delete(s.clients, conn)
 			}
 		}
+		s.writeMu.Unlock()
 		s.clientMu.Unlock()
 	}
 }

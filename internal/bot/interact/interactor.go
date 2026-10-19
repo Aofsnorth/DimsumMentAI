@@ -243,11 +243,14 @@ func (i *Interactor) interactEntity(ctx context.Context, target Target) bool {
 
 	// 1. Mouse over entity: Position is relative to entity base (waist height: 0, 0.9, 0).
 	clickedRel := mgl32.Vec3{0, 0.9, 0}
-	_ = i.bot.WritePacket(&packet.Interact{
+	if err := i.bot.WritePacket(&packet.Interact{
 		ActionType:            packet.InteractActionMouseOverEntity,
 		TargetEntityRuntimeID: target.ID,
 		Position:              protocol.Option(clickedRel),
-	})
+	}); err != nil {
+		i.logger.Warn("interact: mouse-over write failed", "entity", target.ID, "err", err)
+		return false
+	}
 
 	// Same arm movement a player makes when tapping an NPC or server figure.
 	_ = i.bot.WritePacket(animation.InteractSwing(i.bot.GetEntityRuntimeID()))
@@ -266,7 +269,7 @@ func (i *Interactor) interactEntity(ctx context.Context, target Target) bool {
 	// hosts expect an inventory transaction with UseItemOnEntityActionInteract
 	// to trigger entity right-click / interact events.
 	held, hotbar := i.heldItem()
-	_ = i.bot.WritePacket(&packet.InventoryTransaction{
+	if err := i.bot.WritePacket(&packet.InventoryTransaction{
 		TransactionData: &protocol.UseItemOnEntityTransactionData{
 			TargetEntityRuntimeID: target.ID,
 			ActionType:            protocol.UseItemOnEntityActionInteract,
@@ -275,7 +278,10 @@ func (i *Interactor) interactEntity(ctx context.Context, target Target) bool {
 			Position:              i.bot.GetCoords().Add(mgl32.Vec3{0, EyeHeight, 0}),
 			ClickedPosition:       clickedRel,
 		},
-	})
+	}); err != nil {
+		i.logger.Warn("interact: entity transaction write failed", "entity", target.ID, "err", err)
+		return false
+	}
 
 	_ = i.bot.WritePacket(animation.InteractSwing(i.bot.GetEntityRuntimeID()))
 
@@ -1148,7 +1154,7 @@ func (i *Interactor) MountEntity(ctx context.Context, target Target) bool {
 
 	// Right-click the entity to mount
 	held, hotbar := i.heldItem()
-	_ = i.bot.WritePacket(&packet.InventoryTransaction{
+	if err := i.bot.WritePacket(&packet.InventoryTransaction{
 		TransactionData: &protocol.UseItemOnEntityTransactionData{
 			TargetEntityRuntimeID: target.ID,
 			ActionType:            protocol.UseItemOnEntityActionInteract,
@@ -1157,7 +1163,10 @@ func (i *Interactor) MountEntity(ctx context.Context, target Target) bool {
 			Position:              i.bot.GetCoords().Add(mgl32.Vec3{0, EyeHeight, 0}),
 			ClickedPosition:       mgl32.Vec3{},
 		},
-	})
+	}); err != nil {
+		i.logger.Warn("mount: interact write failed", "entity", target.ID, "err", err)
+		return false
+	}
 
 	_ = i.bot.WritePacket(animation.InteractSwing(i.bot.GetEntityRuntimeID()))
 	return true

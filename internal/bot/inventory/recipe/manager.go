@@ -43,6 +43,12 @@ type Bot interface {
 	// does when it loads a furnace.
 	PlaceIntoContainerSlot(windowID byte, containerSlot uint32, destStackNetID int32, srcSlot uint32, count int) error
 
+	// PlaceIntoContainerSlotIn addresses a station slot by its protocol
+	// container ID (SmithingTableTemplate, LoomDye, ...). A station window's
+	// numeric ID is not the container the server resolves the slot against, so
+	// staging through the window-ID method silently placed nothing.
+	PlaceIntoContainerSlotIn(containerID byte, containerSlot uint32, destStackNetID int32, srcSlot uint32, count int) error
+
 	// CraftStationRecipe turns a staged station window into a crafted result:
 	// consume every staged input, create the result, and place it in the bag.
 	// It is the single place the station stack request is built, so the existing
@@ -206,7 +212,7 @@ func (m *Manager) run(ctx context.Context, plan Plan) (Plan, bool) {
 		m.bot.ResetLook()
 	}()
 
-	if err := m.stage(windowID, plan); err != nil {
+	if err := m.stage(plan); err != nil {
 		m.logger.Warn("station: could not stage inputs", "station", plan.Station.Block, "err", err)
 		return Plan{}, false
 	}
@@ -298,9 +304,9 @@ func (m *Manager) openStation(ctx context.Context, pos protocol.BlockPos) (byte,
 //
 // destStackNetID is 0: an empty station slot has no stack ID, and sending a
 // non-zero one names a stack the server has never seen.
-func (m *Manager) stage(windowID byte, plan Plan) error {
+func (m *Manager) stage(plan Plan) error {
 	for _, in := range plan.Inputs {
-		if err := m.bot.PlaceIntoContainerSlot(windowID, in.Slot.Index, 0, in.SourceSlot, in.Count); err != nil {
+		if err := m.bot.PlaceIntoContainerSlotIn(in.Slot.ContainerID, in.Slot.Index, 0, in.SourceSlot, in.Count); err != nil {
 			return err
 		}
 	}

@@ -5,21 +5,58 @@ import (
 	"context"
 	"math"
 	"reflect"
+	"sync"
 
 	"bedrock-ai/internal/bot"
 	"bedrock-ai/internal/event"
 )
 
-// Init registers the bot's listener on the event bus for ChatEvents
+// sessionListener is the single bus subscription made for one bot.
+type sessionListener struct {
+	mu  sync.RWMutex
+	ctx context.Context
+}
+
+var (
+	listenersMu sync.Mutex
+	listeners   = map[*bot.Bot]*sessionListener{}
+)
+
+// Init registers the bot's listener on the event bus for ChatEvents.
+//
+// The handler is registered once per bot, not once per session. It used to
+// subscribe from startLoops, which runs again on every reconnect, so after one
+// reconnect a single chat line was handled twice and the bot answered every
+// message twice. The context is the part that does change per session, so it is
+// stored behind the subscription and swapped by later calls; capturing it in the
+// closure left the handler holding the first (cancelled) session's context.
 func Init(ctx context.Context, b *bot.Bot) {
-	b.Bus.Subscribe(reflect.TypeOf(event.ChatEvent{}), func(evt interface{}) {
-		chatEvt, ok := evt.(event.ChatEvent)
-		if !ok {
-			return
-		}
-		go HandleIncomingChat(ctx, b, chatEvt)
-	})
-	b.Logger.Debug("Chat listener registered on event bus")
+	listenersMu.Lock()
+	defer listenersMu.Unlock()
+
+	l, ok := listeners[b]
+	if !ok {
+		l = &sessionListener{}
+		listeners[b] = l
+		b.Bus.Subscribe(reflect.TypeOf(event.ChatEvent{}), func(evt interface{}) {
+			chatEvt, ok := evt.(event.ChatEvent)
+			if !ok {
+				return
+			}
+			l.mu.RLock()
+			sessionCtx := l.ctx
+			l.mu.RUnlock()
+			if sessionCtx == nil {
+				sessionCtx = context.Background()
+			}
+			go HandleIncomingChat(sessionCtx, b, chatEvt)
+		})
+		b.Logger.Debug("Chat listener registered on event bus")
+	}
+
+	l.mu.Lock()
+	l.ctx = ctx
+	l.mu.Unlock()
 }
 
 // Simple internal math helper for floats

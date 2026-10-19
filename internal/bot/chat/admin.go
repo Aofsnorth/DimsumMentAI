@@ -46,7 +46,36 @@ func HandleAdminCommand(b *bot.Bot, cmd string, user string) {
 		handler(b, param, user)
 		return
 	}
+	// The opt-out phrases the chat pipeline matches are also commands here:
+	// the pipeline routes every "!" line to this table before any intent matcher
+	// runs, so "!nofollow" and "!disengage" reached an "Unknown admin command"
+	// log and did nothing. They are spelled out here rather than matched by
+	// substring so only the exact forms take this path.
+	if act == "nofollow" {
+		handleAdminNoFollow(b, param, user)
+		return
+	}
+	if act == "disengage" {
+		handleAdminDisengage(b, param, user)
+		return
+	}
 	b.Logger.Warn("Unknown admin command", "command", act)
+}
+
+// handleAdminNoFollow stops the bot following and drops the implicit follow the
+// player's earlier "ikut aku" established.
+func handleAdminNoFollow(b *bot.Bot, _, user string) {
+	b.Stop()
+	b.DisableImplicitFollow(user)
+	b.Logger.Info("admin: following stopped by request", "from", user)
+}
+
+// handleAdminDisengage ends combat without stopping unrelated movement.
+func handleAdminDisengage(b *bot.Bot, _, user string) {
+	if b.CombatMgr != nil {
+		b.CombatMgr.Disengage()
+	}
+	b.Logger.Info("admin: combat stopped by request", "from", user)
 }
 
 // adminCommandHandlers maps admin command names to their handlers.

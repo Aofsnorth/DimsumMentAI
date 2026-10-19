@@ -182,33 +182,39 @@ func RecalculatePath(b *bot.Bot) {
 		target = standTarget
 	}
 
-	startRID, _ := b.WorldCache.GetBlockRID(start.X, start.Y, start.Z)
-	startHeadRID, _ := b.WorldCache.GetBlockRID(start.X, start.Y+1, start.Z)
-	startFloorRID, _ := b.WorldCache.GetBlockRID(start.X, start.Y-1, start.Z)
-	targetRID, _ := b.WorldCache.GetBlockRID(target.X, target.Y, target.Z)
-	targetHeadRID, _ := b.WorldCache.GetBlockRID(target.X, target.Y+1, target.Z)
-	targetFloorRID, _ := b.WorldCache.GetBlockRID(target.X, target.Y-1, target.Z)
+	if b.WorldCache != nil {
+		startRID, _ := b.WorldCache.GetBlockRID(start.X, start.Y, start.Z)
+		startHeadRID, _ := b.WorldCache.GetBlockRID(start.X, start.Y+1, start.Z)
+		startFloorRID, _ := b.WorldCache.GetBlockRID(start.X, start.Y-1, start.Z)
+		targetRID, _ := b.WorldCache.GetBlockRID(target.X, target.Y, target.Z)
+		targetHeadRID, _ := b.WorldCache.GetBlockRID(target.X, target.Y+1, target.Z)
+		targetFloorRID, _ := b.WorldCache.GetBlockRID(target.X, target.Y-1, target.Z)
 
-	startBlockLeg, _ := b.WorldCache.BlockName(startRID)
-	startBlockHead, _ := b.WorldCache.BlockName(startHeadRID)
-	startBlockFloor, _ := b.WorldCache.BlockName(startFloorRID)
-	targetBlockLeg, _ := b.WorldCache.BlockName(targetRID)
-	targetBlockHead, _ := b.WorldCache.BlockName(targetHeadRID)
-	targetBlockFloor, _ := b.WorldCache.BlockName(targetFloorRID)
+		startBlockLeg, _ := b.WorldCache.BlockName(startRID)
+		startBlockHead, _ := b.WorldCache.BlockName(startHeadRID)
+		startBlockFloor, _ := b.WorldCache.BlockName(startFloorRID)
+		targetBlockLeg, _ := b.WorldCache.BlockName(targetRID)
+		targetBlockHead, _ := b.WorldCache.BlockName(targetHeadRID)
+		targetBlockFloor, _ := b.WorldCache.BlockName(targetFloorRID)
 
-	b.Logger.Debug("A* Path Nodes block debug",
-		"start_leg", fmt.Sprintf("%s (rid=%d, solid=%t)", startBlockLeg, startRID, b.WorldCache.IsRIDSolid(startRID)),
-		"start_head", fmt.Sprintf("%s (rid=%d, solid=%t)", startBlockHead, startHeadRID, b.WorldCache.IsRIDSolid(startHeadRID)),
-		"start_floor", fmt.Sprintf("%s (rid=%d, solid=%t)", startBlockFloor, startFloorRID, b.WorldCache.IsRIDSolid(startFloorRID)),
-		"target_leg", fmt.Sprintf("%s (rid=%d, solid=%t)", targetBlockLeg, targetRID, b.WorldCache.IsRIDSolid(targetRID)),
-		"target_head", fmt.Sprintf("%s (rid=%d, solid=%t)", targetBlockHead, targetHeadRID, b.WorldCache.IsRIDSolid(targetHeadRID)),
-		"target_floor", fmt.Sprintf("%s (rid=%d, solid=%t)", targetBlockFloor, targetFloorRID, b.WorldCache.IsRIDSolid(targetFloorRID)),
-	)
+		b.Logger.Debug("A* Path Nodes block debug",
+			"start_leg", fmt.Sprintf("%s (rid=%d, solid=%t)", startBlockLeg, startRID, b.WorldCache.IsRIDSolid(startRID)),
+			"start_head", fmt.Sprintf("%s (rid=%d, solid=%t)", startBlockHead, startHeadRID, b.WorldCache.IsRIDSolid(startHeadRID)),
+			"start_floor", fmt.Sprintf("%s (rid=%d, solid=%t)", startBlockFloor, startFloorRID, b.WorldCache.IsRIDSolid(startFloorRID)),
+			"target_leg", fmt.Sprintf("%s (rid=%d, solid=%t)", targetBlockLeg, targetRID, b.WorldCache.IsRIDSolid(targetRID)),
+			"target_head", fmt.Sprintf("%s (rid=%d, solid=%t)", targetBlockHead, targetHeadRID, b.WorldCache.IsRIDSolid(targetHeadRID)),
+			"target_floor", fmt.Sprintf("%s (rid=%d, solid=%t)", targetBlockFloor, targetFloorRID, b.WorldCache.IsRIDSolid(targetFloorRID)),
+		)
+	}
 
 	// Pass 1: Normal pathfinding without fallback
 	path := pathfinder.FindPath(start, target, b.WorldModel, false)
 	if len(path) == 0 && canUseScaffolding(b) {
-		// Pass 2: Retry with scaffolding and mining allowed, without fallback
+		// Pass 2: Retry with scaffolding and mining allowed, without fallback.
+		// The AllowScaffold flip is read by the A* runtime on this same goroutine, but
+		// it is also the model's public state, so it is restored on every exit path
+		// rather than left as it was set: a panic or early return used to leave
+		// scaffolding enabled for the rest of the session.
 		b.WorldModel.AllowScaffold = true
 		b.Logger.Info("Normal pathfinding failed, retrying with scaffolding and mining allowed...")
 		path = pathfinder.FindPath(start, target, b.WorldModel, false)

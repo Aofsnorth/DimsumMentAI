@@ -135,6 +135,9 @@ func (d *Dialer) Dial() (*minecraft.Conn, error) {
 
 	if cfg.LANDiscoveryEnabled() && os.Getenv("BOT_DIAL_ADDR") == "" {
 		if conn, err := d.dialLAN(cfg, dialer); err == nil {
+			if capture != nil {
+				_ = capture.Close()
+			}
 			return conn, nil
 		} else {
 			slog.Warn("LAN discovery failed; falling back to RakNet", "error", err)
@@ -168,6 +171,9 @@ func (d *Dialer) Dial() (*minecraft.Conn, error) {
 			conn, err = fallback.Dial("raknet", dialAddr)
 		}
 		if err != nil {
+			if capture != nil {
+				_ = capture.Close()
+			}
 			return nil, fmt.Errorf("dial server %s: %w", dialAddr, err)
 		}
 	}

@@ -16,6 +16,17 @@ import (
 
 // ===================== BED SLEEPING =====================
 
+// isBedBlockName reports whether a block name is a bed.
+//
+// A bed is "bed" or "*_bed". Plain substring matching pulled in "bedrock":
+// underground, FindNearbyBed returned the floor the bot was standing on and
+// SleepInBed walked to it to "sleep".
+func isBedBlockName(name string) bool {
+	name = strings.ToLower(strings.TrimSpace(name))
+	name = strings.TrimPrefix(name, "minecraft:")
+	return name == "bed" || strings.HasSuffix(name, "_bed")
+}
+
 // FindNearbyBed searches for a bed block within the given radius
 func (m *Manager) FindNearbyBed(radius int32) (protocol.BlockPos, bool) {
 	pos := m.bot.GetCoords()
@@ -34,8 +45,7 @@ func (m *Manager) FindNearbyBed(radius int32) (protocol.BlockPos, bool) {
 				if !ok {
 					continue
 				}
-				// Bed blocks contain "bed" in their name
-				if containsAny(name, "bed") {
+				if isBedBlockName(name) {
 					d := float64(dx*dx + dy*dy + dz*dz)
 					if d < bestDist {
 						bestDist = d
@@ -74,7 +84,13 @@ func (m *Manager) SleepInBed(ctx context.Context) bool {
 	m.bot.LookAt(mgl32.Vec3{float32(bedPos.X()) + 0.5, float32(bedPos.Y()) + 0.5, float32(bedPos.Z()) + 0.5})
 	time.Sleep(200 * time.Millisecond)
 
-	// Interact with bed (right-click to sleep)
+	// Interact with bed (right-click to sleep).
+	//
+	// The interaction is only reported as successful once the server confirms the
+	// sleep. A WritePacket that returns nil proves the bytes left, not that the
+	// bed was used: sleeping is refused during the day, while monsters are
+	// nearby, or on a bed another player occupies, and every one of those used to
+	// be logged as "Sleeping in bed" and shown to the player as success.
 	tx := &packet.InventoryTransaction{
 		TransactionData: &protocol.UseItemTransactionData{
 			ActionType:    protocol.UseItemActionClickBlock,
@@ -94,9 +110,29 @@ func (m *Manager) SleepInBed(ctx context.Context) bool {
 		return false
 	}
 
-	m.logger.Info("Sleeping in bed", "pos", bedPos)
-	m.bot.ReportActionStatus("", event.ActionStatus{Action: "sleep", Item: "bed", Count: 1, Success: true})
-	return true
+	const sleepSettle = 1500 * time.Millisecond
+	select {
+	case <-time.After(sleepSettle):
+	case <-ctx.Done():
+		m.bot.ReportActionStatus("", event.ActionStatus{Action: "sleep", Item: "bed", Success: false, Error: "cancelled"})
+		return false
+	}
+
+	if !m.IsNight() {
+		// The world clock advanced past dawn, which only happens when the bed
+		// was accepted. That is the confirmation available from the packets the
+		// bot already tracks; a refused sleep leaves the clock where it was.
+		m.logger.Info("Slept in bed", "pos", bedPos)
+		m.bot.ReportActionStatus("", event.ActionStatus{Action: "sleep", Item: "bed", Count: 1, Success: true})
+		return true
+	}
+
+	m.logger.Warn("SleepInBed: the server did not accept the sleep", "pos", bedPos)
+	m.bot.ReportActionStatus("", event.ActionStatus{
+		Action: "sleep", Item: "bed", Success: false,
+		Error: "the server did not accept the sleep (monsters nearby, or the bed is occupied)",
+	})
+	return false
 }
 
 // ===================== TORCH PLACEMENT =====================

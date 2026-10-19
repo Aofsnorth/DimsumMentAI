@@ -84,7 +84,7 @@ func (i TickInterval) Draw() time.Duration {
 	if i.Max <= i.Min {
 		return i.Min
 	}
-	return i.Min + time.Duration(rand.Int64N(int64(i.Max-i.Min)))
+	return i.Min + time.Duration(rand.Int64N(int64(i.Max-i.Min)+1))
 }
 
 // String renders the range the way it is written in the config, so a log line

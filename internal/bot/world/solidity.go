@@ -366,7 +366,9 @@ var passableContainsList = []passableContains{
 	{sub: "plant", exclude: []string{"pot", "block"}},
 	{sub: "candle", exclude: []string{"block"}},
 	{sub: "sprout"},
-	{sub: "stem", exclude: []string{"stripped", "block"}},
+	// crimson_stem / warped_stem are full Nether logs, not plants: the generic
+	// "stem" rule (for the small plant stem) made A* walk straight through them.
+	{sub: "stem", exclude: []string{"stripped", "block", "crimson", "warped"}},
 	{sub: "snow", exclude: []string{"block"}},
 	{sub: "dripleaf", exclude: []string{"block"}},
 	{sub: "pickle"},
@@ -504,10 +506,33 @@ func (wc *WorldCache) TopOffsetAt(x, y, z int32) float32 {
 	if !loaded {
 		return 1.0
 	}
-	return wc.ridTopOffset(rid)
+	return wc.SolidTopOffsetFromRID(rid)
 }
 
-func (wc *WorldCache) ridTopOffset(rid uint32) float32 {
+// UsesServerPalette reports whether runtime IDs are indices into the server's
+// advertised block palette rather than dragonfly's local state table.
+func (wc *WorldCache) UsesServerPalette() bool {
+	wc.mu.RLock()
+	defer wc.mu.RUnlock()
+	return wc.geyserCompat || (!wc.useHashes && len(wc.customBlockNames) > 0)
+}
+
+// BlockProperties resolves the state properties of a runtime ID.
+//
+// Properties only exist in dragonfly's local state space. A server-palette
+// connection stores network indices whose table carries names and solidity but
+// not per-state properties; in that mode the honest answer is "unknown", never
+// the properties of whatever block happens to share the number locally.
+func (wc *WorldCache) BlockProperties(rid uint32) (map[string]any, bool) {
+	if wc.UsesServerPalette() || chunk.RuntimeIDToState == nil {
+		return nil, false
+	}
+	_, props, ok := chunk.RuntimeIDToState(rid)
+	return props, ok
+}
+
+// SolidTopOffsetFromRID returns the height a body stands on for a runtime ID.
+func (wc *WorldCache) SolidTopOffsetFromRID(rid uint32) float32 {
 	wc.mu.RLock()
 	geyser := wc.geyserCompat || !wc.useHashes
 	useHashes := wc.useHashes

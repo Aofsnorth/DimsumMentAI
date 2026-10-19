@@ -77,9 +77,6 @@ func NewContainer(bot Bot, logger *slog.Logger) *Container {
 
 func (c *Container) loadCache() {
 	c.mu.Lock()
-	go func() {
-		// Just to release lock context properly if needed, but simple lock is fine.
-	}()
 	defer c.mu.Unlock()
 
 	data, err := os.ReadFile(c.cachePath)
@@ -88,7 +85,7 @@ func (c *Container) loadCache() {
 	}
 
 	var cache map[string]*ChestData
-	if err := json.Unmarshal(data, &cache); err == nil {
+	if err := json.Unmarshal(data, &cache); err == nil && cache != nil {
 		c.chestCache = cache
 	}
 }

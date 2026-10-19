@@ -112,19 +112,17 @@ func HandleIncomingChat(ctx context.Context, b *bot.Bot, evt event.ChatEvent) {
 	// episode waits either way.
 	noteHumanPresence(b, evt.SourceName)
 
-	if b.AiClient == nil {
-		b.Logger.Info("chat ignored: AI client not configured")
-		return
-	}
-
 	// Opting out of following, in either the command form or the plain-language
 	// one a player actually types.
 	//
-	// The log caught this being ignored: the player typed "Berhenti ikutin aku"
-	// — stop following me — and the bot followed for the next four minutes. A
-	// follow the player cannot stop is not a follow, it is a leash, and the
-	// plain-language form is the one that will arrive; "!nofollow" is a command
-	// nobody would think to use unless they had read the source.
+	// This sits before the AI-client check on purpose: stopping is not a
+	// conversation. A bot configured without a model could not be told to stop
+	// following at all, and the player had no way to know why.
+	//
+	// The log caught the other half of this being ignored: the player typed
+	// "Berhenti ikutin aku" — stop following me — and the bot followed for the
+	// next four minutes. A follow the player cannot stop is not a follow, it is a
+	// leash, and the plain-language form is the one that will arrive.
 	if isStopFollowingIntent(msg) {
 		// Stop has to cancel the running job, not just the legs. The gather loop
 		// is driven by a context, and handing it context.Background() — as the
@@ -145,6 +143,11 @@ func HandleIncomingChat(ctx context.Context, b *bot.Bot, evt event.ChatEvent) {
 		b.Logger.Info("chat: combat stopped by request", slog.String("from", evt.SourceName))
 		replyViaAI(b, evt.SourceName, msg,
 			"You stopped attacking and are no longer engaging in combat.")
+		return
+	}
+
+	if b.AiClient == nil {
+		b.Logger.Info("chat ignored: AI client not configured")
 		return
 	}
 
@@ -443,6 +446,16 @@ func handlePlanCommand(b *bot.Bot, evt event.ChatEvent, msg string) {
 		return
 	}
 	if b.Planner == nil {
+		return
+	}
+	// Planning is the strongest thing a chat line can ask for: it schedules
+	// movement, mining and building. Every other state-changing chat command
+	// (episode, guard, whitelist, staged routines) is operator-gated; this one
+	// was not, so a stranger could start a plan when the linked-player gate was
+	// disabled or unset.
+	if !isOperator(b, evt.SourceName) {
+		b.Logger.Warn("plan: command ignored: not the configured operator",
+			"from", evt.SourceName)
 		return
 	}
 	b.Logger.Info("plan: command triggered", "user", evt.SourceName, "request", request)

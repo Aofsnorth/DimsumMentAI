@@ -89,7 +89,10 @@ func stripFormatting(text string) string {
 	sb.Grow(len(text))
 	for i := 0; i < len(text); i++ {
 		if text[i] == 0xC2 && i+1 < len(text) && text[i+1] == 0xA7 {
-			i++ // skip the § and the code byte after it
+			// UTF-8 for § is C2 A7, followed by the formatting code byte.
+			// Skipping only the pair (one i++) left the code byte in the output,
+			// so a sign containing just "§a" looked like it said "a".
+			i += 2 // C2, A7, and the code byte
 			continue
 		}
 		if text[i] == 0xA7 {

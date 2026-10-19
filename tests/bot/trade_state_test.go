@@ -184,20 +184,28 @@ func attr(name string, value float32) protocol.Attribute {
 func TestTheExperienceAttributeFoldsIntoALevel(t *testing.T) {
 	t.Parallel()
 
-	attrs := []protocol.Attribute{attr("minecraft:player.experience", 17)}
+	attrs := []protocol.Attribute{attr("minecraft:player.level", 17)}
 
 	level, seen := bot.ApplyExperienceAttribute(attrs, 3, false)
 	if !seen {
-		t.Fatal("an experience attribute did not report itself seen")
+		t.Fatal("a level attribute did not report itself seen")
 	}
 	if level != 17 {
 		t.Errorf("level = %d, want 17", level)
 	}
 
+	// The progress bar is not a level. A packet carrying only
+	// minecraft:player.experience (0..1) must leave the level alone: reading that
+	// value as a level made every bot look like level 0.
+	level, seen = bot.ApplyExperienceAttribute([]protocol.Attribute{attr("minecraft:player.experience", 0.42)}, 17, true)
+	if !seen || level != 17 {
+		t.Errorf("experience progress changed the level to %d (seen=%v), want it left at 17", level, seen)
+	}
+
 	// A health-only packet must not reset the level.
 	level, seen = bot.ApplyExperienceAttribute([]protocol.Attribute{attr("minecraft:health", 20)}, 17, true)
 	if !seen || level != 17 {
-		t.Errorf("a packet without the experience attribute changed the level to %d (seen=%v), want it left at 17", level, seen)
+		t.Errorf("a packet without the level attribute changed the level to %d (seen=%v), want it left at 17", level, seen)
 	}
 
 	// A brand new bot that has never seen one reports unknown.

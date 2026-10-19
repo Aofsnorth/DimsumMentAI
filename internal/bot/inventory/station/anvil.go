@@ -28,10 +28,12 @@ var anvilRepairMaterials = []struct {
 	prefix   string
 	material string
 }{
-	{"netherite_", "netherite_scrap"},
+	{"netherite_", "netherite_ingot"},
 	{"diamond_", "diamond"},
-	{"golden_", "golden_apple"},
-	{"gold_", "golden_apple"},
+	// Golden tools repair with gold ingots, not golden apples: an apple is food,
+	// so the anvil consumed it and produced nothing.
+	{"golden_", "gold_ingot"},
+	{"gold_", "gold_ingot"},
 	{"iron_", "iron_ingot"},
 	{"chainmail_", "iron_ingot"},
 	{"stone_", "cobblestone"},

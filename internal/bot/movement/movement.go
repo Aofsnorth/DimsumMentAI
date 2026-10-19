@@ -327,6 +327,14 @@ func SendInputLoop(ctx context.Context, b *bot.Bot, gd minecraft.GameData) {
 			tc.Pitch = b.Pitch
 			tc.HeadYaw = b.HeadYaw
 			tc.VelY = b.VelY
+			// The steering phase runs before physics, so without this seed it saw
+			// the zero value and every "is the body on the ground" branch behaved as
+			// if the bot were permanently airborne: parkour links were re-armed every
+			// tick, slab step-ups always jumped, and re-jump cooldowns never applied.
+			// The previous tick's grounded answer is the freshest truth available here
+			// (physics, which owns this tick's answer, has not run yet).
+			tc.IsGrounded = b.IsGrounded
+			tc.IsOnLadder = b.IsOnLadder
 			tc.TargetTolerance = b.TargetTolerance
 			tc.SmoothedLookYaw = smoothLookYaw
 			tc.SmoothedLookPitch = smoothLookPitch

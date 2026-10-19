@@ -46,6 +46,11 @@ const (
 
 	// MaxHunger is the maximum player hunger
 	MaxHunger = 20
+
+	// MaxInventorySlot is the highest global slot in the player inventory:
+	// 0-8 hotbar, 9-35 main, 36-39 armour, 40 offhand. Anything a packet names
+	// above this does not exist and must not be written into InventoryMap.
+	MaxInventorySlot = 40
 )
 
 // Bedrock protocol constants

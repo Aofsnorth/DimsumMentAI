@@ -49,3 +49,22 @@ func (b *Bus) Subscribe(eventType reflect.Type, handler func(interface{})) {
 
 	b.subscribers[eventType] = append(b.subscribers[eventType], handler)
 }
+
+// Unsubscribe removes a handler registered with Subscribe. It exists because a
+// bot re-registers its listeners on every session: without this, each reconnect
+// left the previous session's handler on the bus and one chat message was
+// handled once per session ever lived.
+func (b *Bus) Unsubscribe(eventType reflect.Type, handler func(interface{})) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	handlers := b.subscribers[eventType]
+	for i, h := range handlers {
+		// Comparing func values is only legal against nil, so the match is on the
+		// code pointer the runtime exposes for the same function value.
+		if reflect.ValueOf(h).Pointer() == reflect.ValueOf(handler).Pointer() {
+			b.subscribers[eventType] = append(handlers[:i], handlers[i+1:]...)
+			return
+		}
+	}
+}

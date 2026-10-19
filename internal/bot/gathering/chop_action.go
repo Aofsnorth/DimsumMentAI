@@ -33,6 +33,11 @@ func (tc *TreeChopper) chopTree(ctx context.Context, basePos protocol.BlockPos, 
 	logBlocks = sortLogBlocks(logBlocks)
 	tc.equipBestAxe()
 
+	// Baseline before the first swing, not after the last one. Drops that landed
+	// while chopping are already in the bag by the time the sweep below starts,
+	// so a baseline taken there reported a delta of zero for every tree.
+	before := tc.rg.looter.currentItemCount("log")
+
 	// Keep going until the trunk is down. One pass defers every log the bot could
 	// not reach or see, and the tree used to be abandoned right there with its
 	// upper half standing. Each further round works on what is still a log and
@@ -79,7 +84,6 @@ func (tc *TreeChopper) chopTree(ctx context.Context, basePos protocol.BlockPos, 
 	// On a live server all three lost the race and a felled tree reported zero
 	// logs — so the sweep is retried until something lands in the inventory or
 	// the tries run out.
-	before := tc.rg.looter.currentItemCount("log")
 	got := 0
 	for try := 0; try < 4 && ctx.Err() == nil; try++ {
 		tc.rg.looter.CollectAllDrops(ctx, 8.0)

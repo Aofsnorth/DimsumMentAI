@@ -4,8 +4,8 @@
 
 # --- Server Settings ---
 server:
-  host: "hansprojects.my.id"
-  port: 25621
+  host: "mc.hansprojects.my.id"
+  port: 25602
   offline: false # true = no Xbox Live auth (local server)
   lan_discovery: false # auto-discover the single-player world opened to LAN (direct RakNet to a client-hosted world is rejected with invalidSkin — the host requires the Nonce from its advertisement)
   lan_world: "A" # optional: only join a world with this exact name
@@ -109,7 +109,7 @@ bot:
 #   - Butuh AI provider aktif. Tanpa itu planning mode diam-diam jadi default.
 #     Cek baris "AGI loop started" di log untuk mode yang benar-benar jalan.
 agi:
-  enabled: true
+  enabled: false
   # "default" | "planning" | "natural". Alias: plan, long_horizon, natural_mode,
   # episode, record. Typo jatuh ke "default".
   #
@@ -272,8 +272,8 @@ agi:
     # Kalau provider punya key sendiri, taruh key itu di variable itu — jalan,
     # tapi Variable-nya menyesatkan. Mengganti nama variable = perubahan kode.
     danger_threshold: 0.6 # di atas ini = bahaya
-    speak_threshold: 0.75 # sengaja tinggi; bot yang terlalu gampang ngomong lebih buruk dari yang diam
-    engage_threshold: 0.4 # "harus sibuk?" di bawah ini bot boleh diem — diam terus juga kelihatan robot
+    speak_threshold: 0.55 # sengaja tinggi; bot yang terlalu gampang ngomong lebih buruk dari yang diam
+    engage_threshold: 0.3 # "harus sibuk?" di bawah ini bot boleh diem — diam terus juga kelihatan robot
     timeout_sec: 5 # Jev jawab 70-500ms; timeout itu buat guard, bukan tuning kecepatan
     prompts_file: "" # opsional: YAML untuk override wording pertanyaan (dikunci per nama pertanyaan)
 

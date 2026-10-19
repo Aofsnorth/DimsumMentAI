@@ -110,6 +110,11 @@ func signMatchesWords(text, param string) bool {
 func handleTakeFromChest(b *bot.Bot, param, user string) {
 	go func() {
 		if strings.TrimSpace(param) == "" {
+			ReportStatus(b, user, event.ActionStatus{
+				Action:  "take",
+				Success: false,
+				Error:   "sebutkan barang yang mau diambil",
+			})
 			return
 		}
 		itemName, count := parseItemAndCount(param)
@@ -121,21 +126,39 @@ func handleTakeFromChest(b *bot.Bot, param, user string) {
 			"opened", result.OpenedCount,
 			"signs", result.SignsRead,
 		)
-		if !result.Found {
+		// Found only says a chest held the item; Taken says it reached the bag.
+		// Reporting success on Found alone announced a take whose transfer had
+		// failed (full inventory, refused request) while the item stayed put.
+		switch {
+		case err != nil:
+			ReportStatus(b, user, event.ActionStatus{
+				Action:  "take",
+				Item:    itemName,
+				Success: false,
+				Error:   err.Error(),
+			})
+		case !result.Found:
 			ReportStatus(b, user, event.ActionStatus{
 				Action:  "take",
 				Item:    itemName,
 				Success: false,
 				Error:   result.Reason,
 			})
-			return
+		case result.Taken <= 0:
+			ReportStatus(b, user, event.ActionStatus{
+				Action:  "take",
+				Item:    itemName,
+				Success: false,
+				Error:   "barang ketemu di chest tapi tidak ada yang masuk ke tas",
+			})
+		default:
+			ReportStatus(b, user, event.ActionStatus{
+				Action:  "take",
+				Item:    itemName,
+				Count:   result.Taken,
+				Success: true,
+			})
 		}
-		ReportStatus(b, user, event.ActionStatus{
-			Action:  "take",
-			Item:    itemName,
-			Success: true,
-		})
-		_ = err
 	}()
 }
 
@@ -143,6 +166,11 @@ func handleTakeFromChest(b *bot.Bot, param, user string) {
 func handleStoreInChest(b *bot.Bot, param, user string) {
 	go func() {
 		if strings.TrimSpace(param) == "" {
+			ReportStatus(b, user, event.ActionStatus{
+				Action:  "store",
+				Success: false,
+				Error:   "sebutkan barang yang mau disimpan",
+			})
 			return
 		}
 		itemName, count := parseItemAndCount(param)
@@ -157,9 +185,19 @@ func handleStoreInChest(b *bot.Bot, param, user string) {
 			})
 			return
 		}
+		if stored <= 0 {
+			ReportStatus(b, user, event.ActionStatus{
+				Action:  "store",
+				Item:    itemName,
+				Success: false,
+				Error:   "tidak ada barang yang masuk ke chest",
+			})
+			return
+		}
 		ReportStatus(b, user, event.ActionStatus{
 			Action:  "store",
 			Item:    itemName,
+			Count:   stored,
 			Success: true,
 		})
 	}()

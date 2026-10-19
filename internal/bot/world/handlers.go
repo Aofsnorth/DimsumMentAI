@@ -91,7 +91,14 @@ func (wc *WorldCache) applySubChunkEntry(entry protocol.SubChunkEntry, pos proto
 	if !ok {
 		return
 	}
+	// The mutation is done under the cache's write lock because readers hold only
+	// the read lock: SetBlock can reallocate the chunk's internal palette slices,
+	// and a ticker reading them through RLock would otherwise see a torn slice or
+	// panic on an index that no longer exists. Every other writer (SetBlockRID)
+	// already takes Lock; this one did not.
+	wc.mu.Lock()
 	applyStorageToChunk(c, wc.airRID, wc.r, subY, storages)
+	wc.mu.Unlock()
 	// Block entities for this section ride along after the storage data.
 	wc.ScanSignBlockEntities(leftover)
 

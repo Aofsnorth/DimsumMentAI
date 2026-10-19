@@ -86,7 +86,11 @@ func (m *Manager) TameCat(ctx context.Context) bool {
 // "Three attempts and hope" is not on that list, and never was meant to be.
 func (m *Manager) tameWithItem(ctx context.Context, animalType, itemName string) bool {
 	itemSlot, itemStack, ok := m.findItemSlot(func(name string) bool {
-		return strings.Contains(name, itemName)
+		// Exact item, not a substring. "bone" also matched bone_meal and
+		// bone_block, so a wolf was offered the wrong stack (map order decides
+		// which one) and five attempts later the bot reported taming as failed
+		// while a bone sat in the bag.
+		return sameItemName(name, itemName)
 	})
 	if !ok {
 		m.report("tame", itemName, false, "tidak punya "+itemName)
@@ -219,4 +223,14 @@ func (m *Manager) entityTypeName(runtimeID uint64) string {
 		return e.Type
 	}
 	return ""
+}
+
+// sameItemName compares two item names ignoring case and the namespace prefix.
+func sameItemName(a, b string) bool {
+	normalise := func(s string) string {
+		s = strings.ToLower(strings.TrimSpace(s))
+		s = strings.TrimPrefix(s, "minecraft:")
+		return s
+	}
+	return normalise(a) == normalise(b)
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"math"
+	"strconv"
 	"sync"
 	"time"
 
@@ -260,23 +261,33 @@ func (e *Explorer) ReturnToOrigin(ctx context.Context) bool {
 		return false
 	}
 
-	e.bot.ReportActionStatus("", event.ActionStatus{
-		Action:  "returnhome",
-		Item:    "origin",
-		Count:   0,
-		Success: true,
-	})
+	// Success is reported only on arrival, below. It used to be reported here,
+	// before NavigateTo was even called, so a timeout or a cancel left the player
+	// looking at a "returned home" message for a bot that never moved.
 	e.bot.NavigateTo(origin)
 
-	deadline := time.After(60 * time.Second)
+	deadline := time.NewTimer(60 * time.Second)
+	defer deadline.Stop()
 	ticker := time.NewTicker(500 * time.Millisecond)
 	defer ticker.Stop()
 
 	for {
 		select {
 		case <-ctx.Done():
+			e.bot.ReportActionStatus("", event.ActionStatus{
+				Action:  "returnhome",
+				Item:    "origin",
+				Success: false,
+				Error:   "dibatalkan",
+			})
 			return false
-		case <-deadline:
+		case <-deadline.C:
+			e.bot.ReportActionStatus("", event.ActionStatus{
+				Action:  "returnhome",
+				Item:    "origin",
+				Success: false,
+				Error:   "tidak sampai ke posisi asal dalam 60 detik",
+			})
 			return false
 		case <-ticker.C:
 			pos := e.bot.GetCoords()
@@ -344,8 +355,11 @@ func WaypointReached(origin, current, target mgl32.Vec3) bool {
 }
 
 func areaKey(pos mgl32.Vec3) string {
-	// Chunk-level key (16x16 blocks)
+	// Chunk-level key (16x16 blocks). Coordinates are formatted, not cast to
+	// rune: string(rune(cx)) turns every negative chunk into U+FFFD, so the
+	// whole west/north quadrant collapsed into a single "visited" entry and the
+	// explorer skipped it after visiting one chunk.
 	cx := int(math.Floor(float64(pos.X()))) >> 4
 	cz := int(math.Floor(float64(pos.Z()))) >> 4
-	return string(rune(cx)) + "," + string(rune(cz))
+	return strconv.Itoa(cx) + "," + strconv.Itoa(cz)
 }

@@ -29,11 +29,23 @@ func matchesPreferredLog(blockName, preferred string) bool {
 	preferred = strings.TrimPrefix(preferred, "minecraft:")
 	blockName = strings.ToLower(strings.TrimPrefix(blockName, "minecraft:"))
 
-	woodTypes := []string{"oak", "spruce", "birch", "jungle", "acacia", "dark_oak", "mangrove", "cherry", "crimson", "warped"}
+	// Longest material name first: "oak" is a substring of "dark_oak", so the
+	// old order accepted plain oak when the caller asked for dark oak. Sorting by
+	// length makes the most specific name win.
+	woodTypes := []string{"dark_oak", "mangrove", "crimson", "warped", "cherry", "spruce", "jungle", "acacia", "birch", "oak"}
 	for _, woodType := range woodTypes {
 		if strings.Contains(preferred, woodType) {
-			return strings.Contains(blockName, woodType)
+			return blockNameHasWoodType(blockName, woodType)
 		}
 	}
 	return true
+}
+
+// blockNameHasWoodType matches a wood type as a whole name segment, so "oak"
+// does not match "dark_oak_log".
+func blockNameHasWoodType(blockName, woodType string) bool {
+	return blockName == woodType ||
+		strings.HasPrefix(blockName, woodType+"_") ||
+		strings.Contains(blockName, "_"+woodType+"_") ||
+		strings.HasSuffix(blockName, "_"+woodType)
 }

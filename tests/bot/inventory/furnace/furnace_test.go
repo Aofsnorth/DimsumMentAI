@@ -147,15 +147,19 @@ func TestSmeltItemUsesRealWindowAndConfirmsOutput(t *testing.T) {
 		t.Fatalf("clicked %d blocks, want 1", len(bot.clicked))
 	}
 
-	// Input goes to slot 0, fuel to slot 1, both under the assigned window.
+	// Input goes to slot 0, fuel to slot 1, each in its own protocol container.
+	// Addressing the window ID instead is the regression this pins down: the
+	// server resolves the slot against the container, and a window ID names none.
 	if len(bot.placed) != 2 {
 		t.Fatalf("placed %d stacks, want 2 (input + fuel)", len(bot.placed))
 	}
-	if got := bot.placed[0]; got.slot != furnace.SlotInput || got.windowID != 7 {
-		t.Errorf("input placed at slot %d window %d, want slot %d window 7", got.slot, got.windowID, furnace.SlotInput)
+	if got := bot.placed[0]; got.slot != furnace.SlotInput || got.containerID != protocol.ContainerFurnaceIngredient {
+		t.Errorf("input placed at slot %d container %d, want slot %d ContainerFurnaceIngredient",
+			got.slot, got.containerID, furnace.SlotInput)
 	}
-	if got := bot.placed[1]; got.slot != furnace.SlotFuel || got.windowID != 7 {
-		t.Errorf("fuel placed at slot %d window %d, want slot %d window 7", got.slot, got.windowID, furnace.SlotFuel)
+	if got := bot.placed[1]; got.slot != furnace.SlotFuel || got.containerID != protocol.ContainerFurnaceFuel {
+		t.Errorf("fuel placed at slot %d container %d, want slot %d ContainerFurnaceFuel",
+			got.slot, got.containerID, furnace.SlotFuel)
 	}
 
 	// The result is taken out of the output slot, again under the assigned window.

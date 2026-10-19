@@ -119,9 +119,7 @@ func (rg *ResourceGatherer) SetGathering(gathering bool) {
 }
 
 func (rg *ResourceGatherer) EnsureInventorySpace(ctx context.Context) bool {
-	inv := rg.bot.GetInventorySlots()
-	freeSlots := 36 - len(inv) // standard inventory size
-	if freeSlots >= 2 {
+	if rg.freeMainInventorySlots() >= 2 {
 		return true
 	}
 
@@ -129,9 +127,10 @@ func (rg *ResourceGatherer) EnsureInventorySpace(ctx context.Context) bool {
 	// Try to drop common junk items: seeds, cobblestone (if excessive), dirt (if excessive)
 	junkTypes := []string{"seed", "seeds", "wheat_seeds", "beetroot_seeds", "melon_seeds", "pumpkin_seeds"}
 
+	inv := rg.bot.GetInventorySlots()
 	names := rg.bot.GetItemNames()
 	for slot, item := range inv {
-		if item.Count <= 0 {
+		if item.Count <= 0 || slot >= mainInventorySlots {
 			continue
 		}
 		name := names[item.NetworkID]
@@ -140,12 +139,46 @@ func (rg *ResourceGatherer) EnsureInventorySpace(ctx context.Context) bool {
 				_ = rg.bot.DropItem(name, int(item.Count))
 				time.Sleep(200 * time.Millisecond)
 				rg.logger.Info("Dropped junk item to make space", "name", name, "slot", slot)
-				return true
+				// Keep dropping until there is room for more than one stack: a
+				// gather round needs a slot for the wood and a slot for drops.
+				if rg.freeMainInventorySlots() >= 2 {
+					return true
+				}
+				break
 			}
 		}
 	}
 
+	if rg.freeMainInventorySlots() >= 2 {
+		return true
+	}
+	if ctx.Err() != nil {
+		rg.logger.Info("Inventory still full; stop requested")
+	}
 	return false
+}
+
+// mainInventorySlots is the size of the 36-slot main inventory (hotbar +
+// backpack). Armour and the offhand live above it and are not storage.
+const mainInventorySlots = 36
+
+// freeMainInventorySlots counts empty main-inventory slots.
+//
+// len(inv) is not that number: the map also holds armour (36-39), the offhand
+// (40) and entries whose Count is zero, so the old calculation under-reported
+// free space and told a bot with room to spare that the bag was full.
+func (rg *ResourceGatherer) freeMainInventorySlots() int {
+	used := 0
+	for slot, item := range rg.bot.GetInventorySlots() {
+		if slot < mainInventorySlots && item.Count > 0 {
+			used++
+		}
+	}
+	free := mainInventorySlots - used
+	if free < 0 {
+		return 0
+	}
+	return free
 }
 
 func (rg *ResourceGatherer) GatherWood(ctx context.Context, targetCount int) {

@@ -19,20 +19,25 @@ import (
 	"sync"
 )
 
-// maxUses is how many swings a tool of each kind is assumed to survive.
-//
-// These are the vanilla durability values for the middle tiers. Being wrong by a
-// factor of two is not important: the tracker is a reason to swap early, not a
-// prediction of the exact break. The thresholds below it are deliberately
-// conservative, because swapping a tool that still had ten swings left costs one
-// equip and breaking one that had two costs the whole vein.
+// maxUses is how many swings a tool with no material prefix is assumed to
+// survive. Tiered tools are resolved per material below instead, because a
+// single budget for every tier is the bug this table used to have: 132 uses
+// (the iron value) means the 80% threshold fired at 105, long after a wooden
+// pickaxe (59) or a golden one (32) had already broken.
 var maxUses = map[string]int{
-	"sword":   250,
-	"axe":     250,
-	"pickaxe": 132,
-	"shovel":  132,
-	"hoe":     132,
-	"shield":  336,
+	"shield": 336,
+}
+
+// materialUses is the vanilla durability of a tool by material. A tool's
+// durability does not depend on whether it is a pickaxe or a sword, only on
+// what it is made of, which is why one lookup serves every family.
+var materialUses = map[string]int{
+	"wooden":    59,
+	"stone":     131,
+	"iron":      250,
+	"golden":    32,
+	"diamond":   1561,
+	"netherite": 2031,
 }
 
 // replaceFraction is how much of a tool's life must be gone before the bot stops
@@ -95,7 +100,7 @@ func (d *Tracker) Used(slot uint32) int {
 // is never replaced. Swapping a block of cobblestone because it has been held a
 // thousand times is a bot that never finishes anything.
 func (d *Tracker) ShouldReplace(slot uint32, itemName string) bool {
-	limit, known := maxUses[toolFamily(itemName)]
+	limit, known := toolUses(itemName)
 	if !known {
 		return false
 	}
@@ -107,7 +112,7 @@ func (d *Tracker) ShouldReplace(slot uint32, itemName string) bool {
 // its limit is reported as spent, not as having a negative life left, because
 // "negative uses remaining" is a number that only confuses whoever reads it.
 func (d *Tracker) Remaining(slot uint32, itemName string) int {
-	limit, known := maxUses[toolFamily(itemName)]
+	limit, known := toolUses(itemName)
 	if !known {
 		return -1
 	}
@@ -118,18 +123,47 @@ func (d *Tracker) Remaining(slot uint32, itemName string) int {
 	return left
 }
 
-// toolFamily maps an item name to its durability class.
-//
-// The match is on the family suffix so every tier of a tool shares one budget:
-// an iron pickaxe and a wooden one do not break at the same moment, and the
-// bot's decision should not pretend they do.
-func toolFamily(itemName string) string {
+// toolUses resolves how many uses the named item survives, or false when the
+// item has no known durability.
+func toolUses(itemName string) (int, bool) {
+	family := toolFamily(itemName)
+	if family == "" {
+		// Not a tool this tracker knows about.
+		return 0, false
+	}
+	name := normaliseItemName(itemName)
+	if i := strings.IndexByte(name, '_'); i > 0 {
+		if uses, ok := materialUses[name[:i]]; ok {
+			return uses, true
+		}
+	}
+	if uses, ok := maxUses[family]; ok {
+		return uses, true
+	}
+	return 0, false
+}
+
+func normaliseItemName(itemName string) string {
 	name := strings.ToLower(strings.TrimSpace(itemName))
 	if i := strings.IndexByte(name, ':'); i >= 0 {
 		name = name[i+1:]
 	}
-	name = strings.TrimSpace(name)
+	return strings.TrimSpace(name)
+}
+
+// toolFamily maps an item name to its durability class.
+//
+// The match is on the family suffix so every tier of a tool is recognised as
+// the same kind of tool; the budget itself comes from the material prefix in
+// toolUses.
+func toolFamily(itemName string) string {
+	name := normaliseItemName(itemName)
 	for family := range maxUses {
+		if name == family || strings.HasSuffix(name, "_"+family) {
+			return family
+		}
+	}
+	for _, family := range []string{"sword", "axe", "pickaxe", "shovel", "hoe"} {
 		if name == family || strings.HasSuffix(name, "_"+family) {
 			return family
 		}

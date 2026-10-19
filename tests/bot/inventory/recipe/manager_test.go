@@ -68,10 +68,13 @@ func TestStationCraftStagesEachInputIntoItsOwnStationSlot(t *testing.T) {
 	if _, ok := newTestManager(bot).UpgradeToNetherite(t.Context()); !ok {
 		t.Fatal("UpgradeToNetherite() failed")
 	}
+	// Each input goes to the protocol container its station slot belongs to.
+	// Addressing the window ID instead left the server resolving slot 0/1/2 in
+	// the wrong container, so nothing was staged.
 	want := []placedStack{
-		{windowID: bot.windowID, slot: 0, count: 1, destStackNet: 0, srcSlot: 0}, // template
-		{windowID: bot.windowID, slot: 1, count: 1, destStackNet: 0, srcSlot: 4}, // base
-		{windowID: bot.windowID, slot: 2, count: 1, destStackNet: 0, srcSlot: 7}, // addition
+		{containerID: protocol.ContainerSmithingTableTemplate, slot: 0, count: 1, destStackNet: 0, srcSlot: 0}, // template
+		{containerID: protocol.ContainerSmithingTableInput, slot: 1, count: 1, destStackNet: 0, srcSlot: 4},    // base
+		{containerID: protocol.ContainerSmithingTableMaterial, slot: 2, count: 1, destStackNet: 0, srcSlot: 7}, // addition
 	}
 	if len(bot.placed) != len(want) {
 		t.Fatalf("placed %d stacks, want %d: %+v", len(bot.placed), len(want), bot.placed)

@@ -63,6 +63,7 @@ type fakeBot struct {
 
 type placedStack struct {
 	windowID     byte
+	containerID  byte
 	slot         uint32
 	count        int
 	destStackNet int32
@@ -133,6 +134,23 @@ func (f *fakeBot) PlaceIntoContainerSlot(windowID byte, containerSlot uint32, de
 	}
 	f.placed = append(f.placed, placedStack{
 		windowID:     windowID,
+		slot:         containerSlot,
+		count:        count,
+		destStackNet: destStackNetID,
+		srcSlot:      srcSlot,
+	})
+	return nil
+}
+
+// PlaceIntoContainerSlotIn is the address form the stations actually use: the
+// server resolves the destination against the protocol container ID, not the
+// window ID ContainerOpen happened to assign.
+func (f *fakeBot) PlaceIntoContainerSlotIn(containerID byte, containerSlot uint32, destStackNetID int32, srcSlot uint32, count int) error {
+	if f.placeErr != nil {
+		return f.placeErr
+	}
+	f.placed = append(f.placed, placedStack{
+		containerID:  containerID,
 		slot:         containerSlot,
 		count:        count,
 		destStackNet: destStackNetID,

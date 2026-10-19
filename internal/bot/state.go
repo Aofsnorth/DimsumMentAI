@@ -68,8 +68,22 @@ func (b *Bot) SaveLastStandingPosition() {
 	}
 	_ = os.MkdirAll(filepath.Dir(b.StatePath), 0o755)
 	data, err := json.MarshalIndent(state, "", "  ")
-	if err == nil {
-		_ = os.WriteFile(b.StatePath, data, 0o600)
+	if err != nil {
+		return
+	}
+	// Write to a temporary file and rename it over the target. The read above
+	// and this write are two calls into the same file, and the saver runs from a
+	// 5s ticker, the session-exit defer and the spawn initialiser — which really
+	// do overlap across a reconnect. os.WriteFile truncates first, so two of them
+	// racing left a half-written state file, and an interrupted process left one
+	// too. Rename is atomic on every platform this bot runs on.
+	tmp := b.StatePath + ".tmp"
+	if err := os.WriteFile(tmp, data, 0o600); err != nil {
+		b.Logger.Warn("state: could not write the temporary state file", "err", err)
+		return
+	}
+	if err := os.Rename(tmp, b.StatePath); err != nil {
+		b.Logger.Warn("state: could not replace the state file", "err", err)
 	}
 }
 

@@ -98,6 +98,26 @@ func (b *Bot) ListCraftableItems(hasCraftingTable bool) []CraftableItem {
 func (b *Bot) CanCraftRecipe(recipe RecipeInfo, inv map[uint32]protocol.ItemStack, names map[int32]string) (bool, string) {
 	needed := make(map[string]int)
 
+	// Ingredients are consumed from a shared pool, not matched stack by stack.
+	//
+	// The old check asked whether ONE stack held the whole count, so a recipe
+	// needing 4 planks failed against two stacks of 2, and two ingredients that
+	// resolved to the same item could both claim the same stack. Summing per item
+	// and deducting what each ingredient takes fixes both directions.
+	type poolItem struct {
+		name      string
+		networkID int32
+		remaining int
+	}
+	pool := make([]poolItem, 0, len(inv))
+	for _, stack := range inv {
+		pool = append(pool, poolItem{
+			name:      names[stack.NetworkID],
+			networkID: stack.NetworkID,
+			remaining: int(stack.Count),
+		})
+	}
+
 	for _, ing := range recipe.Ingredients {
 		count := int(ing.Count)
 		if count == 0 {
@@ -111,22 +131,34 @@ func (b *Bot) CanCraftRecipe(recipe RecipeInfo, inv map[uint32]protocol.ItemStac
 			continue
 		}
 
-		matched := false
-		for _, stack := range inv {
-			itemName := names[stack.NetworkID]
-			var ok bool
-			if targetName != "" {
-				ok = itemName != "" && ItemNameMatches(itemName, targetName)
-			} else {
-				ok = stack.NetworkID == networkID
-			}
-			if ok && int(stack.Count) >= count {
-				matched = true
+		need := count
+		for i := range pool {
+			if need == 0 {
 				break
 			}
+			if pool[i].remaining <= 0 {
+				continue
+			}
+			matches := false
+			if targetName != "" {
+				matches = pool[i].name != "" && ItemNameMatches(pool[i].name, targetName)
+			} else {
+				matches = pool[i].networkID == networkID
+			}
+			if !matches {
+				continue
+			}
+			take := need
+			if pool[i].remaining < take {
+				take = pool[i].remaining
+			}
+			pool[i].remaining -= take
+			need -= take
 		}
 
-		if !matched {
+		if need > 0 {
+			// Report the recipe's requirement, not the shortfall: the message is
+			// "what this recipe needs", and it has always been phrased that way.
 			needed[missingIngredientName(targetName, networkID, names)] += count
 		}
 	}

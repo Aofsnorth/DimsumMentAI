@@ -310,7 +310,16 @@ func (m *Manager) OpenTradeWindow(ctx context.Context) (TradeWindow, byte, error
 // openTradeWindow is OpenTradeWindow with the villager it found, so a caller
 // that already needs the villager's identity does not have to search again and
 // risk getting a different answer the second time.
+//
+// keepOpen exists because the staging step needs a window that is still open: a
+// caller that only reads the offers can let this function close it, but Trade
+// moves items into the window afterwards, so it must close it itself once the
+// whole exchange is finished.
 func (m *Manager) openTradeWindow(ctx context.Context) (TradeWindow, byte, *entity.Info, error) {
+	return m.openTradeWindowWith(ctx, false)
+}
+
+func (m *Manager) openTradeWindowWith(ctx context.Context, keepOpen bool) (TradeWindow, byte, *entity.Info, error) {
 	var window TradeWindow
 
 	villager, ok := m.FindVillager()
@@ -346,7 +355,9 @@ func (m *Manager) openTradeWindow(ctx context.Context) (TradeWindow, byte, *enti
 		return window, 0, villager, fmt.Errorf("the server did not open a trade window for villager %d", villager.ID)
 	}
 	defer func() {
-		m.bot.CloseContainerWindow(windowID)
+		if !keepOpen {
+			m.bot.CloseContainerWindow(windowID)
+		}
 		m.bot.ResetLook()
 	}()
 
@@ -389,7 +400,7 @@ func (m *Manager) Trade(ctx context.Context, want string) (TradeResult, bool) {
 	result.XPObserved = xpKnown
 	result.XPBefore = xpBefore
 
-	window, windowID, villager, err := m.openTradeWindow(ctx)
+	window, windowID, villager, err := m.openTradeWindowWith(ctx, true)
 	result.WindowID = windowID
 	if villager != nil {
 		result.VillagerID = villager.ID
@@ -398,6 +409,9 @@ func (m *Manager) Trade(ctx context.Context, want string) (TradeResult, bool) {
 	if err != nil {
 		return fail(result, err.Error())
 	}
+	// The window stayed open for staging; close it on every exit path from here
+	// on. Leaving it open desyncs the next trade and shows the UI to everyone.
+	defer m.bot.CloseContainerWindow(windowID)
 	result.DisplayName = window.DisplayName
 	result.TradeTier = window.TradeTier
 
@@ -552,7 +566,13 @@ func (m *Manager) confirmed(gained resultStack, spent []Item, before inventorySn
 
 	// The output arrives, matched on the exact name the server gave it. A
 	// substring match would let "emerald" be satisfied by "emerald_block".
-	if after[NormalizeItemName(gained.name)] < gained.count {
+	//
+	// The comparison is against before+count, not count: a bot that already held
+	// ten emeralds satisfied "after >= 1" even when the trade produced nothing.
+	// The inputs are checked below against the same baseline, so this is the
+	// other half of the same delta bookkeeping.
+	outputName := NormalizeItemName(gained.name)
+	if after[outputName] < before[outputName]+gained.count {
 		return false
 	}
 

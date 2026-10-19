@@ -72,7 +72,10 @@ func (b *Bot) SetExperienceLevel(level int32) {
 func ApplyExperienceAttribute(attrs []protocol.Attribute, prev int32, seen bool) (level int32, nowSeen bool) {
 	level, nowSeen = prev, seen
 	for _, attr := range attrs {
-		if attr.Name != "minecraft:player.experience" {
+		// minecraft:player.experience is the 0..1 progress bar, not the level.
+		// Reading it as the level reported every bot as level 0 unless it was
+		// exactly at a level-up, which made XP-priced trades look unaffordable.
+		if attr.Name != "minecraft:player.level" {
 			continue
 		}
 		level, nowSeen = int32(attr.Value), true

@@ -22,6 +22,7 @@ import (
 	"bedrock-ai/internal/bot/interact"
 	"bedrock-ai/internal/bot/inventory"
 	"bedrock-ai/internal/bot/inventory/trading"
+	"bedrock-ai/internal/bot/protect"
 	"bedrock-ai/internal/bot/survival"
 	"bedrock-ai/internal/debuglog"
 	"bedrock-ai/internal/event"
@@ -235,6 +236,13 @@ func (b *Bot) runSession(ctx context.Context) sessionResult {
 		return sessionResult{Connected: true}
 	}
 	err = PacketLoopFunc(sessionCtx, b)
+	if sessionCtx.Err() != nil {
+		// Our own shutdown. The packet loop returns a read error whenever the
+		// session context is cancelled, and that error used to be reported as a
+		// server disconnect: a Stop() looked like a kick, and Run's retry ladder
+		// treated a deliberate exit as something to reconnect from.
+		return sessionResult{Connected: true}
+	}
 	fmt.Fprintln(os.Stderr, "DEBUG: PacketLoopFunc returned err:", err)
 	return sessionResult{Connected: true, Err: err}
 }
@@ -417,6 +425,13 @@ func (b *Bot) initSubsystems(gd minecraft.GameData) {
 
 	b.CombatMgr = combat.NewCombatManager(b, b.Logger)
 	b.ThreatDet = combat.NewThreatDetector(b, b.CombatMgr, b.Logger)
+	// The never-fight list. A poke from the player the bot answers to, or from
+	// somebody they granted access to, is a conversation — never a fight.
+	// Explicit "pvp:name" still works, because that is a request rather than a
+	// reflex.
+	b.ThreatDet.SetAllyFilter(func(name string) bool {
+		return b.AiCfg.IsMainPlayer(name) || b.IsWhitelistedPlayer(name)
+	})
 	b.Gatherer = gathering.NewResourceGatherer(b, b.Logger)
 	b.Interactor = interact.New(b, b.Logger)
 	b.InventoryMgr = inventory.NewInventoryManager(b, b.Logger)
@@ -426,6 +441,16 @@ func (b *Bot) initSubsystems(gd minecraft.GameData) {
 	b.Fisher = fishing.NewFisher(b, b.Logger)
 	b.HusbandryMgr = husbandry.NewManager(b, b.Logger)
 	b.Explorer = exploration.NewExplorer(b, b.Logger)
+
+	// The protection policy is part of the bot, not an optional extra. Leaving it
+	// nil made every check inert (break_obstacle only consults a non-nil policy),
+	// so the unstick path could mine through a player's chest or diamond block.
+	// The empty Config is the documented safe default: no spatial zones (a guess
+	// about "home" is worse than none), but the built-in valuable-block list, so
+	// the bot never eats its own storage.
+	if b.Protection == nil {
+		b.Protection = protect.New(protect.Config{})
+	}
 
 	// Wire the observation seam. Each of these managers refuses to report
 	// success without a server signal, and with nothing wired they refuse

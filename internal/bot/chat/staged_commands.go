@@ -1,6 +1,7 @@
 package chat
 
 import (
+	"log/slog"
 	"regexp"
 	"strconv"
 	"strings"
@@ -283,6 +284,14 @@ func handleStagedCommand(b *bot.Bot, evt event.ChatEvent, msg string) bool {
 	steps, summary, ok := parseStagedCommand(msg)
 	if !ok {
 		return false
+	}
+	// A staged routine is machine-driven movement, not conversation. Any player
+	// who passed the chat filter used to be able to walk the bot around, which
+	// is the same authority the episode and admin commands gate on.
+	if !isOperator(b, evt.SourceName) {
+		b.Logger.Warn("staged routine ignored: not the configured operator",
+			slog.String("from", evt.SourceName))
+		return true
 	}
 	b.Logger.Info("chat: staged routine parsed",
 		"user", evt.SourceName, "steps", len(steps), "routine", summary)

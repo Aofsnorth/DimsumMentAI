@@ -38,6 +38,7 @@ type fakeBot struct {
 
 type placedStack struct {
 	windowID     byte
+	containerID  byte
 	slot         uint32
 	count        int
 	destStackNet int32
@@ -109,6 +110,20 @@ func (f *fakeBot) CloseContainerWindow(windowID byte) {
 func (f *fakeBot) PlaceIntoContainerSlot(windowID byte, containerSlot uint32, destStackNetID int32, srcSlot uint32, count int) error {
 	f.placed = append(f.placed, placedStack{
 		windowID:     windowID,
+		slot:         containerSlot,
+		count:        count,
+		destStackNet: destStackNetID,
+		srcSlot:      srcSlot,
+	})
+	return nil
+}
+
+// PlaceIntoContainerSlotIn is the address form the furnace actually uses: the
+// destination is a protocol container (ingredient/fuel), not the window ID the
+// server assigned on ContainerOpen.
+func (f *fakeBot) PlaceIntoContainerSlotIn(containerID byte, containerSlot uint32, destStackNetID int32, srcSlot uint32, count int) error {
+	f.placed = append(f.placed, placedStack{
+		containerID:  containerID,
 		slot:         containerSlot,
 		count:        count,
 		destStackNet: destStackNetID,

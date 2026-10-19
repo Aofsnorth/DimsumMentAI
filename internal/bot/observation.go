@@ -243,6 +243,24 @@ func (b *Bot) GetBlockState(x, y, z int32) (string, map[string]any, bool) {
 	if !ok {
 		return "", nil, false
 	}
+	// Server-palette connections (Geyser) store network indices whose table
+	// carries names but not per-state properties. Everywhere else the decoded
+	// runtime ID is already dragonfly's local ID, which resolves directly.
+	//
+	// The two spaces must not be mixed: feeding a network index to
+	// RuntimeIDToState names another real block (13591 reads as granite_wall
+	// locally while the server palette says mangrove_propagule).
+	if b.WorldCache.UsesServerPalette() {
+		name, ok := b.WorldCache.BlockName(rid)
+		if !ok {
+			return "", nil, false
+		}
+		// Properties are unrecoverable in this space; nil is the honest answer
+		// and callers that need age/fill_level treat it as unreadable.
+		props, _ := b.WorldCache.BlockProperties(rid)
+		return name, props, true
+	}
+
 	// chunk.RuntimeIDToState is a package-level var that dragonfly's world
 	// package fills in at init. A binary that never links it leaves the var nil
 	// and calling it takes the process down from inside a block lookup, so it is

@@ -121,6 +121,11 @@ func TestWhitelistParsesThePhrasesPlayersType(t *testing.T) {
 		{msg: "whitelist player Budi", name: "Budi", ok: true},
 		{msg: `Luna unwhitelist nama "Budi"`, name: "Budi", remove: true, ok: true},
 		{msg: "unwhitelist nama Budi", name: "Budi", remove: true, ok: true},
+		// The hyphenated spelling is common in chat and used to fall through:
+		// the detector accepted "un-whitelist" but then searched for the bare
+		// keyword "unwhitelist", found nothing, and sent the request to the AI.
+		{msg: "un-whitelist nama Budi", name: "Budi", remove: true, ok: true},
+		{msg: `Luna, un-whitelist nama "Budi"`, name: "Budi", remove: true, ok: true},
 		{msg: `whitelist nama "Budi Susanto"`, name: "Budi Susanto", ok: true},
 		{msg: "kamu nggak di whitelist", ok: false},
 		{msg: "whitelist", ok: false},

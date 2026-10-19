@@ -74,9 +74,16 @@ func handleWhitelistCommand(b *bot.Bot, evt event.ChatEvent, msg string) bool {
 func parseWhitelistIntent(msg string) (name string, remove bool, ok bool) {
 	lower := strings.ToLower(msg)
 	keyword := "whitelist"
-	if strings.Contains(lower, "unwhitelist") || strings.Contains(lower, "un-whitelist") {
+	// "unwhitelist" and "un-whitelist" both mean remove, but the hyphenated
+	// spelling has to be matched as written: searching the lowered message for
+	// the bare keyword finds nothing after "un-", so the request silently fell
+	// through to the AI as conversation instead of changing the whitelist.
+	if idx := strings.Index(lower, "unwhitelist"); idx >= 0 {
 		remove = true
 		keyword = "unwhitelist"
+	} else if idx := strings.Index(lower, "un-whitelist"); idx >= 0 {
+		remove = true
+		keyword = "un-whitelist"
 	}
 	idx := strings.Index(lower, keyword)
 	if idx < 0 {

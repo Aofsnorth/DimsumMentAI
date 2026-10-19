@@ -22,10 +22,19 @@ func (cm *CombatManager) Tick(ctx context.Context) {
 	}
 	targetID := cm.targetID
 	friendly := cm.friendlyMode
+	mode := cm.mode
 	cm.mu.Unlock()
 
 	target, ok := cm.currentTarget(targetID)
 	if !ok {
+		if mode == ModeDefend {
+			// The attacker died, despawned or left tracking. Either way the answer
+			// is over, and reporting "target eliminated" here would put words in
+			// the model's mouth about a fight nobody finished.
+			cm.logger.Info("Defensive response over: the attacker is out of the fight")
+			cm.Disengage()
+			return
+		}
 		cm.mu.Lock()
 		if cm.inCombat && cm.targetID == targetID {
 			cm.recentKills[targetID] = time.Now()
@@ -43,6 +52,14 @@ func (cm *CombatManager) Tick(ctx context.Context) {
 			return
 		}
 		cm.mu.Unlock()
+		return
+	}
+
+	// A defensive answer is a different loop: stand, look, hit back if they
+	// come into reach, and stop as soon as they leave or the window runs out.
+	// It never closes the distance and never picks a weapon.
+	if mode == ModeDefend {
+		cm.tickDefend(target)
 		return
 	}
 
@@ -166,6 +183,48 @@ func (cm *CombatManager) Tick(ctx context.Context) {
 	cm.swingAt(target)
 }
 
+// tickDefend runs one tick of a defensive answer.
+//
+// The whole point is what is NOT here: no weapon choice, no strafing, no
+// approach. A defender holds their ground — the attacker has to come to them
+// to be hit — and walks away from the fight the moment the attacker does. That
+// is what makes the answer to one punch feel like a person rather than a
+// kill-on-sight reflex.
+func (cm *CombatManager) tickDefend(target *entity.Info) {
+	botPos := cm.bot.GetCoords()
+	dist := HorizontalDistance(botPos, target.Position)
+
+	cm.mu.Lock()
+	until := cm.defendUntil
+	swings := cm.defendSwings
+	cm.mu.Unlock()
+
+	if swings >= defendMaxSwings {
+		cm.logger.Info("Defensive response over: hit back enough",
+			"swings", swings, "target", target.Name)
+		cm.Disengage()
+		return
+	}
+	if !until.IsZero() && time.Now().After(until) {
+		cm.logger.Info("Defensive response over: the attacker stopped",
+			"target", target.Name, "distance", dist)
+		cm.Disengage()
+		return
+	}
+	if dist > defendLeash {
+		cm.logger.Info("Defensive response over: the attacker backed off",
+			"target", target.Name, "distance", dist)
+		cm.Disengage()
+		return
+	}
+
+	// Turn to face them. Looking at somebody who just hit you is the reaction;
+	// hitting them back only happens if they stay close enough to reach.
+	cm.bot.LookAt(target.Position.Add(mgl32.Vec3{0, 1.2, 0}))
+	cm.bot.StopMovement()
+	cm.swingAt(target)
+}
+
 // The two numbers a fair fighter lives inside. fairReach is the reach a
 // survival Bedrock client plays at — measured across the ground, the way a
 // duel actually happens — and swings past it are the thing anticheats and
@@ -234,6 +293,9 @@ func (cm *CombatManager) swingAt(target *entity.Info) {
 	cm.lastAttack = time.Now()
 	cm.mu.Lock()
 	cm.swingsInFight++
+	if cm.mode == ModeDefend {
+		cm.defendSwings++
+	}
 	cm.mu.Unlock()
 	// Every swing costs the held tool a point of life. Counting it here is the
 	// only place durability is actually consumed, which is what makes the count
@@ -363,9 +425,6 @@ func (cm *CombatManager) fireShot(s Shot, now time.Time, target *entity.Info) {
 	}
 	cm.mu.Lock()
 	cm.Shot.recordRelease(now)
-	// A crossbow holds its bolt once loaded, so the next release fires
-	// instantly instead of paying the load time again.
-	cm.Shot.Loaded = s.Kind == WeaponCrossbow
 	cm.mu.Unlock()
 	cm.logger.Info("Shot released", "target", target.Name, "kind", s.Kind.String())
 }

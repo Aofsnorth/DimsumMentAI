@@ -425,7 +425,11 @@ func handleTakeItemActor(b *bot.Bot, pk packet.Packet) bool {
 func handleRemoveActor(b *bot.Bot, pk packet.Packet) bool {
 	p := pk.(*packet.RemoveActor)
 	b.Mu.Lock()
-	if runtimeID, ok := b.UniqueIDToRuntimeID[p.EntityUniqueID]; ok {
+	// Resolve the runtime ID before deleting the mapping: Player maps below are
+	// keyed by runtime ID, and reading the table after this delete was how the
+	// lookup silently fell back to the wrong identifier.
+	runtimeID, mapped := b.UniqueIDToRuntimeID[p.EntityUniqueID]
+	if mapped {
 		delete(b.Actors, runtimeID)
 		delete(b.UniqueIDToRuntimeID, p.EntityUniqueID)
 		// A runtime ID can be reused by a later spawn, so the collar has to go
@@ -433,7 +437,13 @@ func handleRemoveActor(b *bot.Bot, pk packet.Packet) bool {
 		// inherit the previous one's metadata.
 		defer b.ForgetEntityMeta(runtimeID)
 	}
-	id := safecast.To[uint64](p.EntityUniqueID)
+	// When the server never sent an AddActor for this entity the table has no
+	// entry, and the unique ID is the only identifier available — keeping it as
+	// a fallback avoids leaving a departed player tracked forever.
+	id := runtimeID
+	if !mapped {
+		id = safecast.To[uint64](p.EntityUniqueID)
+	}
 	if username, ok := b.PlayerUsernames[id]; ok {
 		if b.PlayerEntityIDs[username] == id {
 			delete(b.PlayerEntityIDs, username)

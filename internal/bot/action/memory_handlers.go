@@ -139,6 +139,14 @@ func handleHome(b *bot.Bot, _, user string) {
 		return
 	}
 	b.WalkTo(mgl32.Vec3{place.X, place.Y, place.Z})
+	// WalkTo starts a job and returns immediately, but the plan step that asked
+	// for it waits for a status report. Without this line the step sat until the
+	// 90-second status timeout and then failed, even though the walk was running.
+	ReportStatus(b, user, event.ActionStatus{
+		Action:  "home",
+		Success: true,
+		Item:    fmt.Sprintf("menuju X:%.0f Y:%.0f Z:%.0f", place.X, place.Y, place.Z),
+	})
 }
 
 // handleAnalyze reports the bot's surroundings: status, held item,

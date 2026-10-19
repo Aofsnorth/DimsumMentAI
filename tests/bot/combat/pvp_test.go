@@ -79,6 +79,30 @@ type retaliatingBot struct {
 	*combatFakeBot
 	mu      sync.Mutex
 	tracked map[string]mgl32.Vec3
+	ids     map[string]uint64
+}
+
+// newRetaliatingBot stages players both as tracked positions (the reflex read)
+// and as entities FindPlayer can resolve (what EngageDefender uses).
+func newRetaliatingBot(tracked map[string]mgl32.Vec3) (*retaliatingBot, *combat.CombatManager, *combat.ThreatDetector) {
+	base := newCombatFakeBot(mgl32.Vec3{0, 64, 0}, stripLoaded(-32, 32), noSolid)
+	r := &retaliatingBot{
+		combatFakeBot: base,
+		tracked:       tracked,
+		ids:           map[string]uint64{},
+	}
+	n := uint64(7)
+	for name, pos := range tracked {
+		r.ids[name] = n
+		base.players[name] = struct {
+			id  uint64
+			pos mgl32.Vec3
+		}{id: n, pos: pos}
+		n++
+	}
+	cm := combat.NewCombatManager(base, base.logger)
+	td := combat.NewThreatDetector(r, cm, base.logger)
+	return r, cm, td
 }
 
 func (r *retaliatingBot) NearestTrackedPlayer(origin mgl32.Vec3, maxDist float32) (string, uint64, mgl32.Vec3, bool) {
@@ -89,57 +113,142 @@ func (r *retaliatingBot) NearestTrackedPlayer(origin mgl32.Vec3, maxDist float32
 	for pname, ppos := range r.tracked {
 		d := origin.Sub(ppos).Len()
 		if d <= best {
-			best, name, id, pos, found = d, pname, uint64(len(r.tracked)), ppos, true
+			best, name, id, pos, found = d, pname, r.ids[pname], ppos, true
 		}
 	}
 	return name, id, pos, found
 }
 
-// TestOnDamagedRetaliatesAgainstTheHitter: the duel already started the
-// moment a player swung. A bot that keeps standing there being farmed is
-// exactly the "bot nggak bisa pvp" complaint.
-func TestOnDamagedRetaliatesAgainstTheHitter(t *testing.T) {
+// lastEvent returns the most recent AI event, which is how these tests read
+// what the bot was told to say.
+func (f *combatFakeBot) lastEvent() string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.aiEvents) == 0 {
+		return ""
+	}
+	return f.aiEvents[len(f.aiEvents)-1]
+}
+
+// hitOnce models what the packet layer does for one real player hit: the
+// attacker's arm swing arrives first, then the health drop.
+func hitOnce(td *combat.ThreatDetector, attackerID uint64, feet mgl32.Vec3) {
+	td.NotePlayerSwing(attackerID)
+	td.OnDamaged(feet)
+}
+
+// TestFirstHitWarnsInsteadOfFighting: one bare-handed punch is not a duel.
+// The bot turns, says something, and does not swing. The old reflex answered a
+// single poke with a sword and a 32-block chase, which is the "agresif banget"
+// report this ladder exists for.
+func TestFirstHitWarnsInsteadOfFighting(t *testing.T) {
 	t.Parallel()
-	base := newCombatFakeBot(mgl32.Vec3{0, 64, 0}, stripLoaded(-2, 8), noSolid)
-	r := &retaliatingBot{combatFakeBot: base, tracked: map[string]mgl32.Vec3{
-		"Attacker": {2.0, 64, 0},
-		"FarAway":  {40, 64, 0},
-	}}
-	base.players["Attacker"] = struct {
-		id  uint64
-		pos mgl32.Vec3
-	}{id: 7, pos: mgl32.Vec3{2.0, 64, 0}}
+	r, cm, td := newRetaliatingBot(map[string]mgl32.Vec3{"Attacker": {2.0, 64, 0}})
 
-	cm := combat.NewCombatManager(base, base.logger)
-	td := combat.NewThreatDetector(r, cm, base.logger)
+	hitOnce(td, r.ids["Attacker"], mgl32.Vec3{0, 64, 0})
 
-	td.OnDamaged(mgl32.Vec3{0, 64, 0})
-
-	if !cm.InCombat() {
-		t.Fatal("took a hit from a player two blocks away and did not engage — the bot stood there being farmed")
+	if cm.InCombat() {
+		t.Fatal("a single hit started a fight — the bot must warn first")
 	}
-	if got := cm.PvpTargetForTest(); got != "Attacker" {
-		t.Fatalf("retaliated against %q, want the nearest hitter Attacker", got)
+	if got := r.attackTransactions(); got != 0 {
+		t.Fatalf("a single hit produced %d swings, want 0", got)
 	}
-	base.mu.Lock()
-	alerted := len(base.aiEvents)
-	base.mu.Unlock()
-	if alerted == 0 {
-		t.Fatal("the retaliation must tell the model it is now fighting back, or the chat goes silent mid-duel")
+	if got := r.lastEvent(); got == "" {
+		t.Fatal("a single hit produced no reaction at all; the bot must say something")
 	}
 }
 
-// TestOnDamagedWithoutPlayersNearbyStaysCalm: fall damage, mobs and poison
-// also arrive as health drops. Retaliating at nobody is how a bot starts
-// looking like it swings at ghosts.
+// TestRepeatedHitsAnswerDefensively: the second and third hit inside one
+// scuffle earn a defensive answer — not the full duel doctrine.
+func TestRepeatedHitsAnswerDefensively(t *testing.T) {
+	t.Parallel()
+	r, cm, td := newRetaliatingBot(map[string]mgl32.Vec3{"Attacker": {2.0, 64, 0}})
+	id := r.ids["Attacker"]
+
+	hitOnce(td, id, mgl32.Vec3{0, 64, 0})
+	hitOnce(td, id, mgl32.Vec3{0, 64, 0})
+
+	if !cm.InCombat() {
+		t.Fatal("the second hit produced no answer at all")
+	}
+	if got := cm.ModeForTest(); got != combat.ModeDefend {
+		t.Fatalf("mode after two hits = %v, want defend — a short scuffle is not a duel", got)
+	}
+	if got := cm.PvpTargetForTest(); got != "Attacker" {
+		t.Fatalf("defended against %q, want Attacker", got)
+	}
+}
+
+// TestSustainedAttackBecomesADuel: somebody who keeps swinging after three
+// answers is actually fighting, and earns the duel.
+func TestSustainedAttackBecomesADuel(t *testing.T) {
+	t.Parallel()
+	r, cm, td := newRetaliatingBot(map[string]mgl32.Vec3{"Attacker": {2.0, 64, 0}})
+	id := r.ids["Attacker"]
+
+	for i := 0; i < 4; i++ {
+		hitOnce(td, id, mgl32.Vec3{0, 64, 0})
+	}
+
+	if got := cm.ModeForTest(); got != combat.ModeDuel {
+		t.Fatalf("mode after four hits = %v, want duel", got)
+	}
+}
+
+// TestDamageWithNoPlayerSwingIsNotRetaliation: fall damage, mobs and poison
+// arrive as the same health drop. A player standing nearby is not evidence.
+func TestDamageWithNoPlayerSwingIsNotRetaliation(t *testing.T) {
+	t.Parallel()
+	_, cm, td := newRetaliatingBot(map[string]mgl32.Vec3{"Bystander": {2.0, 64, 0}})
+
+	// No swing, no SetLastHurtBy: this is a fall next to a bystander.
+	td.OnDamaged(mgl32.Vec3{0, 64, 0})
+
+	if cm.InCombat() {
+		t.Fatal("retaliated over damage nobody caused — closeness was read as guilt")
+	}
+}
+
+// TestSetLastHurtByAloneAttributesToThePlayer: some servers do not relay the
+// attacker's Animate packet, so the server's own last-hurt-by verdict has to
+// stand on its own.
+func TestSetLastHurtByAloneAttributesToThePlayer(t *testing.T) {
+	t.Parallel()
+	_, cm, td := newRetaliatingBot(map[string]mgl32.Vec3{"Attacker": {2.0, 64, 0}})
+
+	td.NotePlayerDamage()
+	td.OnDamaged(mgl32.Vec3{0, 64, 0})
+	td.OnDamaged(mgl32.Vec3{0, 64, 0})
+
+	if !cm.InCombat() {
+		t.Fatal("SetLastHurtBy said a player did it and the bot still did not answer")
+	}
+}
+
+// TestAllyIsNeverFought: the player the bot answers to can poke it as much as
+// they like. Hitting them back is a bug, not a reflex.
+func TestAllyIsNeverFought(t *testing.T) {
+	t.Parallel()
+	r, cm, td := newRetaliatingBot(map[string]mgl32.Vec3{"Owner": {2.0, 64, 0}})
+	td.SetAllyFilter(func(name string) bool { return name == "Owner" })
+
+	for i := 0; i < 8; i++ {
+		hitOnce(td, r.ids["Owner"], mgl32.Vec3{0, 64, 0})
+	}
+
+	if cm.InCombat() {
+		t.Fatal("the bot fought the player it answers to")
+	}
+	if r.lastEvent() == "" {
+		t.Fatal("an owner hit must still get a reaction, just not a swing")
+	}
+}
+
+// TestOnDamagedWithoutPlayersNearbyStaysCalm: nothing in reach means nothing
+// to answer, no matter what hurt the bot.
 func TestOnDamagedWithoutPlayersNearbyStaysCalm(t *testing.T) {
 	t.Parallel()
-	base := newCombatFakeBot(mgl32.Vec3{0, 64, 0}, stripLoaded(-2, 8), noSolid)
-	r := &retaliatingBot{combatFakeBot: base, tracked: map[string]mgl32.Vec3{
-		"FarAway": {40, 64, 0},
-	}}
-	cm := combat.NewCombatManager(base, base.logger)
-	td := combat.NewThreatDetector(r, cm, base.logger)
+	_, cm, td := newRetaliatingBot(map[string]mgl32.Vec3{"FarAway": {40, 64, 0}})
 
 	td.OnDamaged(mgl32.Vec3{0, 64, 0})
 

@@ -229,6 +229,14 @@ func (wc *WorldCache) decodeNetworkPalettedStorage(buf *bytes.Buffer) (*paletted
 		if paletteCount <= 0 {
 			paletteCount = 1
 		}
+		// A sub-chunk has 4096 cells, so a palette cannot legitimately hold
+		// more entries than that. paletteCount comes straight off the wire as
+		// a varint, so without this bound a hostile or corrupt packet could ask
+		// for a multi-gigabyte allocation (or overflow make) and take the bot
+		// down with it.
+		if paletteCount > 4096 {
+			return nil, bytes.ErrTooLarge
+		}
 	}
 
 	palette := make([]uint32, paletteCount)
