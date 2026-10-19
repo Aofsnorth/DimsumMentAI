@@ -59,11 +59,23 @@ jobs:
       # --- Computational guide: formatting ---
       - name: Check formatting (gofmt)
         run: |
-          unformatted=$(gofmt -l . 2>/dev/null | grep -v vendor | grep -v node_modules)
+          # `|| true` matters twice. GitHub runs this script with `set -e`, so a
+          # gofmt that exits non-zero (a file it cannot parse, an unreadable
+          # path) aborted the assignment and failed the step with no message at
+          # all — which is exactly how this step failed while every file in the
+          # checkout was in fact formatted. Capturing stderr as well means such
+          # an error is printed instead of discarded.
+          unformatted=$(gofmt -l . 2>&1 | grep -v vendor | grep -v node_modules || true)
           if [ -n "$unformatted" ]; then
-            echo "::error::Files need formatting:"
+            echo "::error::gofmt reported files or errors:"
+            echo "$unformatted" | while IFS= read -r line; do
+              if [ -f "$line" ]; then
+                echo "::error file=$line,line=1::not gofmt-clean; run 'make fmt'"
+              else
+                echo "::error::$line"
+              fi
+            done
             echo "$unformatted"
-            echo "::error::Run 'make fmt' to fix."
             exit 1
           fi
           echo "All files formatted."
