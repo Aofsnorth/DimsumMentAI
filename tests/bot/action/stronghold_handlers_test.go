@@ -14,12 +14,12 @@ import (
 
 func TestStrongholdActions_Registered(t *testing.T) {
 	t.Parallel()
-	handler, ok := action.ActionHandlers["explorestronghold"]
+	handler, ok := action.LookupHandler("explorestronghold")
 	if !ok {
 		t.Fatal("ActionHandlers has no \"explorestronghold\" entry")
 	}
 	for _, name := range []string{"findstronghold", "stronghold"} {
-		alias, ok := action.ActionHandlers[name]
+		alias, ok := action.LookupHandler(name)
 		if !ok {
 			t.Errorf("ActionHandlers has no %q alias", name)
 			continue

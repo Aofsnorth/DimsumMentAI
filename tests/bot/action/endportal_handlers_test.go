@@ -24,12 +24,12 @@ import (
 func TestEndPortalActions_Registered(t *testing.T) {
 	t.Parallel()
 
-	fill, ok := action.ActionHandlers["fillframe"]
+	fill, ok := action.LookupHandler("fillframe")
 	if !ok {
 		t.Fatal("ActionHandlers has no \"fillframe\" entry")
 	}
 	for _, name := range []string{"fillendportal", "activateendportal", "fill_frame"} {
-		alias, ok := action.ActionHandlers[name]
+		alias, ok := action.LookupHandler(name)
 		if !ok {
 			t.Errorf("ActionHandlers has no %q alias", name)
 			continue
@@ -38,7 +38,7 @@ func TestEndPortalActions_Registered(t *testing.T) {
 			t.Errorf("ActionHandlers[%q] is a different handler than fillframe", name)
 		}
 	}
-	if _, ok := action.ActionHandlers["enterendportal"]; !ok {
+	if _, ok := action.LookupHandler("enterendportal"); !ok {
 		t.Error("ActionHandlers has no \"enterendportal\" entry")
 	}
 }

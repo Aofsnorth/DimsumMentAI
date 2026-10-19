@@ -1161,6 +1161,15 @@ func lookupHandler(label string) (ActionHandler, bool) {
 	return handler, ok
 }
 
+// LookupHandler returns the registered handler for label.
+//
+// It exists for tests as much as for callers inside this package: reading
+// ActionHandlers directly races with a test that swaps an entry in through
+// ActionHandlersMu, and the race detector rightly fails the suite for it.
+func LookupHandler(label string) (ActionHandler, bool) {
+	return lookupHandler(strings.ToLower(strings.TrimSpace(label)))
+}
+
 // Execute maps an AI-parsed action tag to bot behaviors.
 func Execute(b *bot.Bot, label string, param string, user string) {
 	label = strings.ToLower(strings.TrimSpace(label))
