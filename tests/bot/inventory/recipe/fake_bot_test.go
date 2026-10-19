@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"time"
 
 	"bedrock-ai/internal/bot/inventory/recipe"
@@ -16,6 +17,12 @@ import (
 // station flow asked for things, so a test can pin the packet discipline —
 // arm, click, confirm, craft, close — without a server.
 type fakeBot struct {
+	// mu guards items and names. The craft result is delivered from a timer
+	// goroutine while the manager polls Inventory(), so the getters have to hand
+	// out a snapshot rather than the live maps: returning the map itself let the
+	// poll iterate it while the timer wrote to it, which is a data race under
+	// -race even though every caller only reads.
+	mu     sync.Mutex
 	pos    mgl32.Vec3
 	blocks map[[3]int32]string
 	names  map[int32]string
@@ -95,8 +102,25 @@ func (f *fakeBot) StopMovement()                                         {}
 func (f *fakeBot) LookAt(pos mgl32.Vec3)                                 {}
 func (f *fakeBot) ResetLook()                                            {}
 
-func (f *fakeBot) GetInventorySlots() map[uint32]protocol.ItemStack { return f.items }
-func (f *fakeBot) GetItemNames() map[int32]string                   { return f.names }
+func (f *fakeBot) GetInventorySlots() map[uint32]protocol.ItemStack {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make(map[uint32]protocol.ItemStack, len(f.items))
+	for slot, stack := range f.items {
+		out[slot] = stack
+	}
+	return out
+}
+
+func (f *fakeBot) GetItemNames() map[int32]string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make(map[int32]string, len(f.names))
+	for id, name := range f.names {
+		out[id] = name
+	}
+	return out
+}
 
 func (f *fakeBot) StationRecipes() []recipe.StationRecipe { return f.recipes }
 
@@ -176,10 +200,15 @@ func (f *fakeBot) CraftStationRecipe(req recipe.CraftRequest) error {
 
 // deliver schedules the server's authoritative result into the bag.
 func deliver(f *fakeBot, name string, count int, after time.Duration) {
-	netID := int32(len(f.names) + 1)
-	f.names[netID] = qualify(name)
 	qualified := qualify(name)
+	f.mu.Lock()
+	netID := int32(len(f.names) + 1)
+	f.names[netID] = qualified
+	f.mu.Unlock()
+
 	add := func() {
+		f.mu.Lock()
+		defer f.mu.Unlock()
 		slot := uint32(35)
 		for s, stack := range f.items {
 			if stack.Count == 0 {
@@ -204,6 +233,8 @@ func deliver(f *fakeBot, name string, count int, after time.Duration) {
 // The name is namespaced the way a server's item registry reports it, and an
 // already-namespaced name is left alone rather than prefixed twice.
 func (f *fakeBot) put(slot uint32, name string, count int) int32 {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	netID := int32(len(f.names) + 1)
 	f.names[netID] = qualify(name)
 	f.items[slot] = protocol.ItemStack{ItemType: protocol.ItemType{NetworkID: netID}, Count: uint16(count)}
@@ -221,6 +252,8 @@ func qualify(name string) string {
 
 // placeBlock seeds a block in the world.
 func (f *fakeBot) placeBlock(x, y, z int32, name string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.blocks[[3]int32{x, y, z}] = name
 }
 
