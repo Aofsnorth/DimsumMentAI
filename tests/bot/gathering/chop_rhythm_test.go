@@ -82,8 +82,8 @@ func TestChopCadenceVariesLikeAHand(t *testing.T) {
 	seen := map[time.Duration]int{}
 	for swing := 0; swing < 24; swing++ {
 		wait := gathering.ChopCadence()
-		if wait < animation.SwingMin || wait > animation.SwingMax {
-			t.Fatalf("swing %d: cadence %v outside [%v, %v]", swing, wait, animation.SwingMin, animation.SwingMax)
+		if wait < animation.SwingFloor || wait > animation.SwingMax {
+			t.Fatalf("swing %d: cadence %v outside [%v, %v]", swing, wait, animation.SwingFloor, animation.SwingMax)
 		}
 		seen[wait]++
 	}
@@ -100,11 +100,11 @@ func TestChopWindUpStaysInBounds(t *testing.T) {
 
 	for i := 0; i < 20; i++ {
 		w := gathering.ChopWindUp()
-		if w < animation.WindUpMin || w > animation.WindUpMax {
-			t.Fatalf("wind-up %v outside [%v, %v]", w, animation.WindUpMin, animation.WindUpMax)
+		if w < animation.WindUpFloor || w > animation.WindUpMax {
+			t.Fatalf("wind-up %v outside [%v, %v]", w, animation.WindUpFloor, animation.WindUpMax)
 		}
 	}
-	if animation.WindUpMin >= animation.SwingMin {
+	if animation.WindUpFloor >= animation.SwingFloor {
 		t.Fatal("wind-up floor should stay under the swing floor so it reads as a separate beat")
 	}
 }

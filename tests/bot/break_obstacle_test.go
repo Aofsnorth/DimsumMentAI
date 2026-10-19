@@ -29,14 +29,14 @@ func TestObstacleBreakUsesTheSharedHumanRhythm(t *testing.T) {
 	}
 	// A fixed 300ms tick cannot be a wind-up: the wind-up is its own, shorter
 	// beat, which is what stops the first swing from looking instant.
-	if beats[0].Wait >= animation.SwingMin {
-		t.Fatalf("first beat %v is not a wind-up, want a distinct beat under %v", beats[0].Wait, animation.SwingMin)
+	if beats[0].Wait >= animation.SwingFloor {
+		t.Fatalf("first beat %v is not a wind-up, want a distinct beat under %v", beats[0].Wait, animation.SwingFloor)
 	}
 
 	varied := map[time.Duration]bool{}
-	total := animation.WindUpMin
+	total := animation.WindUpFloor
 	for _, beat := range beats[1:] {
-		if beat.Wait < animation.SwingMin {
+		if beat.Wait < animation.SwingFloor {
 			t.Fatalf("swing pause %v is faster than the arm-swing animation, viewers see a vibration", beat.Wait)
 		}
 		varied[beat.Wait] = true

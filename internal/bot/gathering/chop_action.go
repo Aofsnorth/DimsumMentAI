@@ -490,7 +490,7 @@ func (tc *TreeChopper) swingUntilBreak(ctx context.Context, rhythm *animation.Ch
 		}
 		// The last swing is stretched to land on the break time, the way Beats
 		// does, so the arm is never left mid-cycle when the block goes.
-		if remaining := time.Until(deadline); remaining > 0 && remaining < animation.SwingMin {
+		if remaining := time.Until(deadline); remaining > 0 && remaining < animation.SwingFloor {
 			if !sleepContext(ctx, remaining) {
 				return
 			}

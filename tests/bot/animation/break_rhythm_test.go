@@ -106,7 +106,7 @@ func TestABreakNeverOutlastsItsBlock(t *testing.T) {
 	}
 	// A fast break still has to be allowed one swing, or an instant block reads
 	// as the block simply vanishing.
-	if fast <= animation.WindUpMin {
+	if fast <= animation.WindUpFloor {
 		t.Errorf("a %v break is paced as %v, which is the wind-up alone: no swing "+
 			"at all, so the block vanishes between beats", 150*time.Millisecond, fast)
 	}

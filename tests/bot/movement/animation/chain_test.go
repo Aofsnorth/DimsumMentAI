@@ -44,8 +44,8 @@ func TestTheWindUpIsOwedOnceForAWholeTree(t *testing.T) {
 	if swing {
 		t.Error("the first step of a chain sent a swing; the wind-up raises the arm without striking")
 	}
-	if wait < animation.WindUpMin || wait > animation.WindUpMax {
-		t.Errorf("wind-up = %v, want between %v and %v", wait, animation.WindUpMin, animation.WindUpMax)
+	if wait < animation.WindUpFloor || wait > animation.WindUpMax {
+		t.Errorf("wind-up = %v, want between %v and %v", wait, animation.WindUpFloor, animation.WindUpMax)
 	}
 	if !c.Started() {
 		t.Error("the chain does not know it has been started after serving the wind-up")
@@ -129,8 +129,8 @@ func TestTheRhythmSpansTheTree(t *testing.T) {
 		if !swing {
 			t.Fatalf("step %d did not swing", i)
 		}
-		if wait < animation.SwingMin || wait > animation.SwingMax {
-			t.Fatalf("step %d pauses %v, outside the swing range [%v, %v]", i, wait, animation.SwingMin, animation.SwingMax)
+		if wait < animation.SwingFloor || wait > animation.SwingMax {
+			t.Fatalf("step %d pauses %v, outside the swing range [%v, %v]", i, wait, animation.SwingFloor, animation.SwingMax)
 		}
 		swings++
 	}
@@ -177,7 +177,7 @@ func TestReaimKeepsTheRhythmButMovesTheHead(t *testing.T) {
 
 // TestTheSwingSpacingStillClearsTheAnimationFloor is the guard on the guard. The
 // fix removed a dead beat, not a pause — every swing pause must still clear
-// SwingMin, because below it the viewer's client restarts the arm cycle
+// SwingFloor, because below it the viewer's client restarts the arm cycle
 // mid-flight and the whole rhythm defeats itself.
 func TestTheSwingSpacingStillClearsTheAnimationFloor(t *testing.T) {
 	t.Parallel()
@@ -188,8 +188,8 @@ func TestTheSwingSpacingStillClearsTheAnimationFloor(t *testing.T) {
 		if i == 0 {
 			continue // wind-up: an arm raise, not a swing gap
 		}
-		if w < animation.SwingMin {
-			t.Errorf("swing step %d waits %v, under the %v floor", i, w, animation.SwingMin)
+		if w < animation.SwingFloor {
+			t.Errorf("swing step %d waits %v, under the %v floor", i, w, animation.SwingFloor)
 		}
 		if w > animation.SwingMax {
 			t.Errorf("swing step %d waits %v, over the %v ceiling; the arm parks mid-break", i, w, animation.SwingMax)

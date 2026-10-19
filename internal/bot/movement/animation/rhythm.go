@@ -39,21 +39,21 @@ import (
 // These values are shared by the chopper, the miner, the scaffold and the
 // obstacle unstick, so one policy governs every break the bot performs.
 const (
-	// WindUpMin/WindUpMax is the tool raise before the first swing. It is small
+	// WindUpFloor/WindUpMax is the tool raise before the first swing. It is small
 	// because the swing it precedes is small: at a 100ms cadence a 90ms wind-up
 	// would be almost a whole beat of raised arm, which is the stall this rhythm
 	// exists to avoid.
-	WindUpMin = 30 * time.Millisecond
-	WindUpMax = 60 * time.Millisecond
+	WindUpFloor = 30 * time.Millisecond
+	WindUpMax   = 60 * time.Millisecond
 
-	// SwingMin/SwingMax is the pause between swings, centred on 100ms — about
+	// SwingFloor/SwingMax is the pause between swings, centred on 100ms — about
 	// ten a second, which is how fast held-button mining is supposed to read.
 	// The band is narrow because the ceiling is a real constraint and the floor
 	// is chosen rather than derived; a fixed interval would be a metronome, so it
 	// jitters by a few milliseconds either side of the target.
-	SwingMin = 90 * time.Millisecond
-	SwingMax = 110 * time.Millisecond
-	SwingMid = 100 * time.Millisecond
+	SwingFloor = 90 * time.Millisecond
+	SwingMax   = 110 * time.Millisecond
+	SwingMid   = 100 * time.Millisecond
 
 	// AimJitter is how far (in blocks) the aim may wander from the block
 	// centre. Enough to read as a hand, never enough to miss.
@@ -62,14 +62,14 @@ const (
 
 // WindUp returns the pause before the first swing of a break.
 func WindUp() time.Duration {
-	return WindUpMin + time.Duration(rand.Int63n(int64(WindUpMax-WindUpMin)))
+	return WindUpFloor + time.Duration(rand.Int63n(int64(WindUpMax-WindUpFloor)))
 }
 
 // Cadence returns the pause after a swing. The interval is jittered so a long
 // break is not a metronome, but it stays inside one swing animation's width:
 // mining is continuous work, not a burst pattern.
 func Cadence() time.Duration {
-	return SwingMin + time.Duration(rand.Int63n(int64(SwingMax-SwingMin)))
+	return SwingFloor + time.Duration(rand.Int63n(int64(SwingMax-SwingFloor)))
 }
 
 // JitteredAim drifts the aim point around the block centre so the head does not
@@ -103,12 +103,12 @@ type Beat struct {
 // pause lands near the reference rate instead of the last one absorbing the slack.
 //
 // Two bounds shape the count. The swing floor caps how many fit: N past
-// remaining/SwingMin means a pause under the floor, which restarts the viewer's arm
+// remaining/SwingFloor means a pause under the floor, which restarts the viewer's arm
 // cycle mid-flight. The reference rate sets how many are wanted, so a two-second break
 // swings about nine times rather than four.
 //
 // Dividing with floor (not ceil) is what keeps both guarantees at once: swings <=
-// remaining/SwingMin makes floor(remaining/swings) >= SwingMin, and the leftover
+// remaining/SwingFloor makes floor(remaining/swings) >= SwingFloor, and the leftover
 // swings*share <= remaining, so the correction below can only ever lengthen the last
 // pause. An earlier version rounded the share up and then subtracted the overshoot,
 // which is how the last swing came out at 190ms — under the floor — on a 450ms break.
@@ -131,13 +131,13 @@ func Beats(breakTime time.Duration, aim mgl32.Vec3) []Beat {
 	swingAim := JitteredAim(aim)
 
 	// Assume the wind-up took its floor: never overrun the break time.
-	remaining := breakTime - WindUpMin
+	remaining := breakTime - WindUpFloor
 
 	// A break too short to carry a swing gets none. There is no honest way to
 	// spend the time — stretching the wind-up would turn a tool raise into a
 	// stall, and a strained swing is worse than an instant block simply breaking.
 	swings := (remaining + SwingMid/2) / SwingMid
-	if fits := remaining / SwingMin; swings > fits {
+	if fits := remaining / SwingFloor; swings > fits {
 		swings = fits
 	}
 	if swings < 1 {
@@ -158,8 +158,8 @@ func Beats(breakTime time.Duration, aim mgl32.Vec3) []Beat {
 	// the floor, which is the vibration the floor exists to prevent.
 	for i := time.Duration(0); i < swings-1; i++ {
 		left := swings - i
-		slack := remaining - left*SwingMin
-		wait := SwingMin
+		slack := remaining - left*SwingFloor
+		wait := SwingFloor
 		if slack > 0 {
 			extra := slack / left
 			if extra > 0 {
@@ -173,7 +173,7 @@ func Beats(breakTime time.Duration, aim mgl32.Vec3) []Beat {
 		remaining -= wait
 	}
 
-	// Whatever is left is the final swing, and it is at least SwingMin by
+	// Whatever is left is the final swing, and it is at least SwingFloor by
 	// construction: the draws above never took more than their even share.
 	beats = append(beats, Beat{Wait: remaining, Aim: swingAim})
 	return beats
@@ -186,7 +186,7 @@ func Beats(breakTime time.Duration, aim mgl32.Vec3) []Beat {
 // swing cycle and the arm never drops between logs. Laying a fresh Beats out per
 // log put a new wind-up in front of every one of them, and since the chopper only
 // waited 20ms between logs the gap between the last swing of one log and the
-// first swing of the next came out at 120-240ms — under SwingMin, so the viewer's
+// first swing of the next came out at 120-240ms — under SwingFloor, so the viewer's
 // client restarted the arm cycle before the previous one finished. On a six-log
 // trunk that happened five times, and it is what a stuttering arm looks like.
 //

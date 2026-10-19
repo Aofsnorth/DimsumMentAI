@@ -43,22 +43,22 @@ import (
 // reads as a script, not a person, and the model round trip on a short answer
 // is already fast enough that the total would otherwise look mechanical.
 const (
-	// AckMin/AckMax is the band for a message that needs almost no thought:
+	// AckFloor/AckMax is the band for a message that needs almost no thought:
 	// "ok", "hi", "terima kasih". A person answers these almost immediately
 	// but not instantly.
-	AckMin = 220 * time.Millisecond
-	AckMax = 650 * time.Millisecond
+	AckFloor = 220 * time.Millisecond
+	AckMax   = 650 * time.Millisecond
 
-	// ShortMin/ShortMax is the band for an ordinary statement or a short
+	// ShortFloor/ShortMax is the band for an ordinary statement or a short
 	// request that needs no deliberation.
-	ShortMin = 450 * time.Millisecond
-	ShortMax = 1_100 * time.Millisecond
+	ShortFloor = 450 * time.Millisecond
+	ShortMax   = 1_100 * time.Millisecond
 
-	// AskMin/AskMax is the band for something the bot has to actually think
+	// AskFloor/AskMax is the band for something the bot has to actually think
 	// about: a question, or a request with a parameter in it. This is where a
 	// person visibly pauses before answering.
-	AskMin = 800 * time.Millisecond
-	AskMax = 2_000 * time.Millisecond
+	AskFloor = 800 * time.Millisecond
+	AskMax   = 2_000 * time.Millisecond
 
 	// LongMax caps the added delay. Past a couple of seconds the wait stops
 	// reading as a person composing a reply and starts reading as a bot that
@@ -97,25 +97,25 @@ func Band(msg string) (min, max time.Duration) {
 func band(msg string) (min, max time.Duration) {
 	trimmed := strings.TrimSpace(msg)
 	if trimmed == "" {
-		return AckMin, AckMax
+		return AckFloor, AckMax
 	}
 
 	// A question needs composing, whatever its length.
 	if endsWithQuestion(trimmed) {
-		return AskMin, AskMax
+		return AskFloor, AskMax
 	}
 
 	// So does anything long enough to need reading twice.
 	if len([]rune(trimmed)) > 40 {
-		return AskMin, AskMax
+		return AskFloor, AskMax
 	}
 
 	// An acknowledgement is short and does not ask for anything.
 	if isAcknowledgement(trimmed) {
-		return AckMin, AckMax
+		return AckFloor, AckMax
 	}
 
-	return ShortMin, ShortMax
+	return ShortFloor, ShortMax
 }
 
 // endsWithQuestion reports whether the message is asking something, in the

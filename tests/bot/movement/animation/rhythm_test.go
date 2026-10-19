@@ -22,8 +22,8 @@ func TestCadenceVariesLikeAHand(t *testing.T) {
 	seen := map[time.Duration]int{}
 	for swing := 0; swing < 24; swing++ {
 		wait := animation.Cadence()
-		if wait < animation.SwingMin || wait > animation.SwingMax {
-			t.Fatalf("swing %d: cadence %v outside [%v, %v]", swing, wait, animation.SwingMin, animation.SwingMax)
+		if wait < animation.SwingFloor || wait > animation.SwingMax {
+			t.Fatalf("swing %d: cadence %v outside [%v, %v]", swing, wait, animation.SwingFloor, animation.SwingMax)
 		}
 		seen[wait]++
 	}
@@ -45,14 +45,14 @@ func TestCadenceVariesLikeAHand(t *testing.T) {
 func TestCadenceStaysAboveAFloor(t *testing.T) {
 	t.Parallel()
 
-	if animation.SwingMin < 80*time.Millisecond {
-		t.Fatalf("swing floor %v is tight enough to read as a blur rather than distinct chops", animation.SwingMin)
+	if animation.SwingFloor < 80*time.Millisecond {
+		t.Fatalf("swing floor %v is tight enough to read as a blur rather than distinct chops", animation.SwingFloor)
 	}
-	if animation.SwingMax <= animation.SwingMin {
-		t.Fatalf("swing range [%v, %v] is empty", animation.SwingMin, animation.SwingMax)
+	if animation.SwingMax <= animation.SwingFloor {
+		t.Fatalf("swing range [%v, %v] is empty", animation.SwingFloor, animation.SwingMax)
 	}
-	if animation.SwingMid < animation.SwingMin || animation.SwingMid > animation.SwingMax {
-		t.Fatalf("layout rate %v sits outside the swing range [%v, %v]", animation.SwingMid, animation.SwingMin, animation.SwingMax)
+	if animation.SwingMid < animation.SwingFloor || animation.SwingMid > animation.SwingMax {
+		t.Fatalf("layout rate %v sits outside the swing range [%v, %v]", animation.SwingMid, animation.SwingFloor, animation.SwingMax)
 	}
 }
 
@@ -72,8 +72,8 @@ func TestCadenceNeverParksTheArmMidBreak(t *testing.T) {
 		t.Fatalf("swing ceiling %v reaches the %v swing animation; the arm comes to rest "+
 			"in the middle of a break, which is the shipped bug", animation.SwingMax, swingAnimation)
 	}
-	if animation.WindUpMax >= animation.SwingMin {
-		t.Fatalf("wind-up ceiling %v reaches the swing floor %v; a break can start on a full pause", animation.WindUpMax, animation.SwingMin)
+	if animation.WindUpMax >= animation.SwingFloor {
+		t.Fatalf("wind-up ceiling %v reaches the swing floor %v; a break can start on a full pause", animation.WindUpMax, animation.SwingFloor)
 	}
 }
 
@@ -85,11 +85,11 @@ func TestWindUpStaysInBounds(t *testing.T) {
 
 	for i := 0; i < 20; i++ {
 		w := animation.WindUp()
-		if w < animation.WindUpMin || w > animation.WindUpMax {
-			t.Fatalf("wind-up %v outside [%v, %v]", w, animation.WindUpMin, animation.WindUpMax)
+		if w < animation.WindUpFloor || w > animation.WindUpMax {
+			t.Fatalf("wind-up %v outside [%v, %v]", w, animation.WindUpFloor, animation.WindUpMax)
 		}
 	}
-	if animation.WindUpMin >= animation.SwingMin {
+	if animation.WindUpFloor >= animation.SwingFloor {
 		t.Fatal("wind-up floor should stay under the swing floor so it reads as a separate beat")
 	}
 }
@@ -136,7 +136,7 @@ func TestBeatsNeverOvershootTheBreak(t *testing.T) {
 		3 * time.Second,
 	} {
 		beats := animation.Beats(breakTime, aim)
-		if len(beats) < 1 || beats[0].Wait < animation.WindUpMin || beats[0].Wait > animation.WindUpMax {
+		if len(beats) < 1 || beats[0].Wait < animation.WindUpFloor || beats[0].Wait > animation.WindUpMax {
 			t.Fatalf("break of %v: first beat %v is not a wind-up", breakTime, beats[0].Wait)
 		}
 		if beats[0].Aim != aim {
@@ -144,9 +144,9 @@ func TestBeatsNeverOvershootTheBreak(t *testing.T) {
 		}
 
 		// Account for the wind-up conservatively, exactly as the break loops do.
-		total := animation.WindUpMin
+		total := animation.WindUpFloor
 		for i, beat := range beats[1:] {
-			if beat.Wait < animation.SwingMin {
+			if beat.Wait < animation.SwingFloor {
 				t.Fatalf("break of %v: swing %d pauses only %v, too fast for the arm cycle to read as a swing", breakTime, i+1, beat.Wait)
 			}
 			total += beat.Wait
@@ -183,8 +183,8 @@ func TestBeatsNeverEndOnARuntSwing(t *testing.T) {
 		breakTime := time.Duration(ms) * time.Millisecond
 		beats := animation.Beats(breakTime, aim)
 		for i, beat := range beats[1:] {
-			if beat.Wait < animation.SwingMin {
-				t.Fatalf("break of %v: swing %d pauses %v, want at least the %v swing floor", breakTime, i+1, beat.Wait, animation.SwingMin)
+			if beat.Wait < animation.SwingFloor {
+				t.Fatalf("break of %v: swing %d pauses %v, want at least the %v swing floor", breakTime, i+1, beat.Wait, animation.SwingFloor)
 			}
 		}
 	}

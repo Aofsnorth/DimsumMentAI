@@ -43,7 +43,7 @@ func TestBeatsConsumeTheWholeBreak(t *testing.T) {
 
 		// The break loops account for the wind-up at its floor, so this is the
 		// sum they will actually wait out before finishing the block.
-		waited := animation.WindUpMin
+		waited := animation.WindUpFloor
 		for _, beat := range beats[1:] {
 			waited += beat.Wait
 		}
@@ -69,9 +69,9 @@ func TestAShortBreakGetsNoRuntSwing(t *testing.T) {
 		breakTime := time.Duration(ms) * time.Millisecond
 		beats := animation.Beats(breakTime, aim)
 		for i, beat := range beats[1:] {
-			if beat.Wait < animation.SwingMin {
+			if beat.Wait < animation.SwingFloor {
 				t.Fatalf("break of %vms: swing %d pauses %v, under the %v swing floor",
-					ms, i+1, beat.Wait, animation.SwingMin)
+					ms, i+1, beat.Wait, animation.SwingFloor)
 			}
 		}
 	}

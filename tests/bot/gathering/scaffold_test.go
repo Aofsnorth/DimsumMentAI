@@ -75,7 +75,7 @@ func TestTheScaffoldPlacementHasTimeToLand(t *testing.T) {
 		t.Errorf("jump is held for %d ticks; at 20Hz that is not long enough to leave the ground",
 			gathering.ScaffoldJumpTicks)
 	}
-	if gathering.ScaffoldSettle <= animation.SwingMin {
+	if gathering.ScaffoldSettle <= animation.SwingFloor {
 		t.Error("the settle is shorter than a swing pause; the two are pacing the same gesture")
 	}
 }
