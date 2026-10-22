@@ -1,8 +1,6 @@
 package movement
 
 import (
-	"context"
-
 	"bedrock-ai/internal/bot"
 	"bedrock-ai/internal/bot/pathfinder"
 	"bedrock-ai/internal/bot/scaffold"

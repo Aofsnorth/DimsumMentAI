@@ -5,7 +5,6 @@
 package action
 
 import (
-	"context"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -344,7 +343,7 @@ func interactHandler(b *bot.Bot, param, user string) {
 // joinHandler moves the bot to a different server by ending the current
 // session; the run loop re-dials the new address.
 func joinHandler(b *bot.Bot, param, user string) {
-	if user != "" && b.AiCfg != nil && len(b.AiCfg.GetMainPlayers()) > 0 && !b.AiCfg.IsMainPlayer(user) {
+	if user != "" && len(b.AiCfg.GetMainPlayers()) > 0 && !b.AiCfg.IsMainPlayer(user) {
 		ReportStatus(b, user, event.ActionStatus{
 			Action:  "join",
 			Success: false,
@@ -377,7 +376,7 @@ func joinHandler(b *bot.Bot, param, user string) {
 // Chat can only say "/register …" as words; this actually runs it, which is what
 // password-gated servers and lobby plugins require.
 func commandHandler(b *bot.Bot, param, user string) {
-	if user != "" && b.AiCfg != nil && len(b.AiCfg.GetMainPlayers()) > 0 && !b.AiCfg.IsMainPlayer(user) {
+	if user != "" && len(b.AiCfg.GetMainPlayers()) > 0 && !b.AiCfg.IsMainPlayer(user) {
 		ReportStatus(b, user, event.ActionStatus{
 			Action:  "cmd",
 			Success: false,
