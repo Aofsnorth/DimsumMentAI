@@ -8,3 +8,7 @@
 *.yaml text eol=lf
 *.json text eol=lf
 *.sh text eol=lf
+# Patch files must stay LF: `git apply` matches context lines against the
+# checked-out sources byte-for-byte, so a CRLF patch cannot apply to the
+# LF-normalized .go files they target.
+*.patch text eol=lf

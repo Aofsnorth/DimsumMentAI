@@ -360,7 +360,7 @@ func (tc *TreeChopper) ChopTreeAt(ctx context.Context, startPos protocol.BlockPo
 	// bot's pathfinder corrects an earlier mis-step (e.g. ledge it just fell
 	// off). Tolerance bumped to 3.5 so standing one block away counts as
 	// "reached" — the chopTree BFS will handle the rest.
-		tolerances := []float32{2.2, 2.8, 3.5}
+	tolerances := []float32{2.2, 2.8, 3.5}
 	for attempt, tol := range tolerances {
 		if tc.rg.bot.NavigateToBlock(startPos.X(), startPos.Y(), startPos.Z(), tol) {
 			if feet := tc.rg.bot.GetCoords().Y(); math.Abs(float64(feet-float32(startPos.Y()))) <= 1.2 {
