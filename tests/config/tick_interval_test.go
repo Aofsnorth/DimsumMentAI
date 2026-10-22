@@ -187,3 +187,20 @@ func TestTickIntervalStringMatchesTheConfig(t *testing.T) {
 		t.Errorf("range printed %q, want %q", got, "1s-2s")
 	}
 }
+
+func TestTickIntervalRejectsNaNInfAndNegativeValues(t *testing.T) {
+	badInputs := []string{
+		"tick_interval_sec: NaN\n",
+		"tick_interval_sec: +Inf\n",
+		"tick_interval_sec: -5\n",
+		"tick_interval_sec: 999999999\n",
+	}
+	for _, raw := range badInputs {
+		var wrapper struct {
+			Interval config.TickInterval `yaml:"tick_interval_sec"`
+		}
+		if err := yaml.Unmarshal([]byte(raw), &wrapper); err == nil {
+			t.Fatalf("expected yaml.Unmarshal(%q) to fail, got %+v", raw, wrapper.Interval)
+		}
+	}
+}

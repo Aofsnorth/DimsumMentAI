@@ -136,7 +136,7 @@ func (d *Dialer) Dial() (*minecraft.Conn, error) {
 	if cfg.LANDiscoveryEnabled() && os.Getenv("BOT_DIAL_ADDR") == "" {
 		if conn, err := d.dialLAN(cfg, dialer); err == nil {
 			if capture != nil {
-				_ = capture.Close()
+				capture.setRemote(conn.RemoteAddr())
 			}
 			return conn, nil
 		} else {
@@ -163,6 +163,9 @@ func (d *Dialer) Dial() (*minecraft.Conn, error) {
 				"hint", "set server.resource_packs to \"skip\" to skip this retry on future runs",
 			)
 			fallback := d.newMinecraftDialer(withResourcePacks(cfg, config.ResourcePacksSkip))
+			if capture != nil {
+				fallback.PacketFunc = capture.record
+			}
 			if !cfg.Offline {
 				if token, tokErr := loadToken("configs/token.json"); tokErr == nil {
 					fallback.TokenSource = auth.RefreshTokenSource(token)
@@ -230,6 +233,8 @@ func (d *Dialer) dialLAN(cfg config.ServerConfig, dialer minecraft.Dialer) (*min
 	var lastDialErr error
 	var skipped []string
 	triedNetworkIDs := make(map[uint64]struct{})
+	pollTicker := time.NewTicker(100 * time.Millisecond)
+	defer pollTicker.Stop()
 	for {
 		for networkID, raw := range listener.Responses() {
 			if _, tried := triedNetworkIDs[networkID]; tried {
@@ -294,7 +299,7 @@ func (d *Dialer) dialLAN(cfg config.ServerConfig, dialer minecraft.Dialer) (*min
 				err = fmt.Errorf("%w (saw %d incompatible advertisement(s): %s)", err, len(skipped), strings.Join(skipped, "; "))
 			}
 			return nil, err
-		case <-time.After(100 * time.Millisecond):
+		case <-pollTicker.C:
 		}
 	}
 }

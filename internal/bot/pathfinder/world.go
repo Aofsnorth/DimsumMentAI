@@ -26,6 +26,7 @@ type ChunkQuerier interface {
 
 type LocalWorldModel struct {
 	mu              sync.RWMutex
+	scaffoldMu      sync.Mutex
 	solidBlocks     map[int64]bool
 	hazardBlocks    map[int64]bool
 	passableBlocks  map[int64]bool // mined/placed passable overrides (persistent)
@@ -41,6 +42,37 @@ type LocalWorldModel struct {
 	hasBounds                 bool
 	startX, startY, startZ    int32
 	targetX, targetY, targetZ int32
+}
+
+// SetAllowScaffold safely updates whether the pathfinder may emit scaffold steps.
+func (w *LocalWorldModel) SetAllowScaffold(allow bool) {
+	w.mu.Lock()
+	w.AllowScaffold = allow
+	w.mu.Unlock()
+}
+
+// AllowScaffolding safely reports whether the pathfinder may emit scaffold steps.
+func (w *LocalWorldModel) AllowScaffolding() bool {
+	w.mu.RLock()
+	allow := w.AllowScaffold
+	w.mu.RUnlock()
+	return allow
+}
+
+// WithScaffold serializes scaffold-enabled A* searches so concurrent searches do not clobber AllowScaffold.
+func (w *LocalWorldModel) WithScaffold(fn func()) {
+	w.scaffoldMu.Lock()
+	defer w.scaffoldMu.Unlock()
+	w.SetAllowScaffold(true)
+	defer w.SetAllowScaffold(false)
+	fn()
+}
+
+func (w *LocalWorldModel) startBounds() (int32, int32, int32, bool) {
+	w.mu.RLock()
+	sx, sy, sz, ok := w.startX, w.startY, w.startZ, w.hasBounds
+	w.mu.RUnlock()
+	return sx, sy, sz, ok
 }
 
 // PackBlockKey encodes a block coordinate into a single int64 map key.

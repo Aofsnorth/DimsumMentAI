@@ -15,6 +15,7 @@ package movement
 import (
 	"log/slog"
 	"math"
+	"sync"
 	"time"
 
 	"bedrock-ai/internal/blockcell"
@@ -187,10 +188,13 @@ func (tc *TickContext) plannedFallAhead() bool {
 
 // lastLedgeNote remembers which ledge was last reported, so the refusal is
 // logged once per approach rather than once per tick.
-var lastLedgeNote struct {
-	x, y, z int32
-	at      time.Time
-}
+var (
+	lastLedgeNoteMu sync.Mutex
+	lastLedgeNote   struct {
+		x, y, z int32
+		at      time.Time
+	}
+)
 
 // ledgeNoteWindow is how long the same cliff stays reported. Long enough that
 // approaching the same edge again later still logs, short enough that a bot
@@ -198,17 +202,23 @@ var lastLedgeNote struct {
 const ledgeNoteWindow = 10 * time.Second
 
 func (tc *TickContext) noteLedgeRefusal(ledge LedgeAhead) {
+	if tc == nil || tc.B == nil || tc.B.Logger == nil {
+		return
+	}
 	p := tc.CurrPos
 	cx, cy, cz := blockcell.XYZ(p.X(), p.Y(), p.Z())
 
+	lastLedgeNoteMu.Lock()
 	if cx == lastLedgeNote.x && cy == lastLedgeNote.y && cz == lastLedgeNote.z &&
 		time.Since(lastLedgeNote.at) < ledgeNoteWindow {
+		lastLedgeNoteMu.Unlock()
 		return
 	}
 	lastLedgeNote = struct {
 		x, y, z int32
 		at      time.Time
 	}{cx, cy, cz, time.Now()}
+	lastLedgeNoteMu.Unlock()
 
 	tc.B.Logger.Info("movement: refused a step over a drop",
 		slog.Float64("fall", float64(ledge.Fall)),

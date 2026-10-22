@@ -146,9 +146,10 @@ func (cm *CombatManager) Tick(ctx context.Context) {
 	situation.PvP = pvp
 	cm.mu.Lock()
 	situation.SwingsLanded = cm.swingsInFight
+	lastAtk := cm.lastAttack
 	cm.mu.Unlock()
 	situation.SwingReady = HorizontalDistance(botPos, target.Position) <= fairReach &&
-		time.Since(cm.lastAttack) >= meleeCooldown
+		time.Since(lastAtk) >= meleeCooldown
 	choice := ChooseWeapon(cm.slotNames(), situation)
 	if choice.Kind == WeaponNone {
 		cm.logger.Warn("Combat with nothing to fight with")
@@ -282,7 +283,10 @@ func (cm *CombatManager) swingAt(target *entity.Info) {
 	if HorizontalDistance(cm.bot.GetCoords(), target.Position) > fairReach {
 		return
 	}
-	if time.Since(cm.lastAttack) < meleeCooldown {
+	cm.mu.Lock()
+	lastAtk := cm.lastAttack
+	cm.mu.Unlock()
+	if time.Since(lastAtk) < meleeCooldown {
 		return
 	}
 	if !cm.hasLineOfSight(target) {
@@ -290,8 +294,8 @@ func (cm *CombatManager) swingAt(target *entity.Info) {
 		return
 	}
 	cm.attack(target.ID, target.Position)
-	cm.lastAttack = time.Now()
 	cm.mu.Lock()
+	cm.lastAttack = time.Now()
 	cm.swingsInFight++
 	if cm.mode == ModeDefend {
 		cm.defendSwings++

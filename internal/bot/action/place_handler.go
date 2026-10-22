@@ -61,7 +61,7 @@ func handlePlace(b *bot.Bot, param, user string) {
 			Face:          bot.BlockFaceTop,
 			ClickedOffset: mgl32.Vec3{bot.BlockCenterOffset, 1, bot.BlockCenterOffset},
 		}
-		if err := b.PlaceBlock(context.Background(), request); err != nil {
+		if err := b.PlaceBlock(b.ActivityContext(), request); err != nil {
 			b.Logger.Warn("handlePlace: placement failed", "item", itemName, "pos", placePos, "error", err)
 			ReportStatus(b, user, event.ActionStatus{
 				Action:  "place",

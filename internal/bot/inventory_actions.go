@@ -800,7 +800,7 @@ func (b *Bot) placeIngredientOnGrid(pick IngredientPick, s *craftStaging, gridSl
 // validate → stage → finalize orchestrator.
 func (b *Bot) finalizeCraft(recipe RecipeInfo, recipeNetID uint32, count int, outputSlot uint32, ingredientSources map[uint32]IngredientSourceSnapshot, s *craftStaging) error {
 	requestID, resultCh := b.beginStackRequest(recipe.Output.NetworkID)
-	actions, err := BuildCraftActions(requestID, recipeNetID, recipe, count, s.gridInputs, outputSlot, b.ItemNames[recipe.Output.NetworkID])
+	actions, err := BuildCraftActions(requestID, recipeNetID, recipe, count, s.gridInputs, outputSlot, s.itemName)
 	if err != nil {
 		// The grid is already staged, so release it before reporting the failure
 		// rather than leaving items stranded in the crafting input.

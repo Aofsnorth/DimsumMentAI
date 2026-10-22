@@ -193,10 +193,14 @@ func (m *Manager) PlaceTorch(ctx context.Context, pos protocol.BlockPos) bool {
 
 // AutoPlaceTorches places torches around the bot when in dark areas
 func (m *Manager) AutoPlaceTorches(ctx context.Context) {
-	if !m.autoTorchOn || !m.AutoTorchEnabled {
+	m.mu.Lock()
+	autoTorch := m.autoTorchOn && m.AutoTorchEnabled
+	lastTorch := m.lastTorchTime
+	m.mu.Unlock()
+	if !autoTorch {
 		return
 	}
-	if time.Since(m.lastTorchTime) < 8*time.Second {
+	if time.Since(lastTorch) < 8*time.Second {
 		return
 	}
 
@@ -231,11 +235,18 @@ func (m *Manager) AutoPlaceTorches(ctx context.Context) {
 
 // BuildEmergencyShelter builds a simple 3x3x2 dirt/cobblestone shelter
 func (m *Manager) BuildEmergencyShelter(ctx context.Context) bool {
+	m.mu.Lock()
 	if m.isSheltering {
+		m.mu.Unlock()
 		return false
 	}
 	m.isSheltering = true
-	defer func() { m.isSheltering = false }()
+	m.mu.Unlock()
+	defer func() {
+		m.mu.Lock()
+		m.isSheltering = false
+		m.mu.Unlock()
+	}()
 
 	buildSlot, buildMaterial, buildCount, ok := m.findShelterMaterial()
 	if !ok {

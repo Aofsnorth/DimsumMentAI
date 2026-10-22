@@ -213,13 +213,13 @@ func (nc *NvidiaClient) buildGoogleRequest(messages []Message, temperature float
 		return nil, fmt.Errorf("marshal request: %w", err)
 	}
 
-	endpoint := strings.TrimRight(nc.baseURL, "/") + "/models/" + url.PathEscape(nc.model) +
-		":generateContent?key=" + url.QueryEscape(nc.apiKey)
+	endpoint := strings.TrimRight(nc.baseURL, "/") + "/models/" + url.PathEscape(nc.model) + ":generateContent"
 	httpReq, err := http.NewRequest("POST", endpoint, bytes.NewBuffer(bodyBytes))
 	if err != nil {
 		return nil, fmt.Errorf("create HTTP request: %w", err)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("x-goog-api-key", nc.apiKey)
 	return httpReq, nil
 }
 

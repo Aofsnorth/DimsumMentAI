@@ -130,7 +130,10 @@ func (m *Manager) bestArmorCandidate(armorIndex int) (uint32, int) {
 // It is separate from the action because the action sends packets and sleeps,
 // while the judgement is the part worth testing.
 func (m *Manager) ShouldUpgradeArmor() bool {
-	if !m.autoArmorOn || !m.ArmorEnabled {
+	m.mu.Lock()
+	autoArmor := m.autoArmorOn && m.ArmorEnabled
+	m.mu.Unlock()
+	if !autoArmor {
 		return false
 	}
 	// A swap changes what is in the bot's hand, so it waits for the brain to

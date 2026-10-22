@@ -18,7 +18,9 @@ import.worktrees/
 # Credentials/Tokens
 configs/token.json
 
-configs/bot.yaml
+configs/bot.local.yaml
+.goal-mcp/
+.runtime-probe-state.json
 
 # Local env file (contains API keys — never commit)
 .env
@@ -33,7 +35,7 @@ data/device_identity.json
 # Bot persistent memory (changes every run)
 data/bot_memory.json
 
-data\bot_state.json
+data/bot_state.json
 .codex
 
 archive/

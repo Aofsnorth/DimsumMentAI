@@ -177,7 +177,7 @@ func harvestCrops(b *bot.Bot, param, user string) {
 	go func() {
 		cropType := NormalizeCropType(param)
 		count := ParseCount(param, 20)
-		harvested := b.Farmer.HarvestCrops(context.Background(), cropType, count)
+		harvested := b.Farmer.HarvestCrops(b.ActivityContext(), cropType, count)
 		b.Logger.Debug("harvest complete", "count", harvested.Count, "cells", len(harvested.Results))
 		// A block-state source that was never wired makes every staged crop
 		// unreadable, and the harvest then correctly refuses all of them. Saying
@@ -344,6 +344,14 @@ func interactHandler(b *bot.Bot, param, user string) {
 // joinHandler moves the bot to a different server by ending the current
 // session; the run loop re-dials the new address.
 func joinHandler(b *bot.Bot, param, user string) {
+	if user != "" && b.AiCfg != nil && len(b.AiCfg.GetMainPlayers()) > 0 && !b.AiCfg.IsMainPlayer(user) {
+		ReportStatus(b, user, event.ActionStatus{
+			Action:  "join",
+			Success: false,
+			Error:   "hanya operator (main_players) yang boleh memindahkan server bot",
+		})
+		return
+	}
 	address := strings.TrimSpace(param)
 	if address == "" {
 		ReportStatus(b, user, event.ActionStatus{
@@ -369,6 +377,14 @@ func joinHandler(b *bot.Bot, param, user string) {
 // Chat can only say "/register …" as words; this actually runs it, which is what
 // password-gated servers and lobby plugins require.
 func commandHandler(b *bot.Bot, param, user string) {
+	if user != "" && b.AiCfg != nil && len(b.AiCfg.GetMainPlayers()) > 0 && !b.AiCfg.IsMainPlayer(user) {
+		ReportStatus(b, user, event.ActionStatus{
+			Action:  "cmd",
+			Success: false,
+			Error:   "hanya operator (main_players) yang boleh menjalankan command server",
+		})
+		return
+	}
 	param = strings.TrimSpace(param)
 	if param == "" {
 		ReportStatus(b, user, event.ActionStatus{
@@ -521,7 +537,7 @@ var ActionHandlers = map[string]ActionHandler{
 	"build": func(b *bot.Bot, param, user string) {
 		before := CountInventoryItems(b.GetInventorySlots(), b.GetItemNames(), "cobblestone")
 		go func() {
-			b.BuilderAgent.Build(context.Background(), user, param)
+			b.BuilderAgent.Build(b.ActivityContext(), user, param)
 			ReportInventoryDelta(b, user, "build", "cobblestone", before, 0)
 		}()
 	},
@@ -540,7 +556,7 @@ var ActionHandlers = map[string]ActionHandler{
 		}
 		before := CountInventoryItems(b.GetInventorySlots(), b.GetItemNames(), "cobblestone")
 		go func() {
-			b.BuilderAgent.UndoBuild(context.Background(), count)
+			b.BuilderAgent.UndoBuild(b.ActivityContext(), count)
 			// Undo puts blocks back, so the cobblestone count rising is the
 			// proof that the undo did something.
 			ReportInventoryDelta(b, user, "undo", "cobblestone", before, 0)
@@ -749,7 +765,7 @@ var ActionHandlers = map[string]ActionHandler{
 	"smelt": func(b *bot.Bot, param, user string) {
 		go func() {
 			itemName := NormalizeItemName(param)
-			success := b.InventoryMgr.Furnace().SmeltItem(context.Background(), itemName)
+			success := b.InventoryMgr.Furnace().SmeltItem(b.ActivityContext(), itemName)
 			b.Logger.Debug("smelt action complete", "success", success, "item", itemName)
 			ReportStatus(b, user, event.ActionStatus{
 				Action:  "smelt",
@@ -883,7 +899,7 @@ var ActionHandlers = map[string]ActionHandler{
 		go func() {
 			cropType := NormalizeCropType(param)
 			count := ParseCount(param, 20)
-			planted := b.Farmer.PlantSeeds(context.Background(), cropType, count)
+			planted := b.Farmer.PlantSeeds(b.ActivityContext(), cropType, count)
 			b.Logger.Debug("plant complete", "count", planted)
 			reportCountOutcome(b, user, "plant", cropType, planted, "tidak ada lahan yang bisa ditanami")
 		}()
@@ -891,7 +907,7 @@ var ActionHandlers = map[string]ActionHandler{
 	"hoe": func(b *bot.Bot, param, user string) {
 		radius := safecast.To[int32](ParseCount(param, 5))
 		go func() {
-			hoed := b.Farmer.HoeGround(context.Background(), radius)
+			hoed := b.Farmer.HoeGround(b.ActivityContext(), radius)
 			b.Logger.Debug("hoe complete", "count", hoed)
 			reportCountOutcome(b, user, "hoe", "hoe", hoed, "tidak ada tanah yang bisa dicangkul")
 		}()

@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"math"
 	"math/rand/v2"
 	"strconv"
 	"strings"
@@ -111,7 +112,8 @@ func (i *TickInterval) UnmarshalYAML(node *yaml.Node) error {
 		return nil
 	}
 
-	if lo, hi, isRange := strings.Cut(raw, "-"); isRange {
+	if idx := strings.Index(raw, "-"); idx > 0 {
+		lo, hi := raw[:idx], raw[idx+1:]
 		minD, err := parseTickBound(lo)
 		if err != nil {
 			return fmt.Errorf("tick_interval_sec: lower bound: %w", err)
@@ -140,8 +142,8 @@ func parseTickBound(raw string) (time.Duration, error) {
 		return 0, fmt.Errorf("empty bound")
 	}
 	if seconds, err := strconv.ParseFloat(raw, 64); err == nil {
-		if seconds <= 0 {
-			return 0, fmt.Errorf("%q is not a positive interval", raw)
+		if math.IsNaN(seconds) || math.IsInf(seconds, 0) || seconds <= 0 || seconds > 86400 {
+			return 0, fmt.Errorf("%q is not a valid positive interval", raw)
 		}
 		return time.Duration(seconds * float64(time.Second)), nil
 	}

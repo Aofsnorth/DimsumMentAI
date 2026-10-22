@@ -124,7 +124,7 @@ func digDownAction(b *bot.Bot, label, param, user string) {
 		})
 		return
 	}
-	b.Gatherer.DigDown(context.Background(), depth)
+	b.Gatherer.DigDown(b.ActivityContext(), depth)
 	ReportStatus(b, user, event.ActionStatus{Action: label, Count: depth, Success: true})
 }
 
@@ -142,6 +142,6 @@ func towerAction(b *bot.Bot, param, user string) {
 		})
 		return
 	}
-	b.Gatherer.TowerUp(context.Background(), height)
+	b.Gatherer.TowerUp(b.ActivityContext(), height)
 	ReportStatus(b, user, event.ActionStatus{Action: "buildtower", Count: height, Success: true})
 }

@@ -53,14 +53,14 @@ const maxMealsPerTick = 24
 // has enough time passed since the last meal? Kept separate from the action so
 // the judgement can be tested without the 1.6-second eating animation.
 func (m *Manager) ShouldAutoEat() bool {
-	if !m.autoEatOn {
-		return false
-	}
-
 	m.mu.Lock()
+	autoEat := m.autoEatOn
 	hunger := m.hungerLevel
 	lastEat := m.lastEatTime
 	m.mu.Unlock()
+	if !autoEat {
+		return false
+	}
 
 	if hunger > m.EatThreshold {
 		return false

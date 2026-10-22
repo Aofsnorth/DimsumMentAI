@@ -271,3 +271,17 @@ func TestParse_FollowupChained(t *testing.T) {
 		t.Errorf("FollowupSec = %d, want 3", r.FollowupSec)
 	}
 }
+
+func TestParse_SkipsEmptyActionLabelAndCapsFollowup(t *testing.T) {
+	res := ai.Parse("<action>:orphan_param</action><action>   :  </action><followup>9999999</followup>Siap")
+	if len(res.Actions) != 0 {
+		t.Fatalf("expected empty-label actions to be skipped, got %+v", res.Actions)
+	}
+	if res.FollowupSec != 300 {
+		t.Fatalf("expected FollowupSec capped at 300, got %d", res.FollowupSec)
+	}
+	steps := ai.ParsePlanSteps("<think><replan><step>dropall</step></replan></think><replan><step>jump</step></replan>")
+	if len(steps) != 1 || steps[0] != "jump" {
+		t.Fatalf("expected ParsePlanSteps to ignore <think> blocks, got %+v", steps)
+	}
+}

@@ -1,4 +1,4 @@
-package chat
+package chat_test
 
 import (
 	"strings"

@@ -42,7 +42,7 @@ func readSignWords(param string) []string {
 // instead of the bot pretending to know.
 func handleReadSign(b *bot.Bot, param, user string) {
 	go func() {
-		ctx := context.Background()
+		ctx := b.ActivityContext()
 		signs := b.Storage().FindSigns()
 		if len(signs) == 0 {
 			ReportStatus(b, user, event.ActionStatus{
@@ -118,7 +118,7 @@ func handleTakeFromChest(b *bot.Bot, param, user string) {
 			return
 		}
 		itemName, count := parseItemAndCount(param)
-		result, err := storageSearcher(b).Find(context.Background(), itemName, count)
+		result, err := storageSearcher(b).Find(b.ActivityContext(), itemName, count)
 		b.Logger.Info("take from chest complete",
 			"item", itemName,
 			"found", result.Found,
@@ -174,7 +174,7 @@ func handleStoreInChest(b *bot.Bot, param, user string) {
 			return
 		}
 		itemName, count := parseItemAndCount(param)
-		stored, err := storageSearcher(b).StoreItem(context.Background(), itemName, count)
+		stored, err := storageSearcher(b).StoreItem(b.ActivityContext(), itemName, count)
 		b.Logger.Info("store in chest complete", "item", itemName, "stored", stored)
 		if err != nil {
 			ReportStatus(b, user, event.ActionStatus{
@@ -223,7 +223,7 @@ func parseItemAndCount(param string) (string, int) {
 // anything, so the LLM (and the player) can plan with real information.
 func handleScanChests(b *bot.Bot, _, user string) {
 	go func() {
-		ctx := context.Background()
+		ctx := b.ActivityContext()
 		chests := b.Storage().FindContainers()
 		if len(chests) == 0 {
 			ReportStatus(b, user, event.ActionStatus{

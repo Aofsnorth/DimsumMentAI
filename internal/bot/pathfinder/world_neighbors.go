@@ -79,13 +79,11 @@ func (w *LocalWorldModel) GetNeighbors(node Node) []Node {
 // cannot climb to it — and every predicate involved reads a different block. This
 // dumps them together, per direction, from the frontier cell itself.
 func (w *LocalWorldModel) DebugClimbRefused(from, target Node) string {
-	w.mu.RLock()
-	hasBounds := w.hasBounds
-	w.mu.RUnlock()
+	sx, sy, sz, hasBounds := w.startBounds()
 	footing := w.footingTopY()
 	out := fmt.Sprintf("frontier=(%d,%d,%d) target=(%d,%d,%d) dy=%d footingTop=%.2f footingIsWall=%v bounds=%v:",
 		from.X, from.Y, from.Z, target.X, target.Y, target.Z, target.Y-from.Y, footing,
-		hasBounds && w.isFenceOrWall(w.startX, w.startY-1, w.startZ), hasBounds)
+		hasBounds && w.isFenceOrWall(sx, sy-1, sz), hasBounds)
 	for _, d := range []struct {
 		name   string
 		dx, dz int32
@@ -324,7 +322,7 @@ func (w *LocalWorldModel) diagonalSidesClear(cx, cy, cz, dx, dz int32) bool {
 
 // appendScaffoldNeighbors adds mining, placing, and tower-up neighbors when scaffolding is allowed.
 func (w *LocalWorldModel) appendScaffoldNeighbors(neighbors []Node, node Node) []Node {
-	if !w.AllowScaffold {
+	if !w.AllowScaffolding() {
 		return neighbors
 	}
 
@@ -480,15 +478,16 @@ const wallTopOverCell = 0.5
 // half a block above the top of the floor's cell, and that difference is the
 // whole question — so it is read from the world rather than assumed.
 func (w *LocalWorldModel) footingTopY() float64 {
-	if !w.hasBounds {
+	sx, sy, sz, hasBounds := w.startBounds()
+	if !hasBounds {
 		// No trip in progress, so there is no known footing. Refuse the climb
 		// rather than invent one.
 		return math.Inf(-1)
 	}
-	if w.isFenceOrWall(w.startX, w.startY-1, w.startZ) {
-		return float64(w.startY) + wallTopOverCell
+	if w.isFenceOrWall(sx, sy-1, sz) {
+		return float64(sy) + wallTopOverCell
 	}
-	return float64(w.startY)
+	return float64(sy)
 }
 
 // tryDrop searches up to maxSafeStandDrop blocks down for a safe landing.
@@ -539,7 +538,8 @@ func (w *LocalWorldModel) parkourStartClear(cx, cy, cz int32) bool {
 	if w.IsHazard(cx, cy-1, cz) {
 		return false
 	}
-	if !(w.hasBounds && cx == w.startX && cy == w.startY && cz == w.startZ) {
+	sx, sy, sz, hasBounds := w.startBounds()
+	if !(hasBounds && cx == sx && cy == sy && cz == sz) {
 		if !w.IsSolid(cx, cy-1, cz) {
 			return false
 		}
@@ -598,7 +598,8 @@ func (w *LocalWorldModel) stepJumpStartClear(cx, cy, cz int32) bool {
 	}
 	// At the bot's own current start position, the bot is already standing there.
 	// Allow jumping out of a pit or hole even if the block beneath reads as non-solid.
-	if !(w.hasBounds && cx == w.startX && cy == w.startY && cz == w.startZ) {
+	sx, sy, sz, hasBounds := w.startBounds()
+	if !(hasBounds && cx == sx && cy == sy && cz == sz) {
 		if !w.IsSolid(cx, cy-1, cz) {
 			return false
 		}

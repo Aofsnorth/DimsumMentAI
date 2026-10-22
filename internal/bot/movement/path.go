@@ -215,10 +215,10 @@ func RecalculatePath(b *bot.Bot) {
 		// it is also the model's public state, so it is restored on every exit path
 		// rather than left as it was set: a panic or early return used to leave
 		// scaffolding enabled for the rest of the session.
-		b.WorldModel.AllowScaffold = true
-		b.Logger.Info("Normal pathfinding failed, retrying with scaffolding and mining allowed...")
-		path = pathfinder.FindPath(start, target, b.WorldModel, false)
-		b.WorldModel.AllowScaffold = false
+		b.WorldModel.WithScaffold(func() {
+			b.Logger.Info("Normal pathfinding failed, retrying with scaffolding and mining allowed...")
+			path = pathfinder.FindPath(start, target, b.WorldModel, false)
+		})
 	}
 	partial := false
 	if len(path) == 0 {

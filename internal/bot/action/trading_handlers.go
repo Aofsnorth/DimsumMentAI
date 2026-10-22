@@ -28,6 +28,9 @@ import (
 // says why, which is the honest outcome — the alternative is a bot that reports
 // an emerald purchase it never made.
 func tradingManager(b *bot.Bot) *trading.Manager {
+	if b != nil && b.Trading != nil {
+		return b.Trading
+	}
 	return trading.NewManager(b, b.Logger)
 }
 
@@ -39,7 +42,7 @@ func handleTrade(b *bot.Bot, param, user string) {
 	go func() {
 		want := parseTradeParam(param)
 
-		result, ok := tradingManager(b).Trade(context.Background(), want)
+		result, ok := tradingManager(b).Trade(b.ActivityContext(), want)
 		if !ok {
 			ReportStatus(b, user, event.ActionStatus{
 				Action:  "trade",
@@ -72,7 +75,7 @@ func handleTrade(b *bot.Bot, param, user string) {
 // anything worth trading with before spending emeralds on a guess.
 func handleTradeList(b *bot.Bot, _, user string) {
 	go func() {
-		window, _, err := tradingManager(b).OpenTradeWindow(context.Background())
+		window, _, err := tradingManager(b).OpenTradeWindow(b.ActivityContext())
 		if err != nil {
 			ReportStatus(b, user, event.ActionStatus{
 				Action:  "trade_list",

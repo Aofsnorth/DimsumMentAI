@@ -183,7 +183,10 @@ var healingPotions = []string{
 
 // UseHealingPotion attempts to drink a healing potion
 func (m *Manager) UseHealingPotion() bool {
-	if time.Since(m.lastPotionTime) < 5*time.Second {
+	m.mu.Lock()
+	lastPotion := m.lastPotionTime
+	m.mu.Unlock()
+	if time.Since(lastPotion) < 5*time.Second {
 		return false
 	}
 

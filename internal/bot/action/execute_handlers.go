@@ -183,7 +183,7 @@ func runCraftAction(b *bot.Bot, param, user string, report bool) event.ActionSta
 	status.Count = count
 
 	b.Logger.Debug("Executing craft action", "item", itemName, "desired_count", count)
-	actual, err := craftChain(context.Background(), b, user, itemName, count, 0)
+	actual, err := craftChain(b.ActivityContext(), b, user, itemName, count, 0)
 	if err != nil {
 		b.Logger.Warn("CraftItem failed", "err", err, "item", itemName)
 		status.Error = err.Error()
@@ -724,7 +724,7 @@ func handleGive(b *bot.Bot, param, user string) {
 				count = safecast.To[int32](parsed)
 			}
 		}
-		success := b.InventoryMgr.Chest().GiveItem(context.Background(), itemName, user, count)
+		success := b.InventoryMgr.Chest().GiveItem(b.ActivityContext(), itemName, user, count)
 		b.Logger.Debug("give action complete", "success", success, "item", itemName)
 		reportBoolOutcome(b, user, "give", itemName, success, fmt.Sprintf("gagal memberi %s ke %s", itemName, user))
 	}()

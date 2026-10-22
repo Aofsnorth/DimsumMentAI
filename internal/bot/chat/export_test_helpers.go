@@ -94,3 +94,7 @@ func ParseGuardIntentForTest(msg string) (enable bool, ok bool) {
 func StateReplyTextForTest(b *bot.Bot, user, playerMsg, change string) string {
 	return stateReplyText(b, user, playerMsg, change)
 }
+
+func IsQuestionForTest(msg string) bool {
+	return isQuestion(msg)
+}

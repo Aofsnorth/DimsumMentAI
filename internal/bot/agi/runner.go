@@ -2107,7 +2107,7 @@ func isSilent(parsed ai.ParsedReply) bool {
 // wander is exported for the session bootstrap so a bot with nothing to do can
 // drift somewhere before the first decision tick.
 func (r *Runner) Wander() {
-	if r == nil || !r.cfg.Wander || r.b.Explorer == nil {
+	if r == nil || !r.cfg.Wander || r.b == nil || r.b.Explorer == nil {
 		return
 	}
 	// Wandering is movement, so it also retires the rest chain.
@@ -2121,5 +2121,5 @@ func (r *Runner) Wander() {
 	x, y, z := WanderTarget(seed, [3]float32{pos.X(), pos.Y(), pos.Z()}, r.cfg.WanderRadius)
 	r.b.Logger.Info("AGI: wandering",
 		slog.Float64("x", float64(x)), slog.Float64("y", float64(y)), slog.Float64("z", float64(z)))
-	go r.b.Explorer.ExploreRandom(context.Background(), time.Duration(r.cfg.WanderDurationSec)*time.Second)
+	go r.b.Explorer.ExploreRandom(r.b.ActivityContext(), time.Duration(r.cfg.WanderDurationSec)*time.Second)
 }

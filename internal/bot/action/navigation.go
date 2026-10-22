@@ -73,12 +73,13 @@ func ParseNavCoords(param string) (protocol.BlockPos, bool) {
 	if len(parts) != 3 {
 		return protocol.BlockPos{}, false
 	}
+	const maxCoord = 30000000.0
 	var coords [3]int32
 	for i, p := range parts {
 		// ParseFloat then truncate: strconv.Atoi rejects "12.5", and players
 		// routinely say "100.5, 64, -20" meaning block 100.
 		v, err := strconv.ParseFloat(strings.TrimSpace(p), 64)
-		if err != nil {
+		if err != nil || math.IsNaN(v) || math.IsInf(v, 0) || v < -maxCoord || v > maxCoord {
 			return protocol.BlockPos{}, false
 		}
 		coords[i] = int32(v)

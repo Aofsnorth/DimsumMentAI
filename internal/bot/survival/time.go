@@ -7,7 +7,11 @@ package survival
 // SetWorldTime updates the tracked world time (called from packet handler)
 func (m *Manager) SetWorldTime(ticks int64) {
 	m.mu.Lock()
-	m.worldTime = ticks % 24000
+	t := ticks % 24000
+	if t < 0 {
+		t += 24000
+	}
+	m.worldTime = t
 	m.isNight = m.worldTime >= 12500 && m.worldTime <= 23500
 	m.isDay = !m.isNight
 	m.mu.Unlock()

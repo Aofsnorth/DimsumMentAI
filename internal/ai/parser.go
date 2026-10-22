@@ -24,7 +24,7 @@ var actionRegex = regexp.MustCompile(`(?s)<action>(.*?)</action>`)
 // that contains no further '<') that never received its closing </action>.
 // Happens when the LLM gets truncated by MaxTokens mid-tag, leaving fragments
 // like `<action>drop:crafting_table</` in the reply.
-var unclosedActionRegex = regexp.MustCompile(`<action>[^<]*$`)
+var unclosedActionRegex = regexp.MustCompile(`(?s)<action>.*$`)
 
 // planRegex matches a <plan>...</plan> block containing <step> tags.
 var planRegex = regexp.MustCompile(`(?s)<plan>(.*?)</plan>`)
@@ -86,10 +86,15 @@ func Parse(reply string) ParsedReply {
 		planSteps = extractSteps(planMatch[1])
 	}
 
-	// Extract <followup>N</followup> delay (0 = no followup).
+	// Extract <followup>N</followup> delay (0 = no followup, capped at 300s).
 	followupSec := 0
 	if fm := followupRegex.FindStringSubmatch(reply); len(fm) >= 2 {
 		_, _ = fmt.Sscanf(fm[1], "%d", &followupSec)
+		if followupSec < 0 {
+			followupSec = 0
+		} else if followupSec > 300 {
+			followupSec = 300
+		}
 	}
 
 	// Find all <action>...</action> matches
@@ -112,6 +117,9 @@ func Parse(reply string) ParsedReply {
 		}
 		if len(parts) > 1 {
 			act.Param = strings.TrimSpace(parts[1])
+		}
+		if act.Label == "" {
+			continue
 		}
 		actions = append(actions, act)
 	}
@@ -152,6 +160,10 @@ func Parse(reply string) ParsedReply {
 // block in the reply. Returns nil if no plan/replan block is present.
 // Used by the planner to detect replan decisions during the agentic loop.
 func ParsePlanSteps(reply string) []string {
+	reply = thinkRegex.ReplaceAllString(reply, "")
+	reply = leadingThinkCloseRegex.ReplaceAllString(reply, "")
+	reply = unclosedThinkRegex.ReplaceAllString(reply, "")
+	reply = strings.TrimSpace(reply)
 	// Try <replan> first (used during re-evaluation).
 	if m := replanRegex.FindStringSubmatch(reply); len(m) >= 2 {
 		return extractSteps(m[1])

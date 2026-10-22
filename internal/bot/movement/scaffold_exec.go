@@ -121,7 +121,7 @@ func buildScaffoldStep(b *bot.Bot, node pathfinder.Node) stepOutcome {
 		}
 		b.Logger.Info("scaffold: breaking the block in the way",
 			"support", step.Support, "block", name)
-		broken, reason := scaffold.BreakAndWait(context.Background(), b, step.Support, scaffold.BreakDuration(name))
+		broken, reason := scaffold.BreakAndWait(b.ActivityContext(), b, step.Support, scaffold.BreakDuration(name))
 		if !broken {
 			b.Logger.Warn("scaffold: could not break the obstruction",
 				"support", step.Support, "block", name, "reason", reason)
@@ -130,7 +130,7 @@ func buildScaffoldStep(b *bot.Bot, node pathfinder.Node) stepOutcome {
 		if b.WorldModel != nil {
 			b.WorldModel.SetSolid(step.Support.X(), step.Support.Y(), step.Support.Z(), false)
 		}
-	} else if ok, reason := scaffold.ClearCell(context.Background(), b, step.Support, false, tier); !ok {
+	} else if ok, reason := scaffold.ClearCell(b.ActivityContext(), b, step.Support, false, tier); !ok {
 		b.Logger.Warn("scaffold: cannot place here", "support", step.Support, "reason", reason)
 		return stepFailed
 	}
@@ -179,7 +179,7 @@ func clearScaffoldHeadroom(b *bot.Bot, step scaffold.Step, node pathfinder.Node,
 	// Peek first: the counter decides what to do, and it is only worth a count
 	// if the cell is actually blocked by something the tools cannot take.
 	lastResort := b.NoteHeadroomDetour(node.X, node.Y, node.Z)
-	action, reason := scaffold.ClearHeadroom(context.Background(), b, step.Headroom, tier, lastResort)
+	action, reason := scaffold.ClearHeadroom(b.ActivityContext(), b, step.Headroom, tier, lastResort)
 	if action == scaffold.HeadroomFree || action == scaffold.HeadroomBreak {
 		b.RefundHeadroomDetour(node.X, node.Y, node.Z)
 	}
@@ -203,7 +203,7 @@ func mineBlockIfSolid(b *bot.Bot, x, y, z int32) {
 	// the same 800ms. The scaffold package knows the real cost of a block and
 	// treats a plant as free.
 	name, _ := b.GetBlockName(x, y, z)
-	broken, reason := scaffold.BreakAndWait(context.Background(), b, cell, scaffold.BreakDuration(name))
+	broken, reason := scaffold.BreakAndWait(b.ActivityContext(), b, cell, scaffold.BreakDuration(name))
 	if !broken {
 		b.Logger.Warn("scaffold: could not clear the blocking block",
 			"pos", cell, "block", name, "reason", reason)
@@ -244,7 +244,7 @@ func placeScaffoldBlock(b *bot.Bot, step scaffold.Step) stepOutcome {
 	b.Logger.Info("Placing scaffold support",
 		"support", step.Support, "click", step.Click, "item", item)
 
-	ctx := context.Background()
+	ctx := b.ActivityContext()
 
 	// The jump — only when the body is in the way, and only until it clears the
 	// cell — now lives inside PlaceVerified, the one place that knows which cell

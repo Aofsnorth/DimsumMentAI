@@ -80,8 +80,8 @@ func TestIsQuestionMatchesByPosition(t *testing.T) {
 		"kok diem aja",
 		"gimana caranya",
 	} {
-		if !isQuestion(msg) {
-			t.Errorf("isQuestion(%q) = false, want true", msg)
+		if !chat.IsQuestionForTest(msg) {
+			t.Errorf("chat.IsQuestionForTest(%q) = false, want true", msg)
 		}
 	}
 	for _, msg := range []string{
@@ -92,8 +92,8 @@ func TestIsQuestionMatchesByPosition(t *testing.T) {
 		// leading-"apa" rule is left simple rather than special-cased.
 		"jalan aja ga usah lari",
 	} {
-		if isQuestion(msg) {
-			t.Errorf("isQuestion(%q) = true, want false", msg)
+		if chat.IsQuestionForTest(msg) {
+			t.Errorf("chat.IsQuestionForTest(%q) = true, want false", msg)
 		}
 	}
 }

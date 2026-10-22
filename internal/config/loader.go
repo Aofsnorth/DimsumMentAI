@@ -2,6 +2,7 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -18,7 +19,7 @@ func LoadEnv() error {
 	if err := godotenv.Load(); err != nil {
 		// Only treat read errors (e.g. malformed file) as fatal; a missing
 		// .env is fine when the vars are already in the environment.
-		if _, ok := err.(*os.PathError); !ok {
+		if !errors.Is(err, os.ErrNotExist) {
 			return fmt.Errorf("load .env: %w", err)
 		}
 	}
@@ -28,7 +29,9 @@ func LoadEnv() error {
 func Load(path string) (*Config, error) {
 	// Load .env from the working directory so API keys and other secrets can
 	// live outside the YAML. Existing env vars take precedence over .env.
-	_ = LoadEnv()
+	if err := LoadEnv(); err != nil {
+		return nil, err
+	}
 
 	data, err := os.ReadFile(path)
 	if err != nil {

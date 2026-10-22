@@ -61,15 +61,15 @@ Minecraft Bedrock AI/
 ## 🚀 Getting Started
 
 ### Prerequisites
-* **Go 1.24** or higher installed on your system.
+* **Go 1.26** or higher installed on your system.
 * A running **Minecraft Bedrock Server** (tested on Bedrock Dedicated Server `1.26.x`).
 * An **NVIDIA NIM API Key** (optional, for LLM chat capabilities).
 
 ### Installation
 1. Clone this repository:
    ```bash
-   git clone https://github.com/Aofsnorth/MinecraftBedrockAI.git
-   cd MinecraftBedrockAI
+   git clone https://github.com/Aofsnorth/DimsumMentAI.git
+   cd DimsumMentAI
    ```
 2. Build the project:
    ```bash

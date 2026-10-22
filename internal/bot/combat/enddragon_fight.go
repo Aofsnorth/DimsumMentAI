@@ -97,10 +97,13 @@ func (cm *CombatManager) dragonShield(s DragonSituation) Situation {
 // combat tick runs many times a second, and the reason for the current posture
 // is worth reading once rather than five times a second.
 func (cm *CombatManager) logDragonPlan(action DragonAction, s DragonSituation) {
+	cm.mu.Lock()
 	if cm.dragonActionSet && cm.dragonAction == action {
+		cm.mu.Unlock()
 		return
 	}
 	cm.dragonAction, cm.dragonActionSet = action, true
+	cm.mu.Unlock()
 	cm.logger.Info("Ender Dragon: plan changed",
 		"action", action.String(),
 		"distance", s.DragonDistance,

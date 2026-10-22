@@ -48,9 +48,9 @@ func PreviewPath(b *bot.Bot, dest mgl32.Vec3) PathPreview {
 
 	path := pathfinder.FindPath(start, target, b.WorldModel, false)
 	if len(path) == 0 {
-		b.WorldModel.AllowScaffold = true
-		path = pathfinder.FindPath(start, target, b.WorldModel, false)
-		b.WorldModel.AllowScaffold = false
+		b.WorldModel.WithScaffold(func() {
+			path = pathfinder.FindPath(start, target, b.WorldModel, false)
+		})
 		if len(path) > 0 {
 			result.UsedScaffold = true
 		}
