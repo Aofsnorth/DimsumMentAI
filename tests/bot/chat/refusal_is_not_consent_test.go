@@ -190,3 +190,36 @@ func TestInferActionIntent_InteractVerbs(t *testing.T) {
 		})
 	}
 }
+
+func TestInferActionIntent_ExpandedCasualCommands(t *testing.T) {
+	t.Parallel()
+
+	for _, reply := range []string{"gas", "otw", "sabi", "yoi", "kuy"} {
+		if !chat.IsAffirmativeReplyForTest(reply) {
+			t.Errorf("casual gamer agreement %q was not recognised by isAffirmativeReply", reply)
+		}
+	}
+
+	cases := []struct {
+		msg       string
+		reply     string
+		wantLabel string
+		wantParam string
+	}{
+		{"tebang 4 kayu", "gas", "gather", "oak_log,4"},
+		{"taruh crafting table", "oke", "place", "crafting_table"},
+		{"pakai armor", "siap", "armor", ""},
+		{"buang yang dipegang", "oke", "drop", ""},
+		{"joget dulu", "gas", "dance", "6"},
+		{"twerk dong", "wkwk oke", "twerk", "5"},
+	}
+	for _, tc := range cases {
+		steps := chat.InferActionIntentForTest(tc.msg, tc.reply)
+		if len(steps) != 1 {
+			t.Fatalf("%q produced %v, want 1 step", tc.msg, steps)
+		}
+		if steps[0].Label != tc.wantLabel || steps[0].Param != tc.wantParam {
+			t.Errorf("%q -> %s:%s, want %s:%s", tc.msg, steps[0].Label, steps[0].Param, tc.wantLabel, tc.wantParam)
+		}
+	}
+}

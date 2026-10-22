@@ -12,20 +12,7 @@ import (
 
 var coordinateIntentRegex = regexp.MustCompile(`(?i)(?:koordinat|kordinat|coords?|coordinate|goto|jalan\s+ke|pergi\s+ke|ke)[^-+0-9]*([-+]?\d+(?:\.\d+)?)\s+([-+]?\d+(?:\.\d+)?)\s+([-+]?\d+(?:\.\d+)?)`)
 
-// comeIntentRegex matches "come to me" in the phrasings a player actually
-// types, rather than the four contiguous strings the old list enumerated.
-//
-// There are two shapes and both are needed. A verb carrying a destination —
-// "datang ke sini", "pergi ke tempat ku" — has the two parts in that order with
-// a little filler between them, because in Indonesian the verb and the
-// destination are separable words rather than one fixed phrase. And a
-// destination that stands alone — "kesini", "come here" — needs no verb at all,
-// because the destination is itself the request.
-//
-// Demanding a verb AND a destination rejects every standalone phrasing, because
-// "kesini" has no verb in front of it; and listing only standalone phrasings
-// rejects every one that has a verb, which is what the old four-string list did.
-// Both failures are silent and both read to a player as the bot ignoring them.
+// comeIntentRegex matches "come to me" in the phrasings a player actually types.
 var comeIntentRegex = regexp.MustCompile(
 	`(?i)(?:` +
 		// Verb, then filler, then the destination.
@@ -41,21 +28,11 @@ var comeIntentRegex = regexp.MustCompile(
 
 // followIntentRegex matches "stay with me" as a standing order rather than a
 // one-off trip.
-//
-// It is separate from comeIntentRegex because the two are different requests:
-// "come" walks to where the player is now and stops, "follow" keeps walking
-// after them. A bot that answered "ikut aku" with a one-off walk would arrive,
-// stop, and then look broken when the player kept moving.
 var followIntentRegex = regexp.MustCompile(
 	`(?i)\b(?:ikut|follow|ikuti|iring|iringi|temani|bareng|beser)\b`)
 
 // stopFollowingIntentRegex matches a request to stop following, in the
 // phrasings a player uses rather than as a command nobody knows about.
-//
-// The opt-out has to be as easy to say as the opt-in. "Berhenti ikutin aku" was
-// typed at the bot and the bot kept following for four minutes, because the
-// only thing it heard was "!nofollow" — a command that exists in the source and
-// in no player's head. Both halves of the exchange have to be plain speech.
 var stopFollowingIntentRegex = regexp.MustCompile(
 	`(?i)\b(?:berhenti|stop)\w*\b[\s\S]{0,20}?\b\w*ikut\w*\b` +
 		`|\b(?:berhenti|stop)\w*\b[\s\S]{0,20}?\b(?:following|follow|iring\w*|mengekor)\b` +
@@ -92,7 +69,11 @@ func isStopAttackIntent(msg string) bool {
 
 func fallbackMovementActions(msg string) []action.Step {
 	msg = strings.TrimSpace(msg)
-	if msg == "" {
+	if msg == "" || isQuestion(msg) || isStopFollowingIntent(msg) {
+		return nil
+	}
+	lower := strings.ToLower(msg)
+	if containsAny(lower, "jangan ke sini", "jangan kesini", "gak usah ke sini", "ga usah ke sini", "jangan ikut", "gak usah ikut", "ga usah ikut") {
 		return nil
 	}
 	if match := coordinateIntentRegex.FindStringSubmatch(msg); len(match) == 4 {
@@ -102,28 +83,6 @@ func fallbackMovementActions(msg string) []action.Step {
 		}}
 	}
 
-	// The "come here" intent, matched as phrases rather than as four exact
-	// substrings.
-	//
-	// The list used to be `kesini`, `ke sini`, `come here`, `datang ke sini`,
-	// and that is four ways of saying one thing out of the several dozen a
-	// player actually types. "ke tempat ku", "ikut aku", "sini dong" and
-	// "follow me" are the same request and none of them matched, so the bot
-	// answered them in chat and then stood there — which reads as the bot
-	// ignoring an explicit instruction, and is worse than not understanding it
-	// because it looked like it had heard.
-	//
-	// The verbs are matched separately from the particles that carry them,
-	// because in Indonesian the two are separable: "ikut" with "sini", "ke"
-	// with "tempatku", "datang" with "ke sini". Requiring one contiguous string
-	// per phrasing is what made the old list miss the common cases.
-	lower := strings.ToLower(msg)
-
-	// Follow is tested first because it is the more specific of the two, and the
-	// patterns overlap: "ikut aku" is a follow request and it also matches the
-	// come pattern's "ikut … aku" verb-plus-destination shape. Testing come
-	// first would answer a standing order with a one-off walk — the bot would
-	// arrive, stop, and look broken the moment the player moved again.
 	if followIntentRegex.MatchString(lower) {
 		return []action.Step{{Label: "follow"}}
 	}
@@ -133,43 +92,17 @@ func fallbackMovementActions(msg string) []action.Step {
 	return nil
 }
 
-// affirmativeWords are markers a chatty LLM uses to commit to an action
-// without actually emitting the <action> tag. When we see one of these in the
-// reply AND the user message has clear action intent, we synthesize the
-// action ourselves.
-//
-// The trailing spaces these entries used to carry were an attempt at whole-word
-// matching and were not enough: "ya " is a substring of "saya ", so the refusal
-// "Saya tak bisa" matched, and the action this synthesises is a mine run — so the
-// bot cheerfully started the exact job the model had just declined. A refusal
-// and an agreement differ only by a prefix, and substring matching cannot tell
-// them apart. See isAffirmativeReply.
-// gatherEverythingCount is what "all of it" resolves to. Not a limit: the
-// gatherer stops when the world runs out of candidates, so a count past any
-// plausible stack means the player gets everything there is.
+// gatherEverythingCount is what "all of it" resolves to.
 const gatherEverythingCount = 4096
 
 var affirmativeWords = []string{
 	"siap", "oke", "ok", "okay", "iya", "ya", "yes", "sip", "bentar",
 	"sebentar", "bntar", "baik", "lanjut", "mau", "akan", "i'll", "got it",
+	"gas", "gaskan", "sabi", "otw", "yoi", "kuy", "ayo", "ayok", "boleh", "sure",
 }
 
 // isQuestion reports whether a player message asks whether something is
 // possible rather than asking for it to be done.
-//
-// The intent fallback acts whenever the model's reply sounds willing and the
-// message names a verb — and a question names the same verb as a command.
-// "bisa klik npc didepan gak?" carries the same word "klik" as "klik npc
-// didepan", which is how a status report about a failed click turned into a
-// silent retry the player never asked for: they asked IF it could be done and
-// the bot answered by doing it again.
-//
-// The markers are punctuation and position, not vocabulary. A trailing "?" is
-// a question in every phrasing; spoken chat drops it constantly, so a bare
-// interrogative particle in the tail ("...gak", "...ga", "...nggak") and a
-// leading interrogative ("apa ...", "bisakah ...") count too. Everything else
-// stays a command: "klik npc yang bisa ditekan" carries its interrogative
-// mid-sentence, where it modifies a noun and not the request.
 func isQuestion(msg string) bool {
 	trimmed := strings.TrimSpace(msg)
 	if strings.HasSuffix(trimmed, "?") {
@@ -185,16 +118,11 @@ func isQuestion(msg string) bool {
 	return questionTailWords[words[len(words)-1]]
 }
 
-// questionLeadingWords are sentence-openers that make a message a question
-// however it ends. Exact-word matches only: "apain" starts with "apa" and is
-// a command.
 var questionLeadingWords = map[string]bool{
 	"apa": true, "apakah": true, "bisakah": true, "gimana": true,
 	"bagaimana": true, "kenapa": true, "kok": true,
 }
 
-// questionTailWords are the particles Indonesian hangs on the end of a
-// question when the "?" is left out of chat.
 var questionTailWords = map[string]bool{
 	"gak": true, "ga": true, "gk": true, "nggak": true, "ngga": true, "ngk": true,
 	"bukan": true, "kah": true, "bisagak": true,
@@ -202,10 +130,6 @@ var questionTailWords = map[string]bool{
 
 // isAffirmativeReply reports whether the LLM's reply text contains a word
 // indicating it committed to performing an action.
-//
-// Matched on word boundaries, not by substring. Punctuation counts as a
-// boundary, so "ya!" and "iya," are agreements; "saya", "dayat" and "biaya"
-// are not.
 func isAffirmativeReply(reply string) bool {
 	lower := strings.ToLower(reply)
 	for _, w := range affirmativeWords {
@@ -232,26 +156,11 @@ func isAffirmativeReply(reply string) bool {
 	return false
 }
 
-// negators are the words that turn a marker into its opposite. "Belum siap" is
-// "not ready" and contains "siap" on its own; "tidak akan" contains "akan". A
-// refusal that happens to contain a marker word is the case this matcher exists
-// to get right, so a marker immediately preceded by one of these does not count.
 var negators = []string{"belum", "tidak", "nggak", "ndak", "gak", "bukan", "jangan"}
 
-// precededByNegator reports whether the word at start is negated.
-//
-// Only the word immediately before is considered. Negation attaches to the
-// clause it precedes, and a marker several words into a sentence is not what
-// "belum siap" means — "saya belum bisa, tapi oke ya" still commits.
 func precededByNegator(lower string, start int) bool {
-	// The prefix ends at the marker, so it ends with whatever separated the two
-	// words — a space in every natural sentence. Trimmed before comparing, or
-	// the suffix test looks for " belum" in "saya belum " and never finds it.
 	prefix := strings.TrimRight(lower[:start], " ")
 	for _, neg := range negators {
-		// The negator must be a whole word: it is the whole prefix, or it ends a
-		// space-delimited word. Anything else is a longer word that merely
-		// happens to end in the same letters.
 		if prefix == neg || strings.HasSuffix(prefix, " "+neg) {
 			return true
 		}
@@ -259,10 +168,6 @@ func precededByNegator(lower string, start int) bool {
 	return false
 }
 
-// isWordBoundary reports whether b can sit next to a matched word without being
-// part of it. ASCII letters, digits and underscore continue a word; everything
-// else ends it — including every byte of a multi-byte rune, so a leading
-// non-ASCII letter cannot fake a boundary.
 func isWordBoundary(b byte) bool {
 	switch {
 	case b >= 'a' && b <= 'z', b >= 'A' && b <= 'Z', b >= '0' && b <= '9', b == '_':
@@ -279,24 +184,56 @@ var itemAliases = [][2]string{
 	{"crafting_table", "crafting_table"},
 	{"crafting table", "crafting_table"},
 	{"craftingtable", "crafting_table"},
+	{"diamond_pickaxe", "diamond_pickaxe"},
+	{"diamond pickaxe", "diamond_pickaxe"},
+	{"diamond_sword", "diamond_sword"},
+	{"diamond sword", "diamond_sword"},
+	{"wooden_pickaxe", "wooden_pickaxe"},
+	{"wooden pickaxe", "wooden_pickaxe"},
+	{"wooden_shovel", "wooden_shovel"},
+	{"wooden_sword", "wooden_sword"},
+	{"wooden sword", "wooden_sword"},
+	{"wooden_axe", "wooden_axe"},
+	{"stone_pickaxe", "stone_pickaxe"},
+	{"stone pickaxe", "stone_pickaxe"},
+	{"stone_sword", "stone_sword"},
+	{"stone sword", "stone_sword"},
+	{"stone_axe", "stone_axe"},
+	{"iron_pickaxe", "iron_pickaxe"},
+	{"iron pickaxe", "iron_pickaxe"},
+	{"iron_sword", "iron_sword"},
+	{"iron sword", "iron_sword"},
+	{"pedang diamond", "diamond_sword"},
+	{"pedang besi", "iron_sword"},
+	{"pedang batu", "stone_sword"},
+	{"pedang kayu", "wooden_sword"},
+	{"pickaxe diamond", "diamond_pickaxe"},
+	{"pickaxe besi", "iron_pickaxe"},
+	{"pickaxe batu", "stone_pickaxe"},
+	{"pickaxe kayu", "wooden_pickaxe"},
+	{"kapak batu", "stone_axe"},
+	{"kapak kayu", "wooden_axe"},
 	{"oak_planks", "oak_planks"},
 	{"oak planks", "oak_planks"},
+	{"dark_oak_log", "dark_oak_log"},
+	{"spruce_log", "spruce_log"},
+	{"birch_log", "birch_log"},
 	{"oak_log", "oak_log"},
 	{"oak log", "oak_log"},
-	{"wooden_axe", "wooden_axe"},
-	{"wooden_pickaxe", "wooden_pickaxe"},
-	{"wooden_shovel", "wooden_shovel"},
-	{"stone_axe", "stone_axe"},
-	{"stone_pickaxe", "stone_pickaxe"},
 	{"cobblestone", "cobblestone"},
 	{"cobble", "cobblestone"},
+	{"cooked_beef", "cooked_beef"},
 	{"furnace", "furnace"},
+	{"kompor", "furnace"},
 	{"chest", "chest"},
+	{"peti", "chest"},
 	{"stick", "stick"},
 	{"torch", "torch"},
+	{"obor", "torch"},
 	{"planks", "oak_planks"},
 	{"papan", "oak_planks"},
 	{"kayu", "oak_log"},
+	{"pohon", "oak_log"},
 	{"wood", "oak_log"},
 	{"log", "oak_log"},
 	{"dirt", "dirt"},
@@ -305,108 +242,47 @@ var itemAliases = [][2]string{
 	{"batu", "stone"},
 	{"sand", "sand"},
 	{"pasir", "sand"},
+	{"bread", "bread"},
+	{"roti", "bread"},
+	{"apple", "apple"},
+	{"apel", "apple"},
+	{"steak", "cooked_beef"},
+	{"daging", "cooked_beef"},
+	{"pedang", "wooden_sword"},
+	{"pickaxe", "wooden_pickaxe"},
+	{"kapak", "wooden_axe"},
 }
 
 var countRegex = regexp.MustCompile(`\d+`)
 
 // inferActionIntent guesses an action tag from raw user message text. Use
 // only as a fallback when the LLM replied affirmatively but forgot the
-// <action> markup. The LLM reply is also scanned for the item name, since
-// users often omit it ("coba pegang di tangan") while the reply names it
-// ("oke aku pegang oak log-nya").
+// <action> markup.
 func inferActionIntent(msg, reply string) []action.Step {
-	lower := strings.ToLower(msg)
-	replyLower := strings.ToLower(reply)
-
-	// A question is never a request. "bisa klik npc didepan gak?" shares every
-	// verb with "klik npc didepan", and this function keys on verbs — which is
-	// how the answer to "can you?" became the act itself. The gate lives here,
-	// at the synthesiser, so every caller inherits it.
 	if isQuestion(msg) {
 		return nil
 	}
+	lower := strings.ToLower(msg)
+	replyLower := strings.ToLower(reply)
 
-	if containsAny(lower, "klik", "click", "interact", "tekan", "pencet", "sentuh") ||
-		(containsAny(lower, "buka") && (containsAny(lower, "pintu", "door", "chest", "peti", "trapdoor", "gerbang", "gate", "barrel"))) {
-		req := interact.ParseRequest(msg)
-		param := "depan"
-		if req.Block != "" {
-			param = req.Block
-		} else if req.Entity != "" {
-			param = req.Entity
-		} else if req.InFront {
-			param = "depan"
-		} else {
-			replyReq := interact.ParseRequest(reply)
-			if replyReq.Block != "" {
-				param = replyReq.Block
-			} else if replyReq.Entity != "" {
-				param = replyReq.Entity
-			}
-		}
-		return []action.Step{{Label: "interact", Param: param}}
+	if steps, ok := inferDirectActionIntent(lower, msg, reply); ok {
+		return steps
 	}
 
-	var label string
-	switch {
-	case containsAny(lower, "buatin", "bikin", "buat ", "craft", "bikinin"):
-		label = "craft"
-	case containsAny(lower, "kasih", "kasi", "berikan", "kasihin", "give"):
-		label = "give"
-	case containsAny(lower, "drop", "buang", "lempar"):
-		label = "drop"
-	case containsAny(lower, "pegang", "genggam", "equip", "hold", "pakai", "pake ", "tahan"):
-		label = "equip"
-	case containsAny(lower, "cari", "kumpulin", "kumpulkan", "ambilin", "carikan", "gather", "bawa", "tambah", "butuh", "butuhin", "kurang"):
-		label = "gather"
-	case containsAny(lower, "tambang", "mining", "mine ", "gali"):
-		label = "mine"
-	case containsAny(lower, "makan", "eat"):
-		label = "eat"
-	default:
+	label := resolveItemActionLabel(lower)
+	if label == "" {
 		return nil
 	}
 
-	// Resolve target item from aliases, preferring the user message and
-	// falling back to the LLM reply.
-	var item string
-	for _, alias := range itemAliases {
-		if strings.Contains(lower, alias[0]) || strings.Contains(replyLower, alias[0]) {
-			item = alias[1]
-			break
-		}
-	}
+	item := resolveItemFromAliases(lower, replyLower)
 	if item == "" {
 		return nil
 	}
 
-	count := 1
-	additional := false
-	if containsAny(lower, "semua", "semuanya", "all") {
-		// "Take all of them" is not a request for zero. Zero was the encoding
-		// here, and zero is not neutral downstream: the gatherer reads a count of
-		// zero or less as "one block" and proceeds, so "ambil semua batu yang ada"
-		// felled exactly one block and reported success.
-		//
-		// The gatherer loops until the count is reached or the world runs out of
-		// candidates, so a count past any plausible stack means what the player
-		// asked for: everything there is.
-		count = gatherEverythingCount
-	} else {
-		// "lagi", "tambah", "more" — the player already has some and wants more
-		// on top. Without this the count is read as a total, and a bot holding 6
-		// asked for "6 lagi" reports that it already has enough and stops.
-		if containsAny(lower, "lagi", "lebih", "tambah", "tambahan", "additional", "more") {
-			additional = true
-		}
-		if m := countRegex.FindString(lower); m != "" {
-			_, _ = fmt.Sscanf(m, "%d", &count)
-		}
-	}
-
+	count, additional := resolveActionCount(lower)
 	param := item
 	switch label {
-	case "drop", "eat", "equip":
+	case "drop", "eat", "equip", "place":
 		// These handlers take a bare item name (no count).
 	default:
 		param = fmt.Sprintf("%s,%d", item, count)
@@ -416,6 +292,100 @@ func inferActionIntent(msg, reply string) []action.Step {
 	}
 
 	return []action.Step{{Label: label, Param: param}}
+}
+
+func inferDirectActionIntent(lower, msg, reply string) ([]action.Step, bool) {
+	if containsAny(lower, "klik", "click", "interact", "tekan", "pencet", "sentuh") ||
+		(containsAny(lower, "buka") && containsAny(lower, "pintu", "door", "chest", "peti", "trapdoor", "gerbang", "gate", "barrel")) {
+		return []action.Step{{Label: "interact", Param: resolveInteractParam(msg, reply)}}, true
+	}
+	if containsAny(lower, "pakai armor", "pake armor", "pasang armor", "equip armor") {
+		return []action.Step{{Label: "armor"}}, true
+	}
+	if containsAny(lower, "buang yang dipegang", "drop yang dipegang", "drop item di tangan", "drop tangan") {
+		return []action.Step{{Label: "drop", Param: ""}}, true
+	}
+	if containsAny(lower, "tidur", "sleep") {
+		return []action.Step{{Label: "sleep"}}, true
+	}
+	if containsAny(lower, "mancing", "memancing", "fishing") {
+		return []action.Step{{Label: "fish", Param: "5"}}, true
+	}
+	if containsAny(lower, "joget", "dance") {
+		return []action.Step{{Label: "dance", Param: "6"}}, true
+	}
+	if containsAny(lower, "twerk") {
+		return []action.Step{{Label: "twerk", Param: "5"}}, true
+	}
+	if containsAny(lower, "lompat", "loncat") {
+		return []action.Step{{Label: "jump"}}, true
+	}
+	return nil, false
+}
+
+func resolveInteractParam(msg, reply string) string {
+	req := interact.ParseRequest(msg)
+	if req.Block != "" {
+		return req.Block
+	}
+	if req.Entity != "" {
+		return req.Entity
+	}
+	if req.InFront {
+		return "depan"
+	}
+	replyReq := interact.ParseRequest(reply)
+	if replyReq.Block != "" {
+		return replyReq.Block
+	}
+	if replyReq.Entity != "" {
+		return replyReq.Entity
+	}
+	return "depan"
+}
+
+func resolveItemActionLabel(lower string) string {
+	switch {
+	case containsAny(lower, "buatin", "bikin", "buat ", "craft", "bikinin"):
+		return "craft"
+	case containsAny(lower, "taruh", "pasang", "letakkan", "place"):
+		return "place"
+	case containsAny(lower, "kasih", "kasi", "berikan", "kasihin", "give"):
+		return "give"
+	case containsAny(lower, "drop", "buang", "lempar"):
+		return "drop"
+	case containsAny(lower, "pegang", "genggam", "equip", "hold", "pakai", "pake ", "tahan"):
+		return "equip"
+	case containsAny(lower, "cari", "kumpulin", "kumpulkan", "ambil", "ambilin", "carikan", "gather", "bawa", "tambah", "butuh", "butuhin", "kurang", "tebang", "nebang", "potong"):
+		return "gather"
+	case containsAny(lower, "tambang", "mining", "mine ", "gali", "hancurin", "pecahin"):
+		return "mine"
+	case containsAny(lower, "makan", "eat"):
+		return "eat"
+	default:
+		return ""
+	}
+}
+
+func resolveItemFromAliases(lower, replyLower string) string {
+	for _, alias := range itemAliases {
+		if strings.Contains(lower, alias[0]) || strings.Contains(replyLower, alias[0]) {
+			return alias[1]
+		}
+	}
+	return ""
+}
+
+func resolveActionCount(lower string) (int, bool) {
+	if containsAny(lower, "semua", "semuanya", "all") {
+		return gatherEverythingCount, false
+	}
+	additional := containsAny(lower, "lagi", "lebih", "tambah", "tambahan", "additional", "more")
+	count := 1
+	if m := countRegex.FindString(lower); m != "" {
+		_, _ = fmt.Sscanf(m, "%d", &count)
+	}
+	return count, additional
 }
 
 func containsAny(s string, needles ...string) bool {

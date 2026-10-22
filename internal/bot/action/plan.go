@@ -10,10 +10,7 @@ import (
 )
 
 // statusTimeout bounds how long a plan step waits for its handler to say how it
-// went. It is generous on purpose — a chest search or a stronghold sweep is
-// real work — but it is a bound, because a handler that never reports is
-// indistinguishable from one that is still working, and a plan must not hang
-// on either. When it expires the step fails: silence is not a result.
+// went.
 const statusTimeout = 90 * time.Second
 
 type Step struct {
@@ -30,9 +27,13 @@ func ExecutePlan(b *bot.Bot, steps []Step, user string) {
 		return
 	}
 
+	ctx := b.ActivityContext()
 	go func() {
 		b.Logger.Debug("executing action plan", "steps", len(steps), "user", user)
 		for _, step := range steps {
+			if ctx != nil && ctx.Err() != nil {
+				return
+			}
 			label := strings.ToLower(strings.TrimSpace(step.Label))
 			if label == "" {
 				continue
@@ -45,25 +46,12 @@ func ExecutePlan(b *bot.Bot, steps []Step, user string) {
 
 // ExecuteAndWait runs one action synchronously and returns what actually
 // happened.
-//
-// It used to return a hard-coded success for every non-craft action once the
-// bot had stopped moving, which told the planner that steps it could not
-// perform — or that had failed — were done. The planner re-plans from these
-// answers, so an optimistic one walks it further away from the goal on every
-// retry. Now the verdict is the handler's own: a reported success is a success,
-// a reported failure is a failure carrying its reason, and a handler that says
-// nothing within the timeout fails the step rather than passing it.
-//
-// Craft keeps its structured path, which already returns the real outcome.
 func ExecuteAndWait(b *bot.Bot, label, param, user string) event.ActionStatus {
 	return ExecuteAndWaitWithTimeout(b, label, param, user, actionReportTimeout(label))
 }
 
 // actionReportTimeout resolves how long a step may run before "no result"
-// means failure. Most actions answer within seconds, but a big gather —
-// "cariin 200 kayu" — is a job measured in many minutes, and the planner
-// must keep waiting for its terminal report instead of declaring the step
-// dead at ninety seconds and re-running it over the top of the first try.
+// means failure.
 func actionReportTimeout(label string) time.Duration {
 	switch strings.ToLower(strings.TrimSpace(label)) {
 	case "gather", "chop", "treefarm", "automine", "fish", "harvest", "explore":
@@ -77,9 +65,6 @@ func actionReportTimeout(label string) time.Duration {
 func ExecuteAndWaitWithTimeout(b *bot.Bot, label, param, user string, timeout time.Duration) event.ActionStatus {
 	normalized := strings.ToLower(strings.TrimSpace(label))
 
-	// Rest and wait are satisfied by standing still. That is the instruction,
-	// not a shortcut around it, so it succeeds without dispatching anything and
-	// without waiting for a report that will never come.
 	if normalized == "" {
 		return event.ActionStatus{Action: normalized, Success: true}
 	}
@@ -88,8 +73,6 @@ func ExecuteAndWaitWithTimeout(b *bot.Bot, label, param, user string, timeout ti
 		return executeCraftActionSilent(b, param, user)
 	}
 
-	// An unhandled label must fail loudly. Letting it through as a no-op
-	// success is how a plan used to "complete" steps the bot never performed.
 	if _, ok := lookupHandler(normalized); !ok {
 		return event.ActionStatus{
 			Action:  normalized,
@@ -98,24 +81,15 @@ func ExecuteAndWaitWithTimeout(b *bot.Bot, label, param, user string, timeout ti
 		}
 	}
 
-	// Subscribe before dispatching: handlers that report synchronously do so
-	// from inside Execute, and a subscription installed afterwards would miss
-	// the very report it is waiting for.
 	statuses := SubscribeStatus(b)
 	defer UnsubscribeStatus(b, statuses)
 
 	Execute(b, normalized, param, user)
 
-	// Still wait for the bot to settle before reading the verdict. A handler
-	// that reported on dispatch (navigation, toggles) does so while the bot is
-	// still moving, and the action is not done until the motion is.
 	waitForActionSettled(b, normalized)
 
 	select {
 	case status := <-statuses:
-		// Keep the requested label when a handler reports under a different one
-		// (an alias such as "remember" reporting as "recall"), so the step the
-		// planner asked for stays identifiable in its own transcript.
 		if status.Action == "" {
 			status.Action = normalized
 		}
@@ -131,19 +105,13 @@ func ExecuteAndWaitWithTimeout(b *bot.Bot, label, param, user string, timeout ti
 
 func waitForActionSettled(b *bot.Bot, label string) {
 	switch label {
-	case "come", "goto", "walk", "force_walk":
+	case "come", "goto", "move", "walk", "force_walk", "gotoblock", "standon", "enterportal":
 		waitForMovementIdle(b, 65*time.Second)
-	case "emote":
-		// A staged routine reads as one motion: the next clause must not start
-		// mid-hop or mid-spin. The emote window is ticked down by the movement
-		// loop, so its end is observable; the timeout only bounds the wait for
-		// a loop that is not running.
+	case "emote", "jump", "dance", "twerk", "floss", "naenae", "robot", "breakdance",
+		"spinforever", "spinfast", "spinslow", "spinlookup", "spinlookdown",
+		"jumpforever", "jumpinplace", "jumpspincombo", "nod", "shake", "headbang", "wave", "dab":
 		waitForEmoteSettled(b, 5*time.Second)
 	case "gather", "chop", "treefarm", "mine", "automine", "loot", "clear", "scan":
-		// Event-driven: the wait returns the moment the gatherer stops. The
-		// long cap exists for jobs like "200 kayu" that legitimately run for
-		// many minutes — cutting them at ninety seconds started the next plan
-		// step (craft, place) while the bot was still chopping.
 		waitForGatheringIdle(b, actionReportTimeout(label))
 	case "craft":
 		time.Sleep(900 * time.Millisecond)
@@ -172,14 +140,26 @@ func waitForEmoteSettled(b *bot.Bot, timeout time.Duration) {
 
 func waitForMovementIdle(b *bot.Bot, timeout time.Duration) {
 	deadline := time.Now().Add(timeout)
+	startDeadline := time.Now().Add(350 * time.Millisecond)
+	seenMoving := false
 	for time.Now().Before(deadline) {
+		now := time.Now()
 		b.Mu.Lock()
 		state := b.MovementState
+		forceWalking := !b.ForceWalkUntil.IsZero() && now.Before(b.ForceWalkUntil)
 		b.Mu.Unlock()
-		if state == "idle" {
+
+		moving := (state != "" && state != "idle") || forceWalking
+		if moving {
+			seenMoving = true
+		}
+		if seenMoving && !moving {
 			return
 		}
-		time.Sleep(250 * time.Millisecond)
+		if !seenMoving && now.After(startDeadline) {
+			return
+		}
+		time.Sleep(100 * time.Millisecond)
 	}
 }
 

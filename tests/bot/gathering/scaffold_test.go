@@ -2,6 +2,9 @@ package gathering_test
 
 import (
 	"math"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -77,5 +80,28 @@ func TestTheScaffoldPlacementHasTimeToLand(t *testing.T) {
 	}
 	if gathering.ScaffoldSettle <= animation.SwingFloor {
 		t.Error("the settle is shorter than a swing pause; the two are pacing the same gesture")
+	}
+}
+
+func TestPlaceOneBlockUpdatesLocalWorldModelAndReturnToReachUsesGroundLevel(t *testing.T) {
+	t.Parallel()
+
+	scaffoldSrc, err := os.ReadFile(filepath.Join("..", "..", "..", "internal", "bot", "gathering", "scaffold.go"))
+	if err != nil {
+		t.Fatalf("read scaffold.go: %v", err)
+	}
+	if !strings.Contains(string(scaffoldSrc), "world.SetSolid(cell.X(), cell.Y(), cell.Z(), true)") {
+		t.Error("placeOneBlock does not mark the placed cell solid in LocalWorldModel; bot gets ungrounded/stuck on Geyser and DescendFromTower skips breaking it")
+	}
+
+	chopSrc, err := os.ReadFile(filepath.Join("..", "..", "..", "internal", "bot", "gathering", "chop_action.go"))
+	if err != nil {
+		t.Fatalf("read chop_action.go: %v", err)
+	}
+	if strings.Contains(string(chopSrc), "NavigateToBlock(pos.X(), pos.Y()-1, pos.Z()") {
+		t.Error("returnToReach still navigates to pos.Y()-1 in mid-air, causing A* to scaffold on the 4th log")
+	}
+	if !strings.Contains(string(chopSrc), "scaffoldHeightFloor") {
+		t.Error("repositionForLog does not gate towering behind scaffoldHeightFloor")
 	}
 }

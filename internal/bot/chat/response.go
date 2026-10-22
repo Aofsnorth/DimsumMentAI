@@ -74,12 +74,13 @@ func handleSilentActionResponse(b *bot.Bot, user, systemPrompt string, parsed ai
 // whisper back, because the server relays ordinary chat to everyone and the
 // whole point of whispering was that it would not be.
 func sendMainChatReply(b *bot.Bot, user string, parsed ai.ParsedReply) {
-	if parsed.CleanReply != "" {
+	clean := ai.StripUserPrefix(parsed.CleanReply, user)
+	if clean != "" {
 		b.Logger.Info("chat reply sending",
-			slog.String("reply", parsed.CleanReply),
+			slog.String("reply", clean),
 			slog.String("to", user),
 			slog.Bool("whisper", b.WhisperPartner() != ""))
-		b.SendReply(user, parsed.CleanReply)
+		b.SendReply(user, clean)
 		return
 	}
 	b.Logger.Info("chat: AI returned no visible reply text")
@@ -158,16 +159,17 @@ func handleSilentResponse(b *bot.Bot, sourceName string, systemPrompt string, ac
 				continue
 			}
 			parsed2 := ai.Parse(reply2)
-			if parsed2.CleanReply != "" {
-				b.Logger.Info("chat reply sending (status follow-up)", slog.String("reply", parsed2.CleanReply))
-				b.SendReply(sourceName, parsed2.CleanReply)
+			clean2 := ai.StripUserPrefix(parsed2.CleanReply, sourceName)
+			if clean2 != "" {
+				b.Logger.Info("chat reply sending (status follow-up)", slog.String("reply", clean2))
+				b.SendReply(sourceName, clean2)
 			}
 		} else if label == "inventory" {
 			newInvSummary := b.GetInventorySummary()
 			followPrompt := fmt.Sprintf(
 				"[SYSTEM: Hasil cek inventory MILIKMU (bot) saat ini: %s. "+
 					"LAPORKAN LANGSUNG ke <%s> dengan format 'Aku punya ...' atau 'Aku masih punya ...'. "+
-					"KAMU adalah bot Luna. JANGAN bilang 'Kamu punya' — itu berarti player. "+
+					"JANGAN bilang 'Kamu punya' karena itu berarti player, bukan dirimu. "+
 					"JANGAN bilang 'Oke aku cek dulu' atau 'Aku cek lagi'. Langsung sebutkan isi inventory. "+
 					"JANGAN sertakan label [inventory] atau tag <action> lagi.]",
 				newInvSummary, sourceName)
@@ -178,9 +180,10 @@ func handleSilentResponse(b *bot.Bot, sourceName string, systemPrompt string, ac
 				continue
 			}
 			parsed2 := ai.Parse(reply2)
-			if parsed2.CleanReply != "" {
-				b.Logger.Info("chat reply sending (inventory follow-up)", slog.String("reply", parsed2.CleanReply))
-				b.SendReply(sourceName, parsed2.CleanReply)
+			clean2 := ai.StripUserPrefix(parsed2.CleanReply, sourceName)
+			if clean2 != "" {
+				b.Logger.Info("chat reply sending (inventory follow-up)", slog.String("reply", clean2))
+				b.SendReply(sourceName, clean2)
 			}
 		}
 	}
@@ -244,9 +247,10 @@ func scheduleFollowup(b *bot.Bot, user string, delaySec int) {
 		}
 
 		parsed := ai.Parse(reply)
-		if parsed.CleanReply != "" {
-			b.Logger.Info("chat reply sending (follow-up)", slog.String("reply", parsed.CleanReply))
-			b.SendReply(user, parsed.CleanReply)
+		clean := ai.StripUserPrefix(parsed.CleanReply, user)
+		if clean != "" {
+			b.Logger.Info("chat reply sending (follow-up)", slog.String("reply", clean))
+			b.SendReply(user, clean)
 		}
 
 		// Execute any actions from the follow-up.

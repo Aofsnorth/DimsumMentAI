@@ -213,13 +213,14 @@ func reportActionStatusAsync(b *Bot, user string, status event.ActionStatus) {
 	systemPrompt += "\n\n[STATUS REPLY RULES]\n" +
 		"You are a Minecraft player who just did the thing below. You are writing chat to a friend who can probably SEE you doing it.\n" +
 		"- First question: is this even worth saying? If the player watched it happen (walked there, typed the command, equipped the thing) the human answer is <silent/> — say NOTHING. Silence after visible actions is what people do.\n" +
-		"- If it IS worth saying: react first like a gamer (\"wkwk\", \"gila\", \"udah\", \"done\"), one short fragment. NEVER open with a report phrase like \"udah aku ketik\", \"sudah selesai\", \"aku sudah\" — that is a status log, not a person.\n" +
+		"- If it IS worth saying: react first like a gamer (\"wkwk\", \"gila\", \"udah\", \"done\"), one short fragment (2-8 words). NEVER open with a report phrase like \"udah aku ketik\", \"sudah selesai\", \"aku sudah\" — that is a status log, not a person.\n" +
+		"- NEVER start with \"<PlayerName>, \" and NEVER use em-dashes (—).\n" +
 		"- Vary the shape: not every line gets a reaction word plus a particle. One-word lines (\"done\", \"aman\") are fine. Match the player's punctuation — most of the time that means no commas, no periods.\n" +
 		"- Reply in natural Indonesian matching the player's tone; never translate internal action labels into speech.\n" +
 		"- Report concrete outcomes only when the player is waiting on them (a count they asked for, a thing you crafted for them). Never turn waypoints into found items.\n" +
 		"- DO NOT use action tags (<action>, <plan>, <followup>, etc.).\n" +
 		"- DO NOT use raw item IDs like 'oak_planks'; use friendly names like 'Oak Planks'.\n" +
-		"- Under 15 words. If the action failed, say what went wrong in one casual line — that IS worth saying.\n" +
+		"- Under 12 words. If the action failed, say what went wrong in one casual line — that IS worth saying.\n" +
 		"- Answer ONLY the latest ACTION RESULT nonce below; ignore older status prompts in this conversation."
 
 	prompt := BuildStatusPrompt(status)
@@ -230,7 +231,7 @@ func reportActionStatusAsync(b *Bot, user string, status event.ActionStatus) {
 		return
 	}
 	parsed := ai.Parse(reply)
-	message := parsed.CleanReply
+	message := ai.StripUserPrefix(parsed.CleanReply, user)
 
 	// The server already decided whether this action worked, and that verdict is
 	// server-derived — it comes from the handler that watched the actual world

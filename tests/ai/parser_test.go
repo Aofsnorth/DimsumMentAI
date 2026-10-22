@@ -285,3 +285,58 @@ func TestParse_SkipsEmptyActionLabelAndCapsFollowup(t *testing.T) {
 		t.Fatalf("expected ParsePlanSteps to ignore <think> blocks, got %+v", steps)
 	}
 }
+
+func TestParse_StripsEmDashAndRoboticPrefix(t *testing.T) {
+	t.Parallel()
+	r := ai.Parse("Synterix, kok malah mukul? Aku kan lagi kerja—jangan diulang ya.")
+	if strings.Contains(r.CleanReply, "—") || strings.Contains(r.CleanReply, "–") {
+		t.Errorf("CleanReply still contains em-dash: %q", r.CleanReply)
+	}
+	stripped := ai.StripUserPrefix(r.CleanReply, ".Synterix")
+	if strings.HasPrefix(strings.ToLower(stripped), "synterix,") {
+		t.Errorf("StripUserPrefix failed to remove leading player vocative: %q", stripped)
+	}
+}
+
+func TestParse_CaseInsensitiveAndFallbackActionTags(t *testing.T) {
+	t.Parallel()
+	r1 := ai.Parse("otw <ACTION>come:Synterix</ACTION>")
+	if len(r1.Actions) != 1 || r1.Actions[0].Label != "come" || r1.Actions[0].Param != "Synterix" {
+		t.Fatalf("case-insensitive <ACTION> failed: %+v", r1)
+	}
+	if r1.CleanReply != "otw" {
+		t.Errorf("CleanReply = %q, want 'otw'", r1.CleanReply)
+	}
+
+	r2 := ai.Parse("siap [action:gather:oak_log,4]")
+	if len(r2.Actions) != 1 || r2.Actions[0].Label != "gather" || r2.Actions[0].Param != "oak_log,4" {
+		t.Fatalf("bracket [action:...] fallback failed: %+v", r2)
+	}
+	if r2.CleanReply != "siap" {
+		t.Errorf("CleanReply = %q, want 'siap'", r2.CleanReply)
+	}
+}
+
+func TestIsSyntheticPrompt(t *testing.T) {
+	t.Parallel()
+	for _, msg := range []string{
+		"[SYSTEM EVENT: Owner hit you]",
+		"[PROACTIVE TICK]",
+		"[AGI TICK 12:00] Kamu lagi main",
+		"[STATE CHANGE] stopped following",
+		"ACTION RESULT #123: gather succeeded",
+	} {
+		if !ai.IsSyntheticPrompt(msg) {
+			t.Errorf("IsSyntheticPrompt(%q) = false, want true", msg)
+		}
+	}
+	for _, msg := range []string{
+		"halo",
+		"cariin aku 6 oak log",
+		"jangan mukul",
+	} {
+		if ai.IsSyntheticPrompt(msg) {
+			t.Errorf("IsSyntheticPrompt(%q) = true, want false", msg)
+		}
+	}
+}

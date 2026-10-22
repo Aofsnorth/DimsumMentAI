@@ -47,7 +47,7 @@ func (cm *CombatManager) Tick(ctx context.Context) {
 
 			go func() {
 				time.Sleep(1 * time.Second)
-				cm.bot.InjectAIEvent("[SYSTEM: Target eliminated. Drop collected or none found. Tell the player naturally.]")
+				cm.bot.InjectAIEvent("[SYSTEM: Target eliminated. Reply <silent/> unless a 2-4 word casual reaction fits (e.g. 'mati juga', 'beres'). Do NOT narrate like a status log.]")
 			}()
 			return
 		}
@@ -269,7 +269,7 @@ func (cm *CombatManager) maybeBanter(target *entity.Info) {
 	if time.Now().UnixNano()%100 >= int64(chance) {
 		return
 	}
-	cm.bot.InjectAIEvent("[SYSTEM EVENT: Mid-duel moment against " + target.Name + ". If you have ONE very short line a real player would type right now (taunt, reaction, trash talk), send it as plain chat with no action tags. Otherwise stay completely silent.]")
+	cm.bot.InjectAIEvent("[SYSTEM EVENT: Mid-duel moment against " + target.Name + ". If you have ONE ultra-short line (2-4 words) a real gamer would type right now, send it as plain chat with no '—' and no action tags. Otherwise reply <silent/>.]")
 }
 
 // swingAt is the melee half of a tick: the range check, the cooldown, the sight

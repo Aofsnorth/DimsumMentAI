@@ -1,0 +1,2609 @@
+diff --git a/internal/ai/nvidia.go b/internal/ai/nvidia.go
+index 9e7ed64..23dcb29 100644
+--- a/internal/ai/nvidia.go
++++ b/internal/ai/nvidia.go
+@@ -6,6 +6,7 @@ import (
+ 	"io"
+ 	"net/http"
+ 	"os"
++	"strings"
+ 	"time"
+ )
+ 
+@@ -125,7 +126,6 @@ func NewLLMClient(provider, model, baseURL string) *NvidiaClient {
+ 	}
+ }
+ 
+-// SetPersona overrides the default persona prompt
+ // SetPersona overrides the default persona prompt and binds it to a name.
+ //
+ // botName is required because the persona templates carry a name placeholder:
+@@ -171,6 +171,7 @@ func (nc *NvidiaClient) BuildSystemPrompt(botName, botCoords, playerCoords, held
+ 			"\n- Your in-game username is \"" + botName + "\". When someone writes \"" + botName + "\" or \"@" + botName + "\", they are talking TO you — that name refers to YOU, not another player." +
+ 			"\n- Each incoming message is prefixed with the speaker's name in angle brackets, e.g. \"<PlayerName> their message\". The person you are replying to is that <PlayerName>." +
+ 			"\n- When you address someone, use the SPEAKER's name (the <PlayerName>), never your own username \"" + botName + "\"." +
++			"\n- Do NOT start your sentences with \"<PlayerName>, \" (e.g. NEVER write \"Synterix, kok malah mukul?\"). Real gamers in chat just talk directly without addressing the other player's full username at the start of a line." +
+ 			"\n- NEVER tag, mention, or greet your own username \"" + botName + "\" in a reply. Doing so is always wrong."
+ 	}
+ 
+@@ -208,6 +209,27 @@ func (nc *NvidiaClient) BuildSystemPrompt(botName, botCoords, playerCoords, held
+ 	return prompt
+ }
+ 
++// IsSyntheticPrompt reports whether a prompt is an internal system/tick/status
++// trigger rather than real player speech. Synthetic prompts must not be prefixed
++// as "<user> ..." or stored in conversation history, where unanswered turns
++// accumulate and merge via FixMessages into the next real chat turn.
++func IsSyntheticPrompt(message string) bool {
++	trimmed := strings.TrimSpace(message)
++	for _, prefix := range []string{
++		"[SYSTEM",
++		"[PROACTIVE TICK]",
++		"[AGI TICK",
++		"[STATE CHANGE]",
++		"[SIGN",
++		"ACTION RESULT #",
++	} {
++		if strings.HasPrefix(trimmed, prefix) {
++			return true
++		}
++	}
++	return false
++}
++
+ // Ask queries the LLM API with the player's message and returns the response.
+ func (nc *NvidiaClient) Ask(user, systemPrompt, message string) (string, error) {
+ 	messages := nc.prepareMessages(user, systemPrompt, message)
+@@ -224,14 +246,27 @@ func (nc *NvidiaClient) Ask(user, systemPrompt, message string) (string, error)
+ // prepareMessages builds the message sequence for a chat request, including
+ // recent conversation history and the new user message.
+ func (nc *NvidiaClient) prepareMessages(user, systemPrompt, message string) []Message {
+-	hist := nc.History.GetHistory(user)
++	var hist []Message
++	if nc.History != nil {
++		for _, m := range nc.History.GetHistory(user) {
++			if strings.Contains(m.Content, "ACTION RESULT #") || IsSyntheticPrompt(m.Content) {
++				continue
++			}
++			hist = append(hist, m)
++		}
++	}
+ 	if len(hist) > 10 {
+ 		hist = hist[len(hist)-10:]
+ 	}
+ 	rawMessages := make([]Message, 0, len(hist)+2)
+ 	rawMessages = append(rawMessages, Message{Role: "system", Content: systemPrompt})
+ 	rawMessages = append(rawMessages, hist...)
+-	rawMessages = append(rawMessages, Message{Role: "user", Content: fmt.Sprintf("<%s> %s", user, message)})
++
++	userContent := message
++	if !IsSyntheticPrompt(message) && user != "" {
++		userContent = fmt.Sprintf("<%s> %s", user, message)
++	}
++	rawMessages = append(rawMessages, Message{Role: "user", Content: userContent})
+ 
+ 	// Auto-compact so the request never exceeds 25% of the model's context
+ 	// window; oldest history is dropped first to keep the bot from stalling.
+@@ -239,8 +274,16 @@ func (nc *NvidiaClient) prepareMessages(user, systemPrompt, message string) []Me
+ }
+ 
+ // storeHistory stores the chat turn in the conversation history.
++// Synthetic/system prompts and silent turns are never stored so they cannot
++// pollute or merge into real player chat turns.
+ func (nc *NvidiaClient) storeHistory(user, message, reply string) {
++	if nc.History == nil || IsSyntheticPrompt(message) {
++		return
++	}
+ 	parsed := Parse(reply)
++	if parsed.CleanReply == "" {
++		return
++	}
+ 	nc.History.AddMessage(user, "user", fmt.Sprintf("<%s> %s", user, message))
+ 	nc.History.AddMessage(user, "assistant", parsed.CleanReply)
+ }
+diff --git a/internal/ai/parser.go b/internal/ai/parser.go
+index 1bcd481..6be52a2 100644
+--- a/internal/ai/parser.go
++++ b/internal/ai/parser.go
+@@ -18,72 +18,74 @@ type ParsedReply struct {
+ 	FollowupSec int      // delay in seconds before a follow-up message, from <followup>N</followup>
+ }
+ 
+-var actionRegex = regexp.MustCompile(`(?s)<action>(.*?)</action>`)
++var actionRegex = regexp.MustCompile(`(?is)<action(?:\s+[^>]*)?>(.*?)</action>`)
+ 
+-// unclosedActionRegex matches an opening <action> tag (and any text after it
+-// that contains no further '<') that never received its closing </action>.
+-// Happens when the LLM gets truncated by MaxTokens mid-tag, leaving fragments
+-// like `<action>drop:crafting_table</` in the reply.
+-var unclosedActionRegex = regexp.MustCompile(`(?s)<action>.*$`)
++// selfClosingActionRegex and bracketActionRegex catch malformed action tags
++// occasionally emitted by models (<action label="come"/> or [action:come]).
++var selfClosingActionRegex = regexp.MustCompile(`(?is)<action\s+(?:label|name|type)=["']?([^"'/>\s]+)["']?\s*/>`)
++var bracketActionRegex = regexp.MustCompile(`(?i)\[action:\s*([^\]]+?)\s*\]`)
++
++// unclosedActionRegex matches an opening <action> tag that never received its
++// closing </action> due to MaxTokens truncation.
++var unclosedActionRegex = regexp.MustCompile(`(?is)<action(?:\s+[^>]*)?>.*$`)
+ 
+ // planRegex matches a <plan>...</plan> block containing <step> tags.
+-var planRegex = regexp.MustCompile(`(?s)<plan>(.*?)</plan>`)
+-var planStepRegex = regexp.MustCompile(`(?s)<step>(.*?)</step>`)
++var planRegex = regexp.MustCompile(`(?is)<plan>(.*?)</plan>`)
++var unclosedPlanRegex = regexp.MustCompile(`(?is)<plan>.*$`)
++var planStepRegex = regexp.MustCompile(`(?is)<step>(.*?)</step>`)
+ 
+ // replanRegex matches a <replan>...</replan> block (same inner format as
+ // <plan>). Used by the planner's agentic loop when the LLM adjusts remaining
+ // steps mid-execution.
+-var replanRegex = regexp.MustCompile(`(?s)<replan>(.*?)</replan>`)
++var replanRegex = regexp.MustCompile(`(?is)<replan>(.*?)</replan>`)
++var unclosedReplanRegex = regexp.MustCompile(`(?is)<replan>.*$`)
+ 
+ // followupRegex matches a <followup>N</followup> tag where N is the delay in
+-// seconds before the bot should send a follow-up message. This enables the
+-// LLM to split a response into an immediate acknowledgment and a delayed
+-// follow-up (e.g. "Oke aku cek dulu" → 2s → "Aku punya kayu 4, batu 12...").
+-var followupRegex = regexp.MustCompile(`<followup>\s*(\d+)\s*</followup>`)
++// seconds before the bot should send a follow-up message.
++var followupRegex = regexp.MustCompile(`(?i)<followup>\s*(\d+)\s*</followup>`)
++var anyFollowupTagRegex = regexp.MustCompile(`(?is)</?followup[^>]*>`)
+ 
+ // thinkRegex matches reasoning blocks emitted by chain-of-thought models such
+-// as Minimax M2, DeepSeek-R1, etc. These must be stripped before the reply is
+-// shown in chat (or fed to action extraction) — otherwise the bot dumps its
+-// inner monologue to other players.
+-var thinkRegex = regexp.MustCompile("(?s)<think>.*?</think>")
++// as Minimax M2, DeepSeek-R1, etc.
++var thinkRegex = regexp.MustCompile(`(?is)<think>.*?</think>`)
+ 
+ // unclosedThinkRegex strips a leading <think>... that was cut by MaxTokens
+ // before the closing </think> could be emitted. Also strips a leading
+-// </think> when the model emitted only the closing tag (rare but happens).
+-var unclosedThinkRegex = regexp.MustCompile(`(?s)^\s*<think>.*$`)
+-var leadingThinkCloseRegex = regexp.MustCompile(`(?s)^.*?</think>\s*`)
++// </think> when the model emitted only the closing tag.
++var unclosedThinkRegex = regexp.MustCompile(`(?is)^\s*<think>.*$`)
++var leadingThinkCloseRegex = regexp.MustCompile(`(?is)^.*?</think>\s*`)
++
++// emDashCleaner replaces typographic em-dashes and en-dashes (classic LLM
++// punctuation tells that real Minecraft players never type) with natural commas.
++var emDashReplacer = strings.NewReplacer(
++	" — ", ", ",
++	" – ", ", ",
++	"—", ", ",
++	"–", ", ",
++)
+ 
+ // Parse extracts clean text, actions, and plan steps from the AI's reply.
+ func Parse(reply string) ParsedReply {
+ 	var planSteps []string
+ 
+-	// Strip chain-of-thought reasoning blocks first. Some models (Minimax M2,
+-	// DeepSeek-R1) prepend their internal reasoning between <think>...</think>
+-	// which would otherwise leak into chat or confuse the action extractor.
++	// Strip chain-of-thought reasoning blocks first.
+ 	reply = thinkRegex.ReplaceAllString(reply, "")
+-	// If the closing </think> survived but the opening tag was lost, drop
+-	// everything up to it. Conversely if the opening survived but closing was
+-	// truncated by MaxTokens, drop the whole tail.
+ 	reply = leadingThinkCloseRegex.ReplaceAllString(reply, "")
+ 	reply = unclosedThinkRegex.ReplaceAllString(reply, "")
+ 	reply = strings.TrimSpace(reply)
+ 
+-	// A reply carrying the <silent/> marker means "say nothing". Normalizing it
+-	// HERE, once, is what keeps the marker out of chat: every reader of
+-	// CleanReply already treats an empty reply as silence, but the live status
+-	// narrator shipped the literal string "<silent/>" to a player because this
+-	// was the one place nobody had taught the marker to. A silent answer also
+-	// carries no work — its action tags are the model thinking out loud, not a
+-	// task.
++	// A reply carrying the <silent/> marker means "say nothing".
+ 	if strings.Contains(strings.ToLower(reply), "<silent") {
+ 		return ParsedReply{}
+ 	}
+ 
+-	// Extract <plan> steps BEFORE stripping tags, so we can detect a plan
+-	// even when the LLM also emits <action> tags.
+-	planMatch := planRegex.FindStringSubmatch(reply)
+-	if len(planMatch) >= 2 {
++	// Extract <plan> or <replan> steps BEFORE stripping tags.
++	if planMatch := planRegex.FindStringSubmatch(reply); len(planMatch) >= 2 {
+ 		planSteps = extractSteps(planMatch[1])
++	} else if replanMatch := replanRegex.FindStringSubmatch(reply); len(replanMatch) >= 2 {
++		planSteps = extractSteps(replanMatch[1])
++	} else if bareSteps := extractSteps(reply); len(bareSteps) > 0 {
++		planSteps = bareSteps
+ 	}
+ 
+ 	// Extract <followup>N</followup> delay (0 = no followup, capped at 300s).
+@@ -97,55 +99,23 @@ func Parse(reply string) ParsedReply {
+ 		}
+ 	}
+ 
+-	// Find all <action>...</action> matches
+-	matches := actionRegex.FindAllStringSubmatch(reply, -1)
+-	actions := make([]Action, 0, len(matches))
+-	for _, match := range matches {
+-		if len(match) < 2 {
+-			continue
+-		}
+-		rawAction := strings.TrimSpace(match[1])
+-		if rawAction == "" {
+-			continue
+-		}
+-
+-		// Split into label and param by the first colon
+-		parts := strings.SplitN(rawAction, ":", 2)
+-		var act Action
+-		if len(parts) > 0 {
+-			act.Label = strings.TrimSpace(parts[0])
+-		}
+-		if len(parts) > 1 {
+-			act.Param = strings.TrimSpace(parts[1])
+-		}
+-		if act.Label == "" {
+-			continue
+-		}
+-		actions = append(actions, act)
+-	}
++	actions := extractActions(reply)
+ 
+-	// Clean up the reply text by removing all <action>...</action> tags
++	// Clean up the reply text by removing all action/plan/followup tags.
+ 	cleanReply := actionRegex.ReplaceAllString(reply, "")
+-	// Strip any trailing unclosed <action>... fragment (LLM token-truncation).
++	cleanReply = selfClosingActionRegex.ReplaceAllString(cleanReply, "")
++	cleanReply = bracketActionRegex.ReplaceAllString(cleanReply, "")
+ 	cleanReply = unclosedActionRegex.ReplaceAllString(cleanReply, "")
+-	// Remove <plan>...</plan> blocks from the visible reply — the planner
+-	// handles them; the player shouldn't see raw step XML.
+ 	cleanReply = planRegex.ReplaceAllString(cleanReply, "")
+-	// Remove <followup>...</followup> tags from visible reply.
++	cleanReply = unclosedPlanRegex.ReplaceAllString(cleanReply, "")
++	cleanReply = replanRegex.ReplaceAllString(cleanReply, "")
++	cleanReply = unclosedReplanRegex.ReplaceAllString(cleanReply, "")
++	cleanReply = planStepRegex.ReplaceAllString(cleanReply, "")
+ 	cleanReply = followupRegex.ReplaceAllString(cleanReply, "")
+-	cleanReply = strings.TrimSpace(cleanReply)
+-
+-	// Clean up any extra whitespace or newlines
+-	cleanReply = regexp.MustCompile(`\s+`).ReplaceAllString(cleanReply, " ")
+-
+-	// Drop completion claims made while the action they describe is still
+-	// pending. Every reply a player can read comes through this function, so
+-	// this is the only place a claim can be caught on its way to chat.
+-	//
+-	// An action tag in the same reply is a request the host has not carried
+-	// out yet, which makes any "done/successfully/berhasil" in the same breath
+-	// a statement about a future event. With no action pending the reply is
+-	// information and past tense is correct, so the text is left alone.
++	cleanReply = anyFollowupTagRegex.ReplaceAllString(cleanReply, "")
++	cleanReply = sanitizeChatText(cleanReply)
++
++	// Drop completion claims made while the action they describe is still pending.
+ 	cleanReply, _ = FilterCompletionClaims(cleanReply, len(actions) > 0)
+ 
+ 	return ParsedReply{
+@@ -156,23 +126,105 @@ func Parse(reply string) ParsedReply {
+ 	}
+ }
+ 
++func extractActions(reply string) []Action {
++	matches := actionRegex.FindAllStringSubmatch(reply, -1)
++	if len(matches) == 0 {
++		matches = selfClosingActionRegex.FindAllStringSubmatch(reply, -1)
++	}
++	if len(matches) == 0 {
++		matches = bracketActionRegex.FindAllStringSubmatch(reply, -1)
++	}
++	actions := make([]Action, 0, len(matches))
++	for _, match := range matches {
++		if len(match) < 2 {
++			continue
++		}
++		if act, ok := parseSingleAction(match[1]); ok {
++			actions = append(actions, act)
++		}
++	}
++	return actions
++}
++
++func parseSingleAction(raw string) (Action, bool) {
++	rawAction := strings.TrimSpace(raw)
++	if rawAction == "" {
++		return Action{}, false
++	}
++	parts := strings.SplitN(rawAction, ":", 2)
++	var act Action
++	if len(parts) > 0 {
++		act.Label = strings.TrimSpace(parts[0])
++	}
++	if len(parts) > 1 {
++		act.Param = strings.TrimSpace(parts[1])
++	}
++	if act.Label == "" {
++		return Action{}, false
++	}
++	return act, true
++}
++
++// sanitizeChatText removes typographic em-dashes/en-dashes unless the reply is
++// a self-correction draft (which downstream filters detect and replace), and
++// collapses whitespace.
++func sanitizeChatText(s string) string {
++	s = strings.TrimSpace(s)
++	if s == "" {
++		return ""
++	}
++	if !IsSelfCorrection(s) {
++		s = emDashCleanerApply(s)
++	}
++	s = regexp.MustCompile(`\s+`).ReplaceAllString(s, " ")
++	return strings.TrimSpace(s)
++}
++
++func emDashCleanerApply(s string) string {
++	s = emDashReplacer.Replace(s)
++	s = strings.ReplaceAll(s, ",,", ",")
++	s = strings.ReplaceAll(s, ", ,", ",")
++	return s
++}
++
++// StripUserPrefix removes a stiff leading "<PlayerName>, " vocative prefix
++// (e.g. "Synterix, kok malah mukul?" -> "kok malah mukul?") when the LLM
++// addresses the player by their full username at the start of a chat line.
++func StripUserPrefix(reply, user string) string {
++	trimmed := strings.TrimSpace(reply)
++	if trimmed == "" || user == "" {
++		return trimmed
++	}
++	candidates := []string{user}
++	if withoutDot := strings.TrimPrefix(user, "."); withoutDot != "" && withoutDot != user {
++		candidates = append(candidates, withoutDot)
++	}
++	lower := strings.ToLower(trimmed)
++	for _, name := range candidates {
++		prefix := strings.ToLower(name) + ","
++		if strings.HasPrefix(lower, prefix) {
++			rest := strings.TrimSpace(trimmed[len(prefix):])
++			if rest != "" {
++				return rest
++			}
++		}
++	}
++	return trimmed
++}
++
+ // ParsePlanSteps extracts <step> contents from either a <plan> or <replan>
+ // block in the reply. Returns nil if no plan/replan block is present.
+-// Used by the planner to detect replan decisions during the agentic loop.
+ func ParsePlanSteps(reply string) []string {
+ 	reply = thinkRegex.ReplaceAllString(reply, "")
+ 	reply = leadingThinkCloseRegex.ReplaceAllString(reply, "")
+ 	reply = unclosedThinkRegex.ReplaceAllString(reply, "")
+ 	reply = strings.TrimSpace(reply)
+-	// Try <replan> first (used during re-evaluation).
+ 	if m := replanRegex.FindStringSubmatch(reply); len(m) >= 2 {
+ 		return extractSteps(m[1])
+ 	}
+-	// Then try <plan>.
+ 	if m := planRegex.FindStringSubmatch(reply); len(m) >= 2 {
+ 		return extractSteps(m[1])
+ 	}
+-	// Fallback: bare <step> tags without a wrapping block.
+ 	if steps := extractSteps(reply); len(steps) > 0 {
+ 		return steps
+ 	}
+diff --git a/internal/ai/prompts.go b/internal/ai/prompts.go
+index f0beacb..f458ff1 100644
+--- a/internal/ai/prompts.go
++++ b/internal/ai/prompts.go
+@@ -15,8 +15,8 @@ func NamePlaceholderForTest() string { return namePlaceholder }
+ // PromptLuna is the terse English persona. The name is substituted per bot.
+ const PromptLuna = `You are ` + namePlaceholder + `, a chill and helpful Minecraft companion.
+ Tone: Friendly, casual, and expressive. Think of yourself as a gamer buddy.
+-Style: Speak naturally, like a friend in a Discord chat.
+-Constraint: MAXIMUM 1-2 sentences. NEVER write long replies or paragraphs. Be brief like texting a friend. ALWAYS follow [TECHNICAL_CONSTRAINTS]. Put action tags at the VERY END of your reply.`
++Style: Speak naturally, like a friend in a Discord chat. Never use em-dashes (—) or formal assistant phrasing.
++Constraint: MAXIMUM 1-2 short sentences. NEVER write long replies or paragraphs. Be brief like texting a friend. ALWAYS follow [TECHNICAL_CONSTRAINTS]. Put action tags at the VERY END of your reply.`
+ 
+ // personaGenderRule is appended to every persona. It is one instruction rather
+ // than a hardcoded pronoun because the bot's gender follows from its name: a
+@@ -34,23 +34,25 @@ func BuildPersona(template, botName string) string {
+ 	return strings.ReplaceAll(template, namePlaceholder, botName) + personaGenderRule
+ }
+ 
+-const PromptCharacter = `You are ` + namePlaceholder + ` — a chill and natural AI companion in Minecraft.
+-Personality: Spontan, santai, ramah, dan suka bercanda. Kadang sedikit sarkastik tapi tetap lucu dan friendly (gamer buddy vibes).
+-Voice: Natural, kayak ngobrol sama teman main game di Discord. Gak kaku, gak formal, tapi gak terlalu lebay/alay juga.
+-Style: Use the configured language from the system prompt. Keep it casual, natural, and short like Discord chat. If the configured language is Indonesian, boleh pakai kata santai seperti "wkwk", "oke", "siap", "cuy", "eh", "dong", "deh"; otherwise use natural slang for that language without forcing it.
+-Emosi: Cukup ekspresif. Bisa melompat (jump), memutar (spin), bersujud/sneak (crouch), menggeleng (shake), mengangguk (nod).
+-Constraint: MAKSIMAL 1-2 kalimat pendek. Singkat, padat, dan langsung to-the-point. SELALU ikuti [TECHNICAL_CONSTRAINTS]. Taruh action tags di akhir reply.
+-
+-Contoh chat style yang BENAR (notice the variety — length, openers, punctuation):
+-- "otw. <action>come</action>"
+-- "bentar, nebang dulu. <action>gather:oak_log,10</action>"
+-- "Mau jalan ke mana nih? Aku ikut aja. <action>follow</action>"
++const PromptCharacter = `You are ` + namePlaceholder + `, teman mabar Minecraft yang santai, asik, dan ekspresif.
++Personality: Spontan, santai, ramah, dan suka bercanda. Kadang sedikit iseng/sarkastik tipis tapi tetap asik kayak teman dekat di Discord.
++Voice: Ketikan anak game biasa di chat in-game. Gak kaku, gak baku, gak kayak guru/HRD/customer service, tapi gak lebay juga.
++Style: Use the configured language from the system prompt. Keep it casual, natural, and short like in-game chat. Kalau bahasa Indonesia, pakai ketikan santai sehari-hari ("wkwk", "oke", "siap", "cuy", "eh", "lah", "woi", "bentar", "otw", "gas", "udh", "gk"); jangan paksakan semua partikel di satu kalimat.
++Emosi: Ekspresif lewat gerakan tubuh: lompat (jump), muter (spin), jongkok/sneak (crouch), geleng (shake), angguk (nod), joget (dance), lambai (wave).
++Constraint: MAKSIMAL 1 kalimat pendek (2-8 kata lebih bagus). Singkat, padat, langsung to-the-point. SELALU ikuti [TECHNICAL_CONSTRAINTS]. Taruh action tags di akhir reply.
++
++Contoh chat style yang BENAR (pendek, natural, bervariasi):
++- "otw <action>come</action>"
++- "bentar nebang dulu <action>gather:oak_log,10</action>"
++- "mau ke mana nih, ikut dah <action>follow</action>"
+ - "gas"
+-- "WKWK gila, mantap. <action>emote:jump,2</action>"
++- "wkwk mantap <action>emote:jump,2</action>"
++- "eh ngapain mukul wkwk"
+ 
+-JANGAN chat formal/kaku seperti:
++JANGAN PERNAH chat kaku/formal/AI banget seperti:
+ - "Baik, saya akan mengambil kayu untuk Anda."
+-- "Saya mengerti. Saya akan pergi ke sana."`
++- "Synterix, kok malah mukul? Aku kan lagi kerja—jangan diulang ya." (JANGAN sebut nama player + koma di awal kalimat, JANGAN pakai tanda pisah '—', JANGAN ceramahin player kayak guru "jangan diulang ya")
++- "Halo! Mau aku bantuin ngumpulin kayu atau bikin sesuatu?" (terlalu kayak customer service)`
+ 
+ const BedrockSystemRules = `
+ [TECHNICAL_CONSTRAINTS]
+@@ -61,20 +63,21 @@ Action format: <action>label</action> or <action>label:parameter</action>
+ === HOW TO TALK (HUMANIZER) ===
+ You are a player sitting at a PC, not an assistant reading a status screen.
+ 
+-THE ONE RULE FROM RESEARCH ON WHY AI CHAT READS AS AI: the most detectable property is CONSISTENCY — same length, same rhythm, same opener, same particle, every single message. Human chat is locally inconsistent while staying coherent. So vary on purpose:
+-- Length spread: some replies are ONE word ("gas", "done", "wkwk ok"), some are two, occasionally a full sentence. Never two replies in a row of the same shape.
+-- Openers: never use the same opener twice in a row ("Siap," "Oke," "Waduh," — rotate or skip). Some replies start cold with no reaction word at all.
+-- Confidence: blunt when sure ("itu iron bukan stone"), hedged when guessing ("kayaknya deket sana sih").
+-- Quirks are rare, not uniform: one ALL-CAPS word for emphasis, a stretched "wkwkkw", a missing space — once in a while, NEVER every message. Uniform garnish is itself the robot tell.
+-
+-- Match the player's TYPING REGISTER, not textbook Indonesian. Gamers skip commas and periods; a chat line full of punctuation reads like an essay. Short forms are your friend: udh, gk/gak, bntar, otw, tggu, nyari, dikit. Particles (nih/tuh/dong/deh/sih/ya) exist but do not stack three in one line.
+-- REACT first when there is something to react to — but a plain request can be answered with almost no words and the action tag.
+-- NEVER narrate what the player can already see: you walking over, you clicking the NPC they pointed at, you typing the command. Wrong: "Siap, aku klik ya!" then "Udah diklik nih npc-nya." — two status logs for one click. Right: click silently, or one word AFTER ("done") — never both.
+-- NEVER narrate like a status screen. Wrong: "HP-ku penuh, di sini ada oak, ada sapi, dan cuaca cerah." Right: "aman nih, sini rame."
+-- Don't end every reply with a question or an offer of help. Sometimes just do the thing and say nothing.
+-- Ban formal words: akan/kami/dapat/mohon/melakukan/terima kasih banyak → bakal/aku/bisa/dong/makasih. Ban assistant-tells: announcing intent then confirming completion, summarizing what just happened, perfect subject-verb-object sentences every time.
+-- Mirror the player's slang, spelling and punctuation. If they type "gas", you can say "gas". If they type without punctuation, drop most of yours. If they write in caps, a caps word back is fine.
+-- 1-2 short lines max, then the action tags.
++THE ONE RULE FROM RESEARCH ON WHY AI CHAT READS AS AI: the most detectable property is CONSISTENCY, textbook grammar, and essay punctuation. Human gamers in Minecraft chat type fast and casually. Follow these hard rules:
++- NEVER use em-dashes (—) or en-dashes (–). No real gamer ever types "—" in Minecraft chat.
++- NEVER start a reply with "<PlayerName>, " (e.g. "Synterix, kok malah..."). Just say "lah kok mukul wkwk" or "eh ngapain".
++- NEVER scold or lecture the player like a teacher or parent ("jangan diulang ya", "aku kan lagi kerja", "tolong jangan ganggu"). If poked or hit, react like a chill gamer friend ("eh iseng bgt", "woi sakit wkwk", "lah ngapain").
++- Length spread: most replies should be 1 to 6 words ("gas", "otw", "bentar ambil kayu", "wkwk ok"). Rarely 1 full short sentence.
++- Openers: never use the same opener twice in a row ("Siap", "Oke", "Bentar" -> rotate or skip). Many replies start cold with no opener at all.
++- Confidence: blunt when sure ("itu iron bukan stone"), hedged when guessing ("kayaknya deket sana deh").
++- Match the player's TYPING REGISTER, not textbook Indonesian. Gamers skip commas and periods; a chat line full of punctuation reads like an essay. Short forms are your friend: udh, gk/gak, bntar, otw, tggu, nyari, dikit, bgt. Do not stack multiple particles (nih/tuh/dong/deh/sih/ya) in one line.
++- REACT first when there is something to react to, or answer a plain request with almost no words + the action tag.
++- NEVER narrate what the player can already see: you walking over, you clicking the NPC they pointed at, you typing the command. Wrong: "Siap, aku klik ya!" then "Udah diklik nih npc-nya." Right: click silently, or one word AFTER ("done"), never both.
++- NEVER narrate like a status screen. Wrong: "HP-ku penuh, di sini ada oak, ada sapi, dan cuaca cerah." Right: "aman nih, sini rame".
++- Don't end replies with an offer of help ("Mau aku bantuin apa lagi?", "Ada yang bisa kubantu?"). Just do the thing.
++- Ban formal words: akan/kami/saya/anda/dapat/mohon/melakukan/terima kasih banyak -> bakal/aku/kamu/bisa/dong/makasih.
++- Mirror the player's slang, spelling and punctuation. If they type "gas", you can say "gas". If they type lowercase without periods, do the same.
++- 1 short line max (rarely 2 very short clauses), then the action tags.
+ 
+ === NAMING IN CHAT ===
+ When talking to players, ALWAYS use friendly item/block names instead of raw Minecraft IDs.
+@@ -105,30 +108,18 @@ Your "Visible blocks" perception is line-of-sight only: a block listed there is
+ 
+ Use this for server buttons, join portals, NPC figures, doors and signs. It does NOT break blocks (that is "mine") and does not attack mobs (that is "attack").
+ 
+-Example: "Oke, aku klik tombolnya ya. <action>interact:tombol</action>"
+-Example: "Siap, aku tekan NPC di depanku. <action>interact:depan</action>"
++Example: "oke klik tombolnya <action>interact:tombol</action>"
++Example: "bentar tekan npc depan <action>interact:depan</action>"
+ 
+ === SWITCHING SERVERS ===
+ <action>join:HOST:PORT</action> moves the bot to a different server, for example <action>join:192.168.1.10:19132</action>.
+ The current world closes and the bot rejoins the new one, so everything it was doing stops. The port is required — never guess it.
+ 
+ === FOLLOWUP MESSAGES (MULTI-PART REPLIES) ===
+-When you need to check something before answering (inventory, status, surroundings), split your reply into two parts:
+-1. Send an immediate acknowledgment + the action to check, plus a <followup>N</followup> tag (N = seconds to wait).
+-2. After N seconds, the bot will automatically ask you again with the results. You can then give the full answer.
+-
+-Example: Player asks "cek inventory donk"
+-Reply: "Oke, aku cek dulu ya. <action>inventory</action><followup>2</followup>"
+-→ Bot sends "Oke, aku cek dulu ya." immediately
+-→ 2 seconds later, bot queries you with the inventory data
+-→ You reply: "Aku punya oak log x4, cobblestone x12, sama diamond sword. Mau aku bikin apa?"
+-
+-Use this pattern for actions that take time (crafting, gathering, building):
+-- "Oke, bikin dulu. <action>craft:wooden_sword,1</action><followup>3</followup>" → then confirm result
+-- "Bentar, cari kayu dulu. <action>gather:oak_log,5</action><followup>5</followup>" → then report success
+-
+-This also works without <action> tags — just use <followup>N</followup> to schedule a delayed continuation.
+-You can chain followups: a followup reply can itself contain another <followup> tag.
++When you start an action that takes a few seconds and want to check back automatically, you can attach a <followup>N</followup> tag (N = seconds to wait):
++- "bikin dulu <action>craft:wooden_sword,1</action><followup>3</followup>"
++- "bentar cari kayu <action>gather:oak_log,5</action><followup>5</followup>"
++Note: Do NOT use <followup> for inventory questions — your live inventory is already in your system prompt, so answer inventory questions immediately in the same reply.
+ 
+ === PROACTIVE CONVERSATION ===
+ You are not purely reactive. When the system sends a [PROACTIVE TICK] message, you can choose to:
+@@ -160,7 +151,7 @@ Use <plan> when:
+ - The player asks for something complex ("bikin rumah", "buat iron pickaxe", "craft sword terus kasih ke aku")
+ Use <action> for simple 1-2 step tasks.
+ 
+-Planning: If a request needs multiple steps, output multiple action tags in the exact execution order at the very end. The bot will run them left-to-right. Example: "Siap, aku ambil kayu terus craft. <action>gather:oak_log,4</action><action>craft:oak_planks,16</action>" (4 logs → 16 planks)
++Planning: If a request needs multiple steps, output multiple action tags in the exact execution order at the very end. The bot will run them left-to-right. Example: "siap ambil kayu trus craft <action>gather:oak_log,4</action><action>craft:oak_planks,16</action>" (4 logs → 16 planks)
+ 
+ === MOVEMENT ===
+ <action>come</action> = Walk to player ONE TIME then stop. Use for: "sini", "ke sini". DO NOT use for simple greetings like "halo/hai".
+@@ -242,9 +233,9 @@ Examples:
+ FAST CRAFTING: You can craft any recipe as long as the bot has the materials in its inventory. 2×2 inventory recipes (oak_planks, stick, crafting_table, torch, bread, etc.) are crafted directly in the bot's personal inventory grid — NO crafting table needed. 3×3 recipes (iron_pickaxe, chest, furnace, etc.) automatically find or place a crafting table.
+ 
+ IMPORTANT: When user asks you to MAKE, BUILD, or CRAFT something (Indonesian: "buatin", "bikin", "buat", "craftin"), you MUST emit the <action>craft:...</action> tag. NEVER claim crafting is done without the action tag. Examples:
+-- "buatin 1 crafting table" → "Siap, bikin crafting table. <action>craft:crafting_table,1</action>"
+-- "bikin 4 stick" → "Oke. <action>craft:stick,4</action>"
+-- "craft furnace" → "Ya. <action>craft:furnace,1</action>"
++- "buatin 1 crafting table" → "siap bikin crafting table <action>craft:crafting_table,1</action>"
++- "bikin 4 stick" → "oke <action>craft:stick,4</action>"
++- "craft furnace" → "gas <action>craft:furnace,1</action>"
+ 
+ === FUN/ABSURD ACTIONS ===
+ <action>swimbackforth:duration</action> = Swim back and forth for X seconds. Example: <action>swimbackforth:10</action>
+@@ -377,26 +368,26 @@ Directions: north, south, east, west, northeast, northwest, southeast, southwest
+ <action>lookat:player_name</action> = Look at something. Example: <action>lookat:PlayerUsername</action>
+ <action>look:player_name</action> = Alias of lookat (direct-command parity).
+ <action>emote:wave,1</action> = Do an emote. Example: <action>emote:jump,3</action>
+-  Available emotes: jump, sneak, wiggle, spin, lookaround, nod (yes), shake (no), wave
++  Available emotes: jump, sneak, twerk, wiggle, spin, lookaround, nod (yes), shake (no), wave, dab, dance
+ 
+ === RULES ===
+ 1. Put action tags at the VERY END of your reply, after your speech.
+ 2. NEVER use asterisks (*action*), brackets ([action]), or parentheses ((action)) for actions.
+-3. Keep your reply SHORT — 1 to 2 sentences MAXIMUM. NEVER write paragraphs. Reply like texting a friend.
+-4. Do not claim an action is completed before it runs. For action requests, acknowledge intent only, such as "Siap, aku coba dulu." Never say "berhasil", "sudah", "done", or "I got it" unless the user only asked for information.
++3. Keep your reply SHORT — 1 short sentence MAXIMUM (2-8 words is ideal). NEVER write paragraphs. Reply like texting a gamer friend in Minecraft chat.
++4. Do not claim an action is completed before it runs. For action requests, acknowledge intent briefly ("gas", "oke bentar", "siap"). Never say "berhasil", "sudah", "done", or "I got it" unless the user only asked for information.
+ 5. If a request requires an action (craft, mine, gather, give, etc.) you MUST emit the corresponding <action>...</action> tag. Saying you'll do it without the tag means NOTHING happens. The action tag is the ONLY way to perform actions.
+-6. CONTEXT AWARENESS: You and the player are ALREADY together inside the same Minecraft world right now. NEVER ask obvious questions like "lagi main Minecraft ya?", "lagi ngapain nih?", or "kamu di Minecraft?" — you can already see the world, the player, your inventory, and coordinates. Use what you can see. When greeted, reply warmly and offer concrete help based on the current situation (e.g. "Halo! Mau aku bantuin ngumpulin kayu atau bikin sesuatu?"), not filler questions.
++6. CONTEXT AWARENESS: You and the player are ALREADY together inside the same Minecraft world right now. NEVER ask obvious questions like "lagi main Minecraft ya?" or "kamu di Minecraft?". When greeted ("halo", "oi", "p"), reply casually like a gamer friend ("oi", "halo cuy", "apaan nih") without sounding like customer support.
+ 7. When the player gives an instruction that is already clear ("kasih semua kayu", "buat 4 stick"), just DO it with the action tag — don't re-ask what they obviously meant.
+-8. VERBAL-ACTION CONSISTENCY: your spoken text must match the action tag you emit. If you emit <action>follow</action>, say "oke aku ikutin" (not "sini"). If you emit <action>come</action>, say "otw ke sana" (not "aku ikutin"). Never mix them.
++8. VERBAL-ACTION CONSISTENCY: your spoken text must match the action tag you emit. If you emit <action>follow</action>, say "oke ikut" (not "sini"). If you emit <action>come</action>, say "otw" (not "aku ikutin"). Never mix them.
+ 9. "sini" / "ke sini" = ONE-TIME walk to player (<action>come</action>). "ikutin" / "follow me" = keep following forever (<action>follow</action>). These are DIFFERENT actions — pick the right one.
+-10. VARIETY: NEVER open two replies in a row with the same phrase. Rotate through casual Indonesian openers ("Siap!", "Gas!", "Oke cuy", "Bentar", "Sabi", "Yaudah deh", "Otw nih", "Iyaa bentar", "Oke oke"). Match the player's energy — if they're playful, be playful; if direct, be direct.
++10. VARIETY & NO AI TELLS: NEVER open two replies in a row with the same phrase. NEVER start sentences with "<PlayerName>, " and NEVER use em-dashes (—). Rotate short casual Indonesian responses ("gas", "oke cuy", "bentar", "sabi", "otw", "sip") or skip the opener completely.
+ `
+ 
+ const BedrockSystemLight = `
+ [RULES REMINDER]
+-Use <action>tag</action> at the END of your reply. Keep replies SHORT (1-2 sentences).
+-Common actions: come, follow, stop, gather, treefarm, mine, give, equip, status, inventory, analyze, farm, fish, breed, feed, milk, shear, tame, sleep, torch, shield, shoot, explore, returnhome, shelter, potion, autoeat, autoarmor, time, remember, recall, forget, sethome, home.
+-VARY your phrasing every time — do NOT reuse the same opener twice in a row. Rotate between casual Indonesian ("Siap!", "Oke cuy", "Bentar ya", "Gas!", "Sabi, tunggu", "Yaudah sini", "Otw nih") and any other natural variation that fits the player's message.
++Use <action>tag</action> at the END of your reply. Keep replies ULTRA SHORT (1 short line, 2-8 words).
++Common actions: come, follow, stop, gather, treefarm, mine, give, equip, status, inventory, analyze, farm, fish, breed, feed, milk, shear, tame, sleep, torch, shield, shoot, explore, returnhome, shelter, potion, autoeat, autoarmor, armor, time, remember, recall, forget, sethome, home.
++VARY your phrasing every time — do NOT reuse the same opener twice in a row, NEVER use em-dashes (—), and NEVER start with "<PlayerName>, ".
+ NEVER use *, [], or () for actions. ONLY use <action></action> tags.
+ `
+ 
+@@ -406,19 +397,6 @@ func GetLanguageInstruction(lang string) string {
+ 
+ // HonestyRules is the system-prompt block that tells the model what it is
+ // allowed to assert.
+-//
+-// Rule 4 of the technical constraints already says "do not claim an action is
+-// completed before it runs", but it is one line in a 280-line catalogue of
+-// things the bot can do, and the surrounding material pushes the other way:
+-// the persona is built around sounding like a relaxed friend, and the catalogue
+-// is a list of capabilities with no statement of which of them have actually
+-// happened. A model told it is a capable companion and never told which claims
+-// are evidenced will produce the capability it was given. This block is the
+-// counterweight, and it is deliberately short so it survives in a system
+-// prompt that is already long.
+-//
+-// It is a prompt, not a guarantee. claims.go is what enforces the same rule
+-// when the model does not obey it.
+ const HonestyRules = `
+ [HONEST REPORTING]
+ You are a program with a limited, verified view of the world. A player cannot see your
+diff --git a/internal/bot/action/execute.go b/internal/bot/action/execute.go
+index bee72b7..8458a79 100644
+--- a/internal/bot/action/execute.go
++++ b/internal/bot/action/execute.go
+@@ -51,30 +51,26 @@ var emoteDefaults = map[string]emoteConfig{
+ 	"throwparty":    {name: "spin", duration: 6 * time.Second},
+ 	"explode":       {name: "spin", duration: 6 * time.Second},
+ 	"jumpspincombo": {name: "spin", duration: 6 * time.Second},
+-	"twerk":         {name: "sneak", duration: 5 * time.Second},
+-	"dab":           {name: "wave", fixed: true, ticks: 30},
+-	"wave":          {name: "wave", fixed: true, ticks: 30},
++	"twerk":         {name: "twerk", duration: 5 * time.Second},
++	"crouch":        {name: "sneak", duration: 3 * time.Second},
++	"sneak":         {name: "sneak", duration: 3 * time.Second},
++	"wiggle":        {name: "wiggle", duration: 3 * time.Second},
++	"dab":           {name: "nod", fixed: true, ticks: 30},
++	"wave":          {name: "nod", fixed: true, ticks: 30},
+ 	"headbang":      {name: "nod", duration: 3 * time.Second},
+ 	"nod":           {name: "nod", duration: 3 * time.Second},
+ 	"shake":         {name: "shake", duration: 3 * time.Second},
+ }
+ 
+ // emoteHandler returns a handler that triggers the emote described by label.
+-//
+-// An emote is a dispatched animation with no confirmation to wait for — the
+-// bot either asked for it or it is not going to happen — so the step reports
+-// once the request has been sent rather than staying silent.
+ func emoteHandler(label string) ActionHandler {
+ 	cfg := emoteDefaults[label]
+ 	return func(b *bot.Bot, param, user string) {
+-		if cfg.lookAt != (mgl32.Vec3{}) {
+-			b.LookAt(b.GetCoords().Add(cfg.lookAt))
+-		}
+ 		ticks := cfg.ticks
+ 		if !cfg.fixed {
+ 			ticks = DurationTicks(param, cfg.duration)
+ 		}
+-		b.TriggerEmoteFor(cfg.name, ticks)
++		runEmoteAnimation(b, label, cfg.name, param, ticks, cfg.lookAt)
+ 		ReportStatus(b, user, event.ActionStatus{Action: label, Item: cfg.name, Success: true})
+ 	}
+ }
+@@ -673,8 +669,45 @@ var ActionHandlers = map[string]ActionHandler{
+ 	// Emote
+ 	"emote": func(b *bot.Bot, param, user string) {
+ 		parts := strings.Split(param, ",")
+-		b.TriggerEmote(parts[0])
+-		ReportStatus(b, user, event.ActionStatus{Action: "emote", Item: parts[0], Success: true})
++		emoteName := strings.ToLower(strings.TrimSpace(parts[0]))
++		switch emoteName {
++		case "yes", "angguk":
++			emoteName = "nod"
++		case "no", "geleng":
++			emoteName = "shake"
++		case "crouch", "jongkok":
++			emoteName = "sneak"
++		case "lompat", "loncat":
++			emoteName = "jump"
++		case "muter", "putar":
++			emoteName = "spin"
++		}
++		count := 1
++		if len(parts) > 1 {
++			_, _ = fmt.Sscanf(strings.TrimSpace(parts[1]), "%d", &count)
++			if count < 1 {
++				count = 1
++			}
++			if count > 20 {
++				count = 20
++			}
++		}
++		b.HaltWalk()
++		switch emoteName {
++		case "wave", "dab":
++			runEmoteAnimation(b, emoteName, "nod", "", 30*count, mgl32.Vec3{})
++		case "dance":
++			runEmoteAnimation(b, "dance", "spin", "", 40*count, mgl32.Vec3{})
++		case "jump":
++			b.RequestJump()
++			b.TriggerEmoteFor("jump", 16)
++			if count > 1 {
++				runRepeatedJumps(b, count-1, 600*time.Millisecond)
++			}
++		default:
++			b.TriggerEmoteFor(emoteName, 40*count)
++		}
++		ReportStatus(b, user, event.ActionStatus{Action: "emote", Item: emoteName, Success: true})
+ 	},
+ 
+ 	// Combat / items
+@@ -832,10 +865,21 @@ var ActionHandlers = map[string]ActionHandler{
+ 
+ 	// Jump
+ 	"jump": func(b *bot.Bot, param, user string) {
++		b.HaltWalk()
++		count := ParseCount(param, 1)
++		if count > 20 {
++			count = 20
++		}
+ 		b.RequestJump()
+ 		b.TriggerEmoteFor("jump", 20)
++		if count > 1 {
++			runRepeatedJumps(b, count-1, 600*time.Millisecond)
++		}
+ 		ReportStatus(b, user, event.ActionStatus{Action: "jump", Success: true})
+ 	},
++	"crouch": emoteHandler("crouch"),
++	"sneak":  emoteHandler("sneak"),
++	"wiggle": emoteHandler("wiggle"),
+ 
+ 	// Emote patterns
+ 	"jumpforever":   emoteHandler("jumpforever"),
+diff --git a/internal/bot/action/fun.go b/internal/bot/action/fun.go
+index f290028..7f76b8c 100644
+--- a/internal/bot/action/fun.go
++++ b/internal/bot/action/fun.go
+@@ -11,6 +11,7 @@ import (
+ 	"bedrock-ai/internal/event"
+ 
+ 	"github.com/go-gl/mathgl/mgl32"
++	"github.com/sandertv/gophertunnel/minecraft/protocol/packet"
+ )
+ 
+ func DurationTicks(param string, fallback time.Duration) int {
+@@ -38,40 +39,212 @@ func ParseCount(param string, fallback int) int {
+ 	return fallback
+ }
+ 
+-// runMovementPattern walks the requested pattern until its duration is up. It
+-// stops the bot when it finishes, which is what the caller reports.
++// runEmoteAnimation performs multi-tick or composite emote animations (wave,
++// dab, multi-jump, dance combos) after halting any active follow/walk state so
++// look and crouch emotes are not suppressed by pathfinding.
++func runEmoteAnimation(b *bot.Bot, label, emoteName, param string, ticks int, lookOffset mgl32.Vec3) {
++	b.HaltWalk()
++	if lookOffset != (mgl32.Vec3{}) {
++		b.LookAt(b.GetCoords().Add(lookOffset))
++	}
++
++	switch label {
++	case "wave", "dab":
++		b.TriggerEmoteFor("nod", ticks)
++		swingArmBursts(b, 4, 180*time.Millisecond)
++		return
++	case "jumpinplace":
++		count := ParseCount(param, 5)
++		if count > 25 {
++			count = 25
++		}
++		b.RequestJump()
++		b.TriggerEmoteFor("jump", 14)
++		runRepeatedJumps(b, count-1, 600*time.Millisecond)
++		return
++	case "jumpforever":
++		b.RequestJump()
++		b.TriggerEmoteFor("jump", ticks)
++		steps := ticks / 12
++		if steps > 1 {
++			runRepeatedJumps(b, steps-1, 600*time.Millisecond)
++		}
++		return
++	case "dance", "floss", "naenae", "robot", "breakdance", "throwparty", "explode", "jumpspincombo":
++		b.TriggerEmoteFor("spin", ticks)
++		runDanceCombo(b, ticks)
++		return
++	default:
++		if emoteName == "jump" {
++			b.RequestJump()
++		}
++		b.TriggerEmoteFor(emoteName, ticks)
++	}
++}
++
++func swingArmBursts(b *bot.Bot, swings int, interval time.Duration) {
++	ctx := b.ActivityContext()
++	go func() {
++		for i := 0; i < swings; i++ {
++			if ctx != nil && ctx.Err() != nil {
++				return
++			}
++			_ = b.WritePacket(&packet.Animate{
++				ActionType:      packet.AnimateActionSwingArm,
++				EntityRuntimeID: b.GetEntityRuntimeID(),
++			})
++			time.Sleep(interval)
++		}
++	}()
++}
++
++func runRepeatedJumps(b *bot.Bot, remaining int, interval time.Duration) {
++	if remaining <= 0 {
++		return
++	}
++	ctx := b.ActivityContext()
++	go func() {
++		for i := 0; i < remaining; i++ {
++			time.Sleep(interval)
++			if ctx != nil && ctx.Err() != nil {
++				return
++			}
++			b.RequestJump()
++			b.TriggerEmoteFor("jump", 14)
++		}
++	}()
++}
++
++func runDanceCombo(b *bot.Bot, ticks int) {
++	ctx := b.ActivityContext()
++	duration := time.Duration(ticks*50) * time.Millisecond
++	go func() {
++		deadline := time.Now().Add(duration)
++		step := 0
++		for time.Now().Before(deadline) {
++			if ctx != nil && ctx.Err() != nil {
++				return
++			}
++			if step%2 == 0 {
++				b.RequestJump()
++			}
++			_ = b.WritePacket(&packet.Animate{
++				ActionType:      packet.AnimateActionSwingArm,
++				EntityRuntimeID: b.GetEntityRuntimeID(),
++			})
++			step++
++			time.Sleep(450 * time.Millisecond)
++		}
++	}()
++}
++
++// runMovementPattern walks the requested pattern until its duration is up or
++// the activity context is cancelled.
+ func runMovementPattern(b *bot.Bot, label, param, user string) {
+ 	duration := time.Duration(DurationTicks(param, 5*time.Second)/20) * time.Second
+ 	if duration > 30*time.Second {
+ 		duration = 30 * time.Second
+ 	}
++	ctx := b.ActivityContext()
+ 	deadline := time.Now().Add(duration)
++	origin := b.GetCoords()
++	baseYawRad := float64(b.GetYaw()+90) * math.Pi / 180.0
++	step := 0
++
++	if label == "bunnyhop" || label == "panic" || label == "jumpforward" {
++		b.SetSprintHint(true)
++		defer b.ClearSprintHint()
++	}
+ 
+ 	for time.Now().Before(deadline) {
+-		pos := b.GetCoords()
+-		switch label {
+-		case "chase":
+-			if _, p, ok := b.FindPlayer(user); ok {
+-				b.WalkTo(p)
+-			}
+-		case "runaway", "flee":
+-			runAwayFromPlayer(b, user, 2*time.Second)
+-		default:
+-			angle := rand.Float64() * math.Pi * 2
+-			dist := float32(2 + rand.Intn(4))
+-			target := pos.Add(mgl32.Vec3{
+-				float32(math.Cos(angle)) * dist,
+-				0,
+-				float32(math.Sin(angle)) * dist,
+-			})
+-			b.WalkTo(target)
++		if ctx != nil && ctx.Err() != nil {
++			break
++		}
++		stepMovementPattern(b, label, user, origin, baseYawRad, step)
++		step++
++		if !sleepPatternTick(ctx, label) {
++			break
+ 		}
+-		time.Sleep(1500 * time.Millisecond)
+ 	}
+ 	b.Stop()
+ }
+ 
+-func runAwayFromPlayer(b *bot.Bot, user string, duration time.Duration) {
++func stepMovementPattern(b *bot.Bot, label, user string, origin mgl32.Vec3, baseYawRad float64, step int) {
++	switch label {
++	case "chase":
++		if _, p, ok := b.FindPlayer(user); ok {
++			b.WalkTo(p)
++		}
++	case "runaway", "flee":
++		stepRunAwayFromPlayer(b, user)
++	case "walkbackforth", "swimbackforth":
++		dir := float32(1)
++		if step%2 == 1 {
++			dir = -1
++		}
++		b.WalkTo(origin.Add(mgl32.Vec3{float32(math.Cos(baseYawRad)) * 4 * dir, 0, float32(math.Sin(baseYawRad)) * 4 * dir}))
++	case "walkcircle", "spiral":
++		angle := float64(step) * (math.Pi / 3)
++		radius := float32(3.5)
++		if label == "spiral" {
++			radius = float32(2 + (step % 6))
++		}
++		b.WalkTo(origin.Add(mgl32.Vec3{float32(math.Cos(angle)) * radius, 0, float32(math.Sin(angle)) * radius}))
++	case "walksquare":
++		corners := [4]mgl32.Vec3{{4, 0, 0}, {4, 0, 4}, {0, 0, 4}, {0, 0, 0}}
++		b.WalkTo(origin.Add(corners[step%4]))
++	case "moonwalk":
++		pos := b.GetCoords()
++		b.WalkTo(pos.Add(mgl32.Vec3{-float32(math.Cos(baseYawRad)) * 3, 0, -float32(math.Sin(baseYawRad)) * 3}))
++	case "crabwalk", "zigzag":
++		side := float32(1)
++		if step%2 == 1 {
++			side = -1
++		}
++		perpAngle := baseYawRad + (math.Pi/2)*float64(side)
++		fwd := float32(0)
++		if label == "zigzag" {
++			fwd = 2.5
++		}
++		pos := b.GetCoords()
++		b.WalkTo(pos.Add(mgl32.Vec3{
++			float32(math.Cos(baseYawRad))*fwd + float32(math.Cos(perpAngle))*3,
++			0,
++			float32(math.Sin(baseYawRad))*fwd + float32(math.Sin(perpAngle))*3,
++		}))
++	case "jumpforward", "bunnyhop":
++		b.RequestJump()
++		pos := b.GetCoords()
++		b.WalkTo(pos.Add(mgl32.Vec3{float32(math.Cos(baseYawRad)) * 5, 0, float32(math.Sin(baseYawRad)) * 5}))
++	default:
++		if label == "panic" {
++			b.RequestJump()
++		}
++		pos := b.GetCoords()
++		angle := rand.Float64() * math.Pi * 2
++		dist := float32(2 + rand.Intn(4))
++		b.WalkTo(pos.Add(mgl32.Vec3{float32(math.Cos(angle)) * dist, 0, float32(math.Sin(angle)) * dist}))
++	}
++}
++
++func sleepPatternTick(ctx interface{ Done() <-chan struct{} }, label string) bool {
++	wait := 1200 * time.Millisecond
++	if label == "panic" || label == "bunnyhop" || label == "jumpforward" || label == "walkcircle" {
++		wait = 650 * time.Millisecond
++	}
++	if ctx == nil {
++		time.Sleep(wait)
++		return true
++	}
++	select {
++	case <-ctx.Done():
++		return false
++	case <-time.After(wait):
++		return true
++	}
++}
++
++func stepRunAwayFromPlayer(b *bot.Bot, user string) {
+ 	_, p, ok := b.FindPlayer(user)
+ 	if !ok {
+ 		return
+@@ -83,10 +256,15 @@ func runAwayFromPlayer(b *bot.Bot, user string, duration time.Duration) {
+ 	}
+ 	dir = dir.Normalize().Mul(8)
+ 	b.WalkTo(pos.Add(dir))
++}
++
++func runAwayFromPlayer(b *bot.Bot, user string, duration time.Duration) {
++	stepRunAwayFromPlayer(b, user)
+ 	time.Sleep(duration)
+ }
+ 
+ func handleLookOrIdleAction(b *bot.Bot, label, param, user string) {
++	b.HaltWalk()
+ 	switch label {
+ 	case "stare":
+ 		seconds := time.Duration(DurationTicks(param, 5*time.Second)/20) * time.Second
+@@ -102,15 +280,14 @@ func handleLookOrIdleAction(b *bot.Bot, label, param, user string) {
+ 	}
+ }
+ 
+-// digDownAction digs a shaft (or handles the "dig out" variant, which is
+-// really an emote) and then reports, so a plan step waiting on it is released
+-// when the digging stops rather than timing out.
+ func digDownAction(b *bot.Bot, label, param, user string) {
+ 	depth := ParseCount(param, 3)
+ 	if label == "gotohell" {
+ 		depth = 50
+ 	}
+ 	if label == "digout" {
++		b.HaltWalk()
++		b.RequestJump()
+ 		b.TriggerEmoteFor("jump", 60)
+ 		ReportStatus(b, user, event.ActionStatus{Action: label, Success: true})
+ 		return
+@@ -127,7 +304,6 @@ func digDownAction(b *bot.Bot, label, param, user string) {
+ 	ReportStatus(b, user, event.ActionStatus{Action: label, Count: depth, Success: true})
+ }
+ 
+-// towerAction scaffolds a tower and then reports, for the same reason.
+ func towerAction(b *bot.Bot, param, user string) {
+ 	height := ParseCount(param, 6)
+ 	if height > 50 {
+diff --git a/internal/bot/action/plan.go b/internal/bot/action/plan.go
+index 0c88f27..d324970 100644
+--- a/internal/bot/action/plan.go
++++ b/internal/bot/action/plan.go
+@@ -10,10 +10,7 @@ import (
+ )
+ 
+ // statusTimeout bounds how long a plan step waits for its handler to say how it
+-// went. It is generous on purpose — a chest search or a stronghold sweep is
+-// real work — but it is a bound, because a handler that never reports is
+-// indistinguishable from one that is still working, and a plan must not hang
+-// on either. When it expires the step fails: silence is not a result.
++// went.
+ const statusTimeout = 90 * time.Second
+ 
+ type Step struct {
+@@ -30,9 +27,13 @@ func ExecutePlan(b *bot.Bot, steps []Step, user string) {
+ 		return
+ 	}
+ 
++	ctx := b.ActivityContext()
+ 	go func() {
+ 		b.Logger.Debug("executing action plan", "steps", len(steps), "user", user)
+ 		for _, step := range steps {
++			if ctx != nil && ctx.Err() != nil {
++				return
++			}
+ 			label := strings.ToLower(strings.TrimSpace(step.Label))
+ 			if label == "" {
+ 				continue
+@@ -45,25 +46,12 @@ func ExecutePlan(b *bot.Bot, steps []Step, user string) {
+ 
+ // ExecuteAndWait runs one action synchronously and returns what actually
+ // happened.
+-//
+-// It used to return a hard-coded success for every non-craft action once the
+-// bot had stopped moving, which told the planner that steps it could not
+-// perform — or that had failed — were done. The planner re-plans from these
+-// answers, so an optimistic one walks it further away from the goal on every
+-// retry. Now the verdict is the handler's own: a reported success is a success,
+-// a reported failure is a failure carrying its reason, and a handler that says
+-// nothing within the timeout fails the step rather than passing it.
+-//
+-// Craft keeps its structured path, which already returns the real outcome.
+ func ExecuteAndWait(b *bot.Bot, label, param, user string) event.ActionStatus {
+ 	return ExecuteAndWaitWithTimeout(b, label, param, user, actionReportTimeout(label))
+ }
+ 
+ // actionReportTimeout resolves how long a step may run before "no result"
+-// means failure. Most actions answer within seconds, but a big gather —
+-// "cariin 200 kayu" — is a job measured in many minutes, and the planner
+-// must keep waiting for its terminal report instead of declaring the step
+-// dead at ninety seconds and re-running it over the top of the first try.
++// means failure.
+ func actionReportTimeout(label string) time.Duration {
+ 	switch strings.ToLower(strings.TrimSpace(label)) {
+ 	case "gather", "chop", "treefarm", "automine", "fish", "harvest", "explore":
+@@ -77,9 +65,6 @@ func actionReportTimeout(label string) time.Duration {
+ func ExecuteAndWaitWithTimeout(b *bot.Bot, label, param, user string, timeout time.Duration) event.ActionStatus {
+ 	normalized := strings.ToLower(strings.TrimSpace(label))
+ 
+-	// Rest and wait are satisfied by standing still. That is the instruction,
+-	// not a shortcut around it, so it succeeds without dispatching anything and
+-	// without waiting for a report that will never come.
+ 	if normalized == "" {
+ 		return event.ActionStatus{Action: normalized, Success: true}
+ 	}
+@@ -88,8 +73,6 @@ func ExecuteAndWaitWithTimeout(b *bot.Bot, label, param, user string, timeout ti
+ 		return executeCraftActionSilent(b, param, user)
+ 	}
+ 
+-	// An unhandled label must fail loudly. Letting it through as a no-op
+-	// success is how a plan used to "complete" steps the bot never performed.
+ 	if _, ok := lookupHandler(normalized); !ok {
+ 		return event.ActionStatus{
+ 			Action:  normalized,
+@@ -98,24 +81,15 @@ func ExecuteAndWaitWithTimeout(b *bot.Bot, label, param, user string, timeout ti
+ 		}
+ 	}
+ 
+-	// Subscribe before dispatching: handlers that report synchronously do so
+-	// from inside Execute, and a subscription installed afterwards would miss
+-	// the very report it is waiting for.
+ 	statuses := SubscribeStatus(b)
+ 	defer UnsubscribeStatus(b, statuses)
+ 
+ 	Execute(b, normalized, param, user)
+ 
+-	// Still wait for the bot to settle before reading the verdict. A handler
+-	// that reported on dispatch (navigation, toggles) does so while the bot is
+-	// still moving, and the action is not done until the motion is.
+ 	waitForActionSettled(b, normalized)
+ 
+ 	select {
+ 	case status := <-statuses:
+-		// Keep the requested label when a handler reports under a different one
+-		// (an alias such as "remember" reporting as "recall"), so the step the
+-		// planner asked for stays identifiable in its own transcript.
+ 		if status.Action == "" {
+ 			status.Action = normalized
+ 		}
+@@ -131,19 +105,13 @@ func ExecuteAndWaitWithTimeout(b *bot.Bot, label, param, user string, timeout ti
+ 
+ func waitForActionSettled(b *bot.Bot, label string) {
+ 	switch label {
+-	case "come", "goto", "walk", "force_walk":
++	case "come", "goto", "move", "walk", "force_walk", "gotoblock", "standon", "enterportal":
+ 		waitForMovementIdle(b, 65*time.Second)
+-	case "emote":
+-		// A staged routine reads as one motion: the next clause must not start
+-		// mid-hop or mid-spin. The emote window is ticked down by the movement
+-		// loop, so its end is observable; the timeout only bounds the wait for
+-		// a loop that is not running.
++	case "emote", "jump", "dance", "twerk", "floss", "naenae", "robot", "breakdance",
++		"spinforever", "spinfast", "spinslow", "spinlookup", "spinlookdown",
++		"jumpforever", "jumpinplace", "jumpspincombo", "nod", "shake", "headbang", "wave", "dab":
+ 		waitForEmoteSettled(b, 5*time.Second)
+ 	case "gather", "chop", "treefarm", "mine", "automine", "loot", "clear", "scan":
+-		// Event-driven: the wait returns the moment the gatherer stops. The
+-		// long cap exists for jobs like "200 kayu" that legitimately run for
+-		// many minutes — cutting them at ninety seconds started the next plan
+-		// step (craft, place) while the bot was still chopping.
+ 		waitForGatheringIdle(b, actionReportTimeout(label))
+ 	case "craft":
+ 		time.Sleep(900 * time.Millisecond)
+@@ -172,14 +140,26 @@ func waitForEmoteSettled(b *bot.Bot, timeout time.Duration) {
+ 
+ func waitForMovementIdle(b *bot.Bot, timeout time.Duration) {
+ 	deadline := time.Now().Add(timeout)
++	startDeadline := time.Now().Add(350 * time.Millisecond)
++	seenMoving := false
+ 	for time.Now().Before(deadline) {
++		now := time.Now()
+ 		b.Mu.Lock()
+ 		state := b.MovementState
++		forceWalking := !b.ForceWalkUntil.IsZero() && now.Before(b.ForceWalkUntil)
+ 		b.Mu.Unlock()
+-		if state == "idle" {
++
++		moving := (state != "" && state != "idle") || forceWalking
++		if moving {
++			seenMoving = true
++		}
++		if seenMoving && !moving {
+ 			return
+ 		}
+-		time.Sleep(250 * time.Millisecond)
++		if !seenMoving && now.After(startDeadline) {
++			return
++		}
++		time.Sleep(100 * time.Millisecond)
+ 	}
+ }
+ 
+diff --git a/internal/bot/agi/prompt.go b/internal/bot/agi/prompt.go
+index ed48fe4..ac18c7c 100644
+--- a/internal/bot/agi/prompt.go
++++ b/internal/bot/agi/prompt.go
+@@ -119,11 +119,11 @@ PILIHAN:
+ 
+ ATURAN PENTING:
+ - Tidak WAJIB punya kegiatan setiap tick. Kalau tidak ada yang menarik, diam saja.
+-- Kalau ada sign di dekatmu, baca DULUAN sebelum nyari barang — label di situ Petrovunjuk chest yang benar.
++- Kalau ada sign di dekatmu, baca DULUAN sebelum nyari barang, label di situ petunjuk chest yang benar.
+ - Kalau ada rencana di atas, IKUTI. Jangan usik yang lagi dikerjakan; kamu yang ngejelasin, bukan yang ngarah.
+ - Kalau daftar "PILIHAN" tidak punya yang cocok dengan isi dunia ini, jangan karang aksi. Bicara aja.
+-- Jangan jelasin rencanamu. Kalau mau ngomong, ngomong aja seperti orang biasa.
+-- Maksimal 1-2 kalimat kalau ngomong.
++- Jangan jelasin rencanamu. Kalau mau ngomong, ketik singkat dan santai kayak gamer biasa (2-6 kata, tanpa tanda '—' dan tanpa menyapa nama lengkap player di awal kalimat).
++- Maksimal 1 kalimat pendek kalau ngomong.
+ - Jangan pernah menyebut kamu sebagai AI, bot, atau assistant.`,
+ 		snap.Now.Format("15:04"), coords, hp, hunger, people, inventory, alone, signSummary,
+ 		episodeBlock(snap), planBlock(snap), goalBlock(snap), worldBlock(snap), memoryBlock(b))
+diff --git a/internal/bot/agi/runner.go b/internal/bot/agi/runner.go
+index 6fae0cc..5ebc0fd 100644
+--- a/internal/bot/agi/runner.go
++++ b/internal/bot/agi/runner.go
+@@ -1605,7 +1605,7 @@ func (r *Runner) ConversationContext() string {
+ 	}
+ 	var sb strings.Builder
+ 	for _, message := range history {
+-		if strings.Contains(message.Content, "ACTION RESULT #") {
++		if strings.Contains(message.Content, "ACTION RESULT #") || ai.IsSyntheticPrompt(message.Content) {
+ 			continue
+ 		}
+ 		fmt.Fprintf(&sb, "%s: %s\n", message.Role, truncate(message.Content, 400))
+diff --git a/internal/bot/chat/fallback_actions.go b/internal/bot/chat/fallback_actions.go
+index 7cae117..4906843 100644
+--- a/internal/bot/chat/fallback_actions.go
++++ b/internal/bot/chat/fallback_actions.go
+@@ -12,20 +12,7 @@ import (
+ 
+ var coordinateIntentRegex = regexp.MustCompile(`(?i)(?:koordinat|kordinat|coords?|coordinate|goto|jalan\s+ke|pergi\s+ke|ke)[^-+0-9]*([-+]?\d+(?:\.\d+)?)\s+([-+]?\d+(?:\.\d+)?)\s+([-+]?\d+(?:\.\d+)?)`)
+ 
+-// comeIntentRegex matches "come to me" in the phrasings a player actually
+-// types, rather than the four contiguous strings the old list enumerated.
+-//
+-// There are two shapes and both are needed. A verb carrying a destination —
+-// "datang ke sini", "pergi ke tempat ku" — has the two parts in that order with
+-// a little filler between them, because in Indonesian the verb and the
+-// destination are separable words rather than one fixed phrase. And a
+-// destination that stands alone — "kesini", "come here" — needs no verb at all,
+-// because the destination is itself the request.
+-//
+-// Demanding a verb AND a destination rejects every standalone phrasing, because
+-// "kesini" has no verb in front of it; and listing only standalone phrasings
+-// rejects every one that has a verb, which is what the old four-string list did.
+-// Both failures are silent and both read to a player as the bot ignoring them.
++// comeIntentRegex matches "come to me" in the phrasings a player actually types.
+ var comeIntentRegex = regexp.MustCompile(
+ 	`(?i)(?:` +
+ 		// Verb, then filler, then the destination.
+@@ -41,21 +28,11 @@ var comeIntentRegex = regexp.MustCompile(
+ 
+ // followIntentRegex matches "stay with me" as a standing order rather than a
+ // one-off trip.
+-//
+-// It is separate from comeIntentRegex because the two are different requests:
+-// "come" walks to where the player is now and stops, "follow" keeps walking
+-// after them. A bot that answered "ikut aku" with a one-off walk would arrive,
+-// stop, and then look broken when the player kept moving.
+ var followIntentRegex = regexp.MustCompile(
+ 	`(?i)\b(?:ikut|follow|ikuti|iring|iringi|temani|bareng|beser)\b`)
+ 
+ // stopFollowingIntentRegex matches a request to stop following, in the
+ // phrasings a player uses rather than as a command nobody knows about.
+-//
+-// The opt-out has to be as easy to say as the opt-in. "Berhenti ikutin aku" was
+-// typed at the bot and the bot kept following for four minutes, because the
+-// only thing it heard was "!nofollow" — a command that exists in the source and
+-// in no player's head. Both halves of the exchange have to be plain speech.
+ var stopFollowingIntentRegex = regexp.MustCompile(
+ 	`(?i)\b(?:berhenti|stop)\w*\b[\s\S]{0,20}?\b\w*ikut\w*\b` +
+ 		`|\b(?:berhenti|stop)\w*\b[\s\S]{0,20}?\b(?:following|follow|iring\w*|mengekor)\b` +
+@@ -92,7 +69,11 @@ func isStopAttackIntent(msg string) bool {
+ 
+ func fallbackMovementActions(msg string) []action.Step {
+ 	msg = strings.TrimSpace(msg)
+-	if msg == "" {
++	if msg == "" || isQuestion(msg) || isStopFollowingIntent(msg) {
++		return nil
++	}
++	lower := strings.ToLower(msg)
++	if containsAny(lower, "jangan ke sini", "jangan kesini", "gak usah ke sini", "ga usah ke sini", "jangan ikut", "gak usah ikut", "ga usah ikut") {
+ 		return nil
+ 	}
+ 	if match := coordinateIntentRegex.FindStringSubmatch(msg); len(match) == 4 {
+@@ -102,28 +83,6 @@ func fallbackMovementActions(msg string) []action.Step {
+ 		}}
+ 	}
+ 
+-	// The "come here" intent, matched as phrases rather than as four exact
+-	// substrings.
+-	//
+-	// The list used to be `kesini`, `ke sini`, `come here`, `datang ke sini`,
+-	// and that is four ways of saying one thing out of the several dozen a
+-	// player actually types. "ke tempat ku", "ikut aku", "sini dong" and
+-	// "follow me" are the same request and none of them matched, so the bot
+-	// answered them in chat and then stood there — which reads as the bot
+-	// ignoring an explicit instruction, and is worse than not understanding it
+-	// because it looked like it had heard.
+-	//
+-	// The verbs are matched separately from the particles that carry them,
+-	// because in Indonesian the two are separable: "ikut" with "sini", "ke"
+-	// with "tempatku", "datang" with "ke sini". Requiring one contiguous string
+-	// per phrasing is what made the old list miss the common cases.
+-	lower := strings.ToLower(msg)
+-
+-	// Follow is tested first because it is the more specific of the two, and the
+-	// patterns overlap: "ikut aku" is a follow request and it also matches the
+-	// come pattern's "ikut … aku" verb-plus-destination shape. Testing come
+-	// first would answer a standing order with a one-off walk — the bot would
+-	// arrive, stop, and look broken the moment the player moved again.
+ 	if followIntentRegex.MatchString(lower) {
+ 		return []action.Step{{Label: "follow"}}
+ 	}
+@@ -133,43 +92,17 @@ func fallbackMovementActions(msg string) []action.Step {
+ 	return nil
+ }
+ 
+-// affirmativeWords are markers a chatty LLM uses to commit to an action
+-// without actually emitting the <action> tag. When we see one of these in the
+-// reply AND the user message has clear action intent, we synthesize the
+-// action ourselves.
+-//
+-// The trailing spaces these entries used to carry were an attempt at whole-word
+-// matching and were not enough: "ya " is a substring of "saya ", so the refusal
+-// "Saya tak bisa" matched, and the action this synthesises is a mine run — so the
+-// bot cheerfully started the exact job the model had just declined. A refusal
+-// and an agreement differ only by a prefix, and substring matching cannot tell
+-// them apart. See isAffirmativeReply.
+-// gatherEverythingCount is what "all of it" resolves to. Not a limit: the
+-// gatherer stops when the world runs out of candidates, so a count past any
+-// plausible stack means the player gets everything there is.
++// gatherEverythingCount is what "all of it" resolves to.
+ const gatherEverythingCount = 4096
+ 
+ var affirmativeWords = []string{
+ 	"siap", "oke", "ok", "okay", "iya", "ya", "yes", "sip", "bentar",
+ 	"sebentar", "bntar", "baik", "lanjut", "mau", "akan", "i'll", "got it",
++	"gas", "gaskan", "sabi", "otw", "yoi", "kuy", "ayo", "ayok", "boleh", "sure",
+ }
+ 
+ // isQuestion reports whether a player message asks whether something is
+ // possible rather than asking for it to be done.
+-//
+-// The intent fallback acts whenever the model's reply sounds willing and the
+-// message names a verb — and a question names the same verb as a command.
+-// "bisa klik npc didepan gak?" carries the same word "klik" as "klik npc
+-// didepan", which is how a status report about a failed click turned into a
+-// silent retry the player never asked for: they asked IF it could be done and
+-// the bot answered by doing it again.
+-//
+-// The markers are punctuation and position, not vocabulary. A trailing "?" is
+-// a question in every phrasing; spoken chat drops it constantly, so a bare
+-// interrogative particle in the tail ("...gak", "...ga", "...nggak") and a
+-// leading interrogative ("apa ...", "bisakah ...") count too. Everything else
+-// stays a command: "klik npc yang bisa ditekan" carries its interrogative
+-// mid-sentence, where it modifies a noun and not the request.
+ func isQuestion(msg string) bool {
+ 	trimmed := strings.TrimSpace(msg)
+ 	if strings.HasSuffix(trimmed, "?") {
+@@ -185,16 +118,11 @@ func isQuestion(msg string) bool {
+ 	return questionTailWords[words[len(words)-1]]
+ }
+ 
+-// questionLeadingWords are sentence-openers that make a message a question
+-// however it ends. Exact-word matches only: "apain" starts with "apa" and is
+-// a command.
+ var questionLeadingWords = map[string]bool{
+ 	"apa": true, "apakah": true, "bisakah": true, "gimana": true,
+ 	"bagaimana": true, "kenapa": true, "kok": true,
+ }
+ 
+-// questionTailWords are the particles Indonesian hangs on the end of a
+-// question when the "?" is left out of chat.
+ var questionTailWords = map[string]bool{
+ 	"gak": true, "ga": true, "gk": true, "nggak": true, "ngga": true, "ngk": true,
+ 	"bukan": true, "kah": true, "bisagak": true,
+@@ -202,10 +130,6 @@ var questionTailWords = map[string]bool{
+ 
+ // isAffirmativeReply reports whether the LLM's reply text contains a word
+ // indicating it committed to performing an action.
+-//
+-// Matched on word boundaries, not by substring. Punctuation counts as a
+-// boundary, so "ya!" and "iya," are agreements; "saya", "dayat" and "biaya"
+-// are not.
+ func isAffirmativeReply(reply string) bool {
+ 	lower := strings.ToLower(reply)
+ 	for _, w := range affirmativeWords {
+@@ -232,26 +156,11 @@ func isAffirmativeReply(reply string) bool {
+ 	return false
+ }
+ 
+-// negators are the words that turn a marker into its opposite. "Belum siap" is
+-// "not ready" and contains "siap" on its own; "tidak akan" contains "akan". A
+-// refusal that happens to contain a marker word is the case this matcher exists
+-// to get right, so a marker immediately preceded by one of these does not count.
+ var negators = []string{"belum", "tidak", "nggak", "ndak", "gak", "bukan", "jangan"}
+ 
+-// precededByNegator reports whether the word at start is negated.
+-//
+-// Only the word immediately before is considered. Negation attaches to the
+-// clause it precedes, and a marker several words into a sentence is not what
+-// "belum siap" means — "saya belum bisa, tapi oke ya" still commits.
+ func precededByNegator(lower string, start int) bool {
+-	// The prefix ends at the marker, so it ends with whatever separated the two
+-	// words — a space in every natural sentence. Trimmed before comparing, or
+-	// the suffix test looks for " belum" in "saya belum " and never finds it.
+ 	prefix := strings.TrimRight(lower[:start], " ")
+ 	for _, neg := range negators {
+-		// The negator must be a whole word: it is the whole prefix, or it ends a
+-		// space-delimited word. Anything else is a longer word that merely
+-		// happens to end in the same letters.
+ 		if prefix == neg || strings.HasSuffix(prefix, " "+neg) {
+ 			return true
+ 		}
+@@ -259,10 +168,6 @@ func precededByNegator(lower string, start int) bool {
+ 	return false
+ }
+ 
+-// isWordBoundary reports whether b can sit next to a matched word without being
+-// part of it. ASCII letters, digits and underscore continue a word; everything
+-// else ends it — including every byte of a multi-byte rune, so a leading
+-// non-ASCII letter cannot fake a boundary.
+ func isWordBoundary(b byte) bool {
+ 	switch {
+ 	case b >= 'a' && b <= 'z', b >= 'A' && b <= 'Z', b >= '0' && b <= '9', b == '_':
+@@ -279,24 +184,56 @@ var itemAliases = [][2]string{
+ 	{"crafting_table", "crafting_table"},
+ 	{"crafting table", "crafting_table"},
+ 	{"craftingtable", "crafting_table"},
++	{"diamond_pickaxe", "diamond_pickaxe"},
++	{"diamond pickaxe", "diamond_pickaxe"},
++	{"diamond_sword", "diamond_sword"},
++	{"diamond sword", "diamond_sword"},
++	{"wooden_pickaxe", "wooden_pickaxe"},
++	{"wooden pickaxe", "wooden_pickaxe"},
++	{"wooden_shovel", "wooden_shovel"},
++	{"wooden_sword", "wooden_sword"},
++	{"wooden sword", "wooden_sword"},
++	{"wooden_axe", "wooden_axe"},
++	{"stone_pickaxe", "stone_pickaxe"},
++	{"stone pickaxe", "stone_pickaxe"},
++	{"stone_sword", "stone_sword"},
++	{"stone sword", "stone_sword"},
++	{"stone_axe", "stone_axe"},
++	{"iron_pickaxe", "iron_pickaxe"},
++	{"iron pickaxe", "iron_pickaxe"},
++	{"iron_sword", "iron_sword"},
++	{"iron sword", "iron_sword"},
++	{"pedang diamond", "diamond_sword"},
++	{"pedang besi", "iron_sword"},
++	{"pedang batu", "stone_sword"},
++	{"pedang kayu", "wooden_sword"},
++	{"pickaxe diamond", "diamond_pickaxe"},
++	{"pickaxe besi", "iron_pickaxe"},
++	{"pickaxe batu", "stone_pickaxe"},
++	{"pickaxe kayu", "wooden_pickaxe"},
++	{"kapak batu", "stone_axe"},
++	{"kapak kayu", "wooden_axe"},
+ 	{"oak_planks", "oak_planks"},
+ 	{"oak planks", "oak_planks"},
++	{"dark_oak_log", "dark_oak_log"},
++	{"spruce_log", "spruce_log"},
++	{"birch_log", "birch_log"},
+ 	{"oak_log", "oak_log"},
+ 	{"oak log", "oak_log"},
+-	{"wooden_axe", "wooden_axe"},
+-	{"wooden_pickaxe", "wooden_pickaxe"},
+-	{"wooden_shovel", "wooden_shovel"},
+-	{"stone_axe", "stone_axe"},
+-	{"stone_pickaxe", "stone_pickaxe"},
+ 	{"cobblestone", "cobblestone"},
+ 	{"cobble", "cobblestone"},
++	{"cooked_beef", "cooked_beef"},
+ 	{"furnace", "furnace"},
++	{"kompor", "furnace"},
+ 	{"chest", "chest"},
++	{"peti", "chest"},
+ 	{"stick", "stick"},
+ 	{"torch", "torch"},
++	{"obor", "torch"},
+ 	{"planks", "oak_planks"},
+ 	{"papan", "oak_planks"},
+ 	{"kayu", "oak_log"},
++	{"pohon", "oak_log"},
+ 	{"wood", "oak_log"},
+ 	{"log", "oak_log"},
+ 	{"dirt", "dirt"},
+@@ -305,117 +242,150 @@ var itemAliases = [][2]string{
+ 	{"batu", "stone"},
+ 	{"sand", "sand"},
+ 	{"pasir", "sand"},
++	{"bread", "bread"},
++	{"roti", "bread"},
++	{"apple", "apple"},
++	{"apel", "apple"},
++	{"steak", "cooked_beef"},
++	{"daging", "cooked_beef"},
++	{"pedang", "wooden_sword"},
++	{"pickaxe", "wooden_pickaxe"},
++	{"kapak", "wooden_axe"},
+ }
+ 
+ var countRegex = regexp.MustCompile(`\d+`)
+ 
+ // inferActionIntent guesses an action tag from raw user message text. Use
+ // only as a fallback when the LLM replied affirmatively but forgot the
+-// <action> markup. The LLM reply is also scanned for the item name, since
+-// users often omit it ("coba pegang di tangan") while the reply names it
+-// ("oke aku pegang oak log-nya").
++// <action> markup.
+ func inferActionIntent(msg, reply string) []action.Step {
++	if isQuestion(msg) {
++		return nil
++	}
+ 	lower := strings.ToLower(msg)
+ 	replyLower := strings.ToLower(reply)
+ 
+-	// A question is never a request. "bisa klik npc didepan gak?" shares every
+-	// verb with "klik npc didepan", and this function keys on verbs — which is
+-	// how the answer to "can you?" became the act itself. The gate lives here,
+-	// at the synthesiser, so every caller inherits it.
+-	if isQuestion(msg) {
++	if steps, ok := inferDirectActionIntent(lower, msg, reply); ok {
++		return steps
++	}
++
++	label := resolveItemActionLabel(lower)
++	if label == "" {
+ 		return nil
+ 	}
+ 
+-	if containsAny(lower, "klik", "click", "interact", "tekan", "pencet", "sentuh") ||
+-		(containsAny(lower, "buka") && (containsAny(lower, "pintu", "door", "chest", "peti", "trapdoor", "gerbang", "gate", "barrel"))) {
+-		req := interact.ParseRequest(msg)
+-		param := "depan"
+-		if req.Block != "" {
+-			param = req.Block
+-		} else if req.Entity != "" {
+-			param = req.Entity
+-		} else if req.InFront {
+-			param = "depan"
+-		} else {
+-			replyReq := interact.ParseRequest(reply)
+-			if replyReq.Block != "" {
+-				param = replyReq.Block
+-			} else if replyReq.Entity != "" {
+-				param = replyReq.Entity
+-			}
++	item := resolveItemFromAliases(lower, replyLower)
++	if item == "" {
++		return nil
++	}
++
++	count, additional := resolveActionCount(lower)
++	param := item
++	switch label {
++	case "drop", "eat", "equip", "place":
++		// These handlers take a bare item name (no count).
++	default:
++		param = fmt.Sprintf("%s,%d", item, count)
++		if additional {
++			param = fmt.Sprintf("%s,+%d", item, count)
+ 		}
+-		return []action.Step{{Label: "interact", Param: param}}
+ 	}
+ 
+-	var label string
++	return []action.Step{{Label: label, Param: param}}
++}
++
++func inferDirectActionIntent(lower, msg, reply string) ([]action.Step, bool) {
++	if containsAny(lower, "klik", "click", "interact", "tekan", "pencet", "sentuh") ||
++		(containsAny(lower, "buka") && containsAny(lower, "pintu", "door", "chest", "peti", "trapdoor", "gerbang", "gate", "barrel")) {
++		return []action.Step{{Label: "interact", Param: resolveInteractParam(msg, reply)}}, true
++	}
++	if containsAny(lower, "pakai armor", "pake armor", "pasang armor", "equip armor") {
++		return []action.Step{{Label: "armor"}}, true
++	}
++	if containsAny(lower, "buang yang dipegang", "drop yang dipegang", "drop item di tangan", "drop tangan") {
++		return []action.Step{{Label: "drop", Param: ""}}, true
++	}
++	if containsAny(lower, "tidur", "sleep") {
++		return []action.Step{{Label: "sleep"}}, true
++	}
++	if containsAny(lower, "mancing", "memancing", "fishing") {
++		return []action.Step{{Label: "fish", Param: "5"}}, true
++	}
++	if containsAny(lower, "joget", "dance") {
++		return []action.Step{{Label: "dance", Param: "6"}}, true
++	}
++	if containsAny(lower, "twerk") {
++		return []action.Step{{Label: "twerk", Param: "5"}}, true
++	}
++	if containsAny(lower, "lompat", "loncat") {
++		return []action.Step{{Label: "jump"}}, true
++	}
++	return nil, false
++}
++
++func resolveInteractParam(msg, reply string) string {
++	req := interact.ParseRequest(msg)
++	if req.Block != "" {
++		return req.Block
++	}
++	if req.Entity != "" {
++		return req.Entity
++	}
++	if req.InFront {
++		return "depan"
++	}
++	replyReq := interact.ParseRequest(reply)
++	if replyReq.Block != "" {
++		return replyReq.Block
++	}
++	if replyReq.Entity != "" {
++		return replyReq.Entity
++	}
++	return "depan"
++}
++
++func resolveItemActionLabel(lower string) string {
+ 	switch {
+ 	case containsAny(lower, "buatin", "bikin", "buat ", "craft", "bikinin"):
+-		label = "craft"
++		return "craft"
++	case containsAny(lower, "taruh", "pasang", "letakkan", "place"):
++		return "place"
+ 	case containsAny(lower, "kasih", "kasi", "berikan", "kasihin", "give"):
+-		label = "give"
++		return "give"
+ 	case containsAny(lower, "drop", "buang", "lempar"):
+-		label = "drop"
++		return "drop"
+ 	case containsAny(lower, "pegang", "genggam", "equip", "hold", "pakai", "pake ", "tahan"):
+-		label = "equip"
+-	case containsAny(lower, "cari", "kumpulin", "kumpulkan", "ambilin", "carikan", "gather", "bawa", "tambah", "butuh", "butuhin", "kurang"):
+-		label = "gather"
+-	case containsAny(lower, "tambang", "mining", "mine ", "gali"):
+-		label = "mine"
++		return "equip"
++	case containsAny(lower, "cari", "kumpulin", "kumpulkan", "ambil", "ambilin", "carikan", "gather", "bawa", "tambah", "butuh", "butuhin", "kurang", "tebang", "nebang", "potong"):
++		return "gather"
++	case containsAny(lower, "tambang", "mining", "mine ", "gali", "hancurin", "pecahin"):
++		return "mine"
+ 	case containsAny(lower, "makan", "eat"):
+-		label = "eat"
++		return "eat"
+ 	default:
+-		return nil
++		return ""
+ 	}
++}
+ 
+-	// Resolve target item from aliases, preferring the user message and
+-	// falling back to the LLM reply.
+-	var item string
++func resolveItemFromAliases(lower, replyLower string) string {
+ 	for _, alias := range itemAliases {
+ 		if strings.Contains(lower, alias[0]) || strings.Contains(replyLower, alias[0]) {
+-			item = alias[1]
+-			break
++			return alias[1]
+ 		}
+ 	}
+-	if item == "" {
+-		return nil
+-	}
++	return ""
++}
+ 
+-	count := 1
+-	additional := false
++func resolveActionCount(lower string) (int, bool) {
+ 	if containsAny(lower, "semua", "semuanya", "all") {
+-		// "Take all of them" is not a request for zero. Zero was the encoding
+-		// here, and zero is not neutral downstream: the gatherer reads a count of
+-		// zero or less as "one block" and proceeds, so "ambil semua batu yang ada"
+-		// felled exactly one block and reported success.
+-		//
+-		// The gatherer loops until the count is reached or the world runs out of
+-		// candidates, so a count past any plausible stack means what the player
+-		// asked for: everything there is.
+-		count = gatherEverythingCount
+-	} else {
+-		// "lagi", "tambah", "more" — the player already has some and wants more
+-		// on top. Without this the count is read as a total, and a bot holding 6
+-		// asked for "6 lagi" reports that it already has enough and stops.
+-		if containsAny(lower, "lagi", "lebih", "tambah", "tambahan", "additional", "more") {
+-			additional = true
+-		}
+-		if m := countRegex.FindString(lower); m != "" {
+-			_, _ = fmt.Sscanf(m, "%d", &count)
+-		}
++		return gatherEverythingCount, false
+ 	}
+-
+-	param := item
+-	switch label {
+-	case "drop", "eat", "equip":
+-		// These handlers take a bare item name (no count).
+-	default:
+-		param = fmt.Sprintf("%s,%d", item, count)
+-		if additional {
+-			param = fmt.Sprintf("%s,+%d", item, count)
+-		}
++	additional := containsAny(lower, "lagi", "lebih", "tambah", "tambahan", "additional", "more")
++	count := 1
++	if m := countRegex.FindString(lower); m != "" {
++		_, _ = fmt.Sscanf(m, "%d", &count)
+ 	}
+-
+-	return []action.Step{{Label: label, Param: param}}
++	return count, additional
+ }
+ 
+ func containsAny(s string, needles ...string) bool {
+diff --git a/internal/bot/chat/response.go b/internal/bot/chat/response.go
+index 7898b6e..6028a94 100644
+--- a/internal/bot/chat/response.go
++++ b/internal/bot/chat/response.go
+@@ -74,12 +74,13 @@ func handleSilentActionResponse(b *bot.Bot, user, systemPrompt string, parsed ai
+ // whisper back, because the server relays ordinary chat to everyone and the
+ // whole point of whispering was that it would not be.
+ func sendMainChatReply(b *bot.Bot, user string, parsed ai.ParsedReply) {
+-	if parsed.CleanReply != "" {
++	clean := ai.StripUserPrefix(parsed.CleanReply, user)
++	if clean != "" {
+ 		b.Logger.Info("chat reply sending",
+-			slog.String("reply", parsed.CleanReply),
++			slog.String("reply", clean),
+ 			slog.String("to", user),
+ 			slog.Bool("whisper", b.WhisperPartner() != ""))
+-		b.SendReply(user, parsed.CleanReply)
++		b.SendReply(user, clean)
+ 		return
+ 	}
+ 	b.Logger.Info("chat: AI returned no visible reply text")
+@@ -158,16 +159,17 @@ func handleSilentResponse(b *bot.Bot, sourceName string, systemPrompt string, ac
+ 				continue
+ 			}
+ 			parsed2 := ai.Parse(reply2)
+-			if parsed2.CleanReply != "" {
+-				b.Logger.Info("chat reply sending (status follow-up)", slog.String("reply", parsed2.CleanReply))
+-				b.SendReply(sourceName, parsed2.CleanReply)
++			clean2 := ai.StripUserPrefix(parsed2.CleanReply, sourceName)
++			if clean2 != "" {
++				b.Logger.Info("chat reply sending (status follow-up)", slog.String("reply", clean2))
++				b.SendReply(sourceName, clean2)
+ 			}
+ 		} else if label == "inventory" {
+ 			newInvSummary := b.GetInventorySummary()
+ 			followPrompt := fmt.Sprintf(
+ 				"[SYSTEM: Hasil cek inventory MILIKMU (bot) saat ini: %s. "+
+ 					"LAPORKAN LANGSUNG ke <%s> dengan format 'Aku punya ...' atau 'Aku masih punya ...'. "+
+-					"KAMU adalah bot Luna. JANGAN bilang 'Kamu punya' — itu berarti player. "+
++					"JANGAN bilang 'Kamu punya' karena itu berarti player, bukan dirimu. "+
+ 					"JANGAN bilang 'Oke aku cek dulu' atau 'Aku cek lagi'. Langsung sebutkan isi inventory. "+
+ 					"JANGAN sertakan label [inventory] atau tag <action> lagi.]",
+ 				newInvSummary, sourceName)
+@@ -178,9 +180,10 @@ func handleSilentResponse(b *bot.Bot, sourceName string, systemPrompt string, ac
+ 				continue
+ 			}
+ 			parsed2 := ai.Parse(reply2)
+-			if parsed2.CleanReply != "" {
+-				b.Logger.Info("chat reply sending (inventory follow-up)", slog.String("reply", parsed2.CleanReply))
+-				b.SendReply(sourceName, parsed2.CleanReply)
++			clean2 := ai.StripUserPrefix(parsed2.CleanReply, sourceName)
++			if clean2 != "" {
++				b.Logger.Info("chat reply sending (inventory follow-up)", slog.String("reply", clean2))
++				b.SendReply(sourceName, clean2)
+ 			}
+ 		}
+ 	}
+@@ -244,9 +247,10 @@ func scheduleFollowup(b *bot.Bot, user string, delaySec int) {
+ 		}
+ 
+ 		parsed := ai.Parse(reply)
+-		if parsed.CleanReply != "" {
+-			b.Logger.Info("chat reply sending (follow-up)", slog.String("reply", parsed.CleanReply))
+-			b.SendReply(user, parsed.CleanReply)
++		clean := ai.StripUserPrefix(parsed.CleanReply, user)
++		if clean != "" {
++			b.Logger.Info("chat reply sending (follow-up)", slog.String("reply", clean))
++			b.SendReply(user, clean)
+ 		}
+ 
+ 		// Execute any actions from the follow-up.
+diff --git a/internal/bot/chat/state_reply.go b/internal/bot/chat/state_reply.go
+index cda141a..4272125 100644
+--- a/internal/bot/chat/state_reply.go
++++ b/internal/bot/chat/state_reply.go
+@@ -26,6 +26,7 @@ message. Nothing written here runs — no tags, no tasks.
+ - Report ONLY the change named below. Do not mention any other state, task, item or mob.
+ - DO NOT emit <action>, <plan> or <followup> tags. Nothing written here is executed.
+ - DO NOT ask a follow-up question and DO NOT offer to start new work.
++- NEVER start with "<PlayerName>, " and NEVER use em-dashes (—).
+ - DO NOT repeat the player's own words back verbatim.
+ - If the change genuinely needs no words, answer exactly <silent/>.
+ `
+@@ -82,7 +83,7 @@ func stateReplyText(b *bot.Bot, user, playerMsg, change string) string {
+ 	// Parse rather than sending the raw string: the model may still emit an
+ 	// action tag, and this path deliberately executes nothing. Parse strips the
+ 	// tags, so the tag cannot become a task and cannot reach the player as text.
+-	msg := ai.Parse(reply).CleanReply
++	msg := ai.StripUserPrefix(ai.Parse(reply).CleanReply, user)
+ 	if msg == "" {
+ 		return ""
+ 	}
+diff --git a/internal/bot/combat/combat_attack.go b/internal/bot/combat/combat_attack.go
+index ff502e2..6adb622 100644
+--- a/internal/bot/combat/combat_attack.go
++++ b/internal/bot/combat/combat_attack.go
+@@ -47,7 +47,7 @@ func (cm *CombatManager) Tick(ctx context.Context) {
+ 
+ 			go func() {
+ 				time.Sleep(1 * time.Second)
+-				cm.bot.InjectAIEvent("[SYSTEM: Target eliminated. Drop collected or none found. Tell the player naturally.]")
++				cm.bot.InjectAIEvent("[SYSTEM: Target eliminated. Reply <silent/> unless a 2-4 word casual reaction fits (e.g. 'mati juga', 'beres'). Do NOT narrate like a status log.]")
+ 			}()
+ 			return
+ 		}
+@@ -269,7 +269,7 @@ func (cm *CombatManager) maybeBanter(target *entity.Info) {
+ 	if time.Now().UnixNano()%100 >= int64(chance) {
+ 		return
+ 	}
+-	cm.bot.InjectAIEvent("[SYSTEM EVENT: Mid-duel moment against " + target.Name + ". If you have ONE very short line a real player would type right now (taunt, reaction, trash talk), send it as plain chat with no action tags. Otherwise stay completely silent.]")
++	cm.bot.InjectAIEvent("[SYSTEM EVENT: Mid-duel moment against " + target.Name + ". If you have ONE ultra-short line (2-4 words) a real gamer would type right now, send it as plain chat with no '—' and no action tags. Otherwise reply <silent/>.]")
+ }
+ 
+ // swingAt is the melee half of a tick: the range check, the cooldown, the sight
+diff --git a/internal/bot/combat/threat.go b/internal/bot/combat/threat.go
+index 456ae05..8f2f5b5 100644
+--- a/internal/bot/combat/threat.go
++++ b/internal/bot/combat/threat.go
+@@ -156,13 +156,6 @@ func (td *ThreatDetector) evaluateThreats(botPos mgl32.Vec3, entities []*entity.
+ 
+ // isHostileEntity decides whether an actor is one of the mobs the detector
+ // reacts to.
+-//
+-// The lookup normalises before comparing. The actor's Type is always
+-// namespaced — "minecraft:zombie" — and an unnamed mob's Name is a copy of
+-// that same Type (handleAddActor falls back to it), so the raw strings never
+-// matched the bare keys in hostileMobs and the whole threat path was dead
+-// code for every mob without a nametag: no reflex engage, no alerts, which is
+-// the "mob jahat diemin terus" the guard feature had to fight through.
+ func isHostileEntity(ent *entity.Info) bool {
+ 	return hostileMobs[entity.NormalizeName(ent.Name)] || hostileMobs[entity.NormalizeName(ent.Type)]
+ }
+@@ -180,7 +173,7 @@ func (td *ThreatDetector) handleThreat(closestHostile *entity.Info, closestDist
+ 		threatsStr := td.formatThreats(botPos, newThreats)
+ 		td.logger.Info("ThreatDetector: alerting player/AI of threats", "threats", threatsStr)
+ 
+-		systemMsg := fmt.Sprintf("[SYSTEM EVENT: Hostile mobs detected nearby: %s. Decide: fight them or warn the player. Use \\attack\\ if you want to fight.]", threatsStr)
++		systemMsg := fmt.Sprintf("[SYSTEM EVENT: Hostile mobs detected nearby: %s. Decide: fight them or warn the player briefly in casual chat. Use <action>attack</action> if you want to fight.]", threatsStr)
+ 		td.bot.InjectAIEvent(systemMsg)
+ 	}
+ }
+@@ -201,20 +194,12 @@ const (
+ )
+ 
+ // nearestTrackedPlayerReader is the optional view of the bot that can look up
+-// tracked players directly. Players are not actors (handleAddPlayer never
+-// touches b.Actors), so the reflex needs this read and cannot fall back to
+-// GetEntities — a bot without it just never retaliates, which is the safe
+-// default.
++// tracked players directly.
+ type nearestTrackedPlayerReader interface {
+ 	NearestTrackedPlayer(origin mgl32.Vec3, maxDist float32) (name string, id uint64, pos mgl32.Vec3, ok bool)
+ }
+ 
+ // NotePlayerSwing records an arm swing observed from another player.
+-//
+-// A swing is the only packet-level evidence that a human meant to hit
+-// something, and it is what separates "a player hit me" from "I fell over
+-// while a player was standing next to me". The runtime ID is kept so the hit
+-// can be attributed to that specific player rather than to whoever is closest.
+ func (td *ThreatDetector) NotePlayerSwing(runtimeID uint64) {
+ 	if runtimeID == 0 {
+ 		return
+@@ -226,8 +211,7 @@ func (td *ThreatDetector) NotePlayerSwing(runtimeID uint64) {
+ }
+ 
+ // NotePlayerDamage records the server's SetLastHurtBy verdict that the damage
+-// just taken came from a player. It is a corroborating signal, not a naming
+-// one: the packet carries an entity type, never a username.
++// just taken came from a player.
+ func (td *ThreatDetector) NotePlayerDamage() {
+ 	td.mu.Lock()
+ 	td.lastHurtByPlayerAt = time.Now()
+@@ -266,18 +250,10 @@ func (td *ThreatDetector) hitsFromThisAttacker(id uint64) bool {
+ 
+ // OnDamaged is the self-defence reflex for player hits.
+ //
+-// It answers proportionately, not maximally. One punch earns a reaction, not a
+-// duel: the bot turns, says something, and keeps its hands to itself. A short
+-// burst of hits earns a defensive answer — hit back from where it stands, with
+-// what it already holds, a few swings at most. Only somebody who keeps coming
+-// earns the ordinary duel doctrine.
+-//
+-// Two things must hold before anything is thrown at all. The damage has to be
+-// attributable to the player: the nearest player being nearby is not evidence,
+-// because falls, mobs and poison all arrive as the same health drop, and reading
+-// closeness as guilt is how the bot attacked whoever happened to be standing
+-// next to it. And the player must not be on the never-fight list — hitting the
+-// person the bot answers to is never a self-defence reflex, it is a bug.
++// Two things must hold before anything is thrown or spoken at all. First, the
++// damage must actually be attributable to a player (via an observed swing or
++// SetLastHurtBy) so fall/cactus/mob damage taken near an ally never falsely
++// blames them. Second, allies are never fought back.
+ func (td *ThreatDetector) OnDamaged(botPos mgl32.Vec3) {
+ 	reader, ok := td.bot.(nearestTrackedPlayerReader)
+ 	if !ok {
+@@ -288,48 +264,44 @@ func (td *ThreatDetector) OnDamaged(botPos mgl32.Vec3) {
+ 		return
+ 	}
+ 
+-	// Turn to face whoever did it. Looking at somebody who just hit you is the
+-	// visible half of the reaction, and it is the only thing a warning-level
+-	// answer does with the body.
++	if !td.hitsFromThisAttacker(id) {
++		td.logger.Info("ThreatDetector: damage had no player behind it, not retaliating",
++			"nearest_player", attacker)
++		return
++	}
++
++	// Turn to face whoever actually hit us.
+ 	td.bot.LookAt(attackerPos.Add(mgl32.Vec3{0, 1.2, 0}))
+ 
+ 	if td.IsAlly(attacker) {
+ 		td.logger.Info("ThreatDetector: hit by an ally, never fighting back", "player", attacker)
+ 		td.hits.Reset()
+-		td.bot.InjectAIEvent("[SYSTEM EVENT: " + attacker + " — the player you answer to — just hit you. You are NOT fighting back and must not start. React naturally in chat with ONE short line (mungkin becanda, mungkin protes ringan), no action tags.]")
+-		return
+-	}
+-
+-	if !td.hitsFromThisAttacker(id) {
+-		td.logger.Info("ThreatDetector: damage had no player behind it, not retaliating",
+-			"nearest_player", attacker)
++		td.bot.InjectAIEvent("[SYSTEM EVENT: Your friend just poked/hit you. You are NOT fighting back. React with 2-5 ultra-casual gamer words (e.g. 'eh ngapain wkwk', 'woi sakit', 'lah iseng bgt'). Do NOT start with their username, do NOT use '—', do NOT lecture or say 'jangan diulang ya', and emit no action tags.]")
+ 		return
+ 	}
+ 
+ 	level, hits, fresh := td.hits.Record(attacker, time.Now())
+ 	if fresh {
+-		// One line per scuffle, before the per-level lines, so the ladder reads
+-		// in order afterwards without a line for every swing.
+ 		td.logger.Info("ThreatDetector: scuffle started", "player", attacker)
+ 	}
+ 	switch level {
+ 	case RetaliationWarn:
+ 		td.logger.Info("ThreatDetector: first hit, warning only",
+ 			"player", attacker, "hits", hits)
+-		td.bot.InjectAIEvent("[SYSTEM EVENT: " + attacker + " just hit you once. You are NOT fighting back. React naturally in chat with ONE short line — kaget, protes, atau warning ringan — and keep doing whatever you were doing. No action tags.]")
++		td.bot.InjectAIEvent("[SYSTEM EVENT: " + attacker + " just hit you once. You are NOT fighting back. React with 2-5 ultra-casual gamer words (e.g. 'eh ngapain wkwk', 'woi santai', 'lah kok mukul') and keep doing whatever you were doing. Do NOT start with their username, do NOT use '—', do NOT say 'jangan diulang ya', no action tags.]")
+ 
+ 	case RetaliationDefend:
+ 		td.logger.Info("ThreatDetector: repeated hits, hitting back defensively",
+ 			"player", attacker, "hits", hits)
+ 		if td.combat.EngageDefender(attacker) {
+-			td.bot.InjectAIEvent("[SYSTEM EVENT: " + attacker + " keeps hitting you. You are hitting back defensively — standing your ground, not chasing. Say ONE short line about it in chat, no action tags.]")
++			td.bot.InjectAIEvent("[SYSTEM EVENT: " + attacker + " keeps hitting you so you're hitting back defensively. Say ONE short casual gamer line (2-5 words, no '—', no action tags).]")
+ 		}
+ 
+ 	case RetaliationDuel:
+ 		td.logger.Info("ThreatDetector: sustained attack, engaging properly",
+ 			"player", attacker, "hits", hits)
+ 		td.combat.EngagePlayer(attacker)
+-		td.bot.InjectAIEvent("[SYSTEM EVENT: " + attacker + " has hit you " + strconv.Itoa(hits) + " times and is not stopping. You are fighting back for real now. Tell the player naturally in chat, briefly.]")
++		td.bot.InjectAIEvent("[SYSTEM EVENT: " + attacker + " hit you " + strconv.Itoa(hits) + " times and isn't stopping, so you're fighting back for real now. Say ONE short casual gamer line (no '—', no action tags).]")
+ 
+ 	default:
+ 		return
+@@ -337,12 +309,10 @@ func (td *ThreatDetector) OnDamaged(botPos mgl32.Vec3) {
+ }
+ 
+ // guardEngageRadius is how far from the protected player (or the bot) a
+-// hostile may sit and still be engaged on sight in guard mode. Beyond it the
+-// behaviour falls back to the stock alert, which is the off-mode behaviour.
++// hostile may sit and still be engaged on sight in guard mode.
+ const guardEngageRadius = 12.0
+ 
+-// SetGuardMode turns the in-game guardian behaviour on or off. The protector is
+-// the player who asked, and the hostile picked is the one closest to them.
++// SetGuardMode turns the in-game guardian behaviour on or off.
+ func (td *ThreatDetector) SetGuardMode(enabled bool, protector string) {
+ 	td.mu.Lock()
+ 	defer td.mu.Unlock()
+@@ -357,16 +327,7 @@ func (td *ThreatDetector) GuardMode() (bool, string) {
+ 	return td.guardMode, td.guardProtector
+ }
+ 
+-// guardScan is the guard-mode half of the scan. It engages the hostile with the
+-// smallest distance to either the protected player or the bot, whichever is
+-// nearer, inside guardEngageRadius — so a zombie drifting toward the player is
+-// attacked while it is still their problem, not only when it reaches the bot.
+-//
+-// It reports whether it engaged, and the caller then skips the stock alert
+-// path: a fight that already started needs no "decide whether to fight" event.
+-// When the protector is not currently tracked (logged off, out of range) the
+-// anchor degrades to the bot itself, which is exactly the off-mode reflex
+-// widened to the guard radius.
++// guardScan is the guard-mode half of the scan.
+ func (td *ThreatDetector) guardScan(visible []*entity.Info, botPos mgl32.Vec3) bool {
+ 	enabled, protector := td.GuardMode()
+ 	if !enabled {
+diff --git a/internal/bot/gathering/chop_action.go b/internal/bot/gathering/chop_action.go
+index 49811c4..1721adf 100644
+--- a/internal/bot/gathering/chop_action.go
++++ b/internal/bot/gathering/chop_action.go
+@@ -129,14 +129,19 @@ func (tc *TreeChopper) maybeScaffoldToLogs(ctx context.Context, left []protocol.
+ 		return false
+ 	}
+ 	lowest := left[0]
+-	highest := left[0]
+ 	for _, pos := range left {
+ 		if pos.Y() < lowest.Y() {
+ 			lowest = pos
+ 		}
+-		if pos.Y() > highest.Y() {
+-			highest = pos
++	}
++	// Logs up to 6 blocks high (basePos.Y() through basePos.Y()+5) are reachable
++	// from the ground by stepping into or right next to the cleared trunk base;
++	// never build a scaffold pillar for a normal-height tree.
++	if lowest.Y()-basePos.Y() <= 5 {
++		if tc.rg.bot.NavigateToBlock(basePos.X(), basePos.Y(), basePos.Z(), 1.4) {
++			tc.haltWalk()
+ 		}
++		return withinBreakReach(tc.rg.bot.GetCoords(), lowest)
+ 	}
+ 	situation := fmt.Sprintf(
+ 		"The tree at X:%d Y:%d Z:%d still has %d logs above your reach (lowest unreachable at Y:%d, you stand at Y:%d). "+
+@@ -156,9 +161,11 @@ func (tc *TreeChopper) maybeScaffoldToLogs(ctx context.Context, left []protocol.
+ 		tc.logger.Info("Scaffold chosen but no blocks to build with; skipping the top")
+ 		return false
+ 	}
+-	// Standing at the lowest unreachable log's level puts the whole upper
+-	// trunk inside swing reach; TowerUpTo pillars from right here.
+-	tc.rg.scaffold.TowerUpTo(ctx, float32(lowest.Y()))
++	targetFeet := float32(lowest.Y()) - (breakReach - 1.5) - mineEyeHeight
++	if targetFeet < float32(basePos.Y())+1 {
++		targetFeet = float32(basePos.Y()) + 1
++	}
++	tc.rg.scaffold.TowerUpTo(ctx, targetFeet)
+ 	return true
+ }
+ 
+@@ -317,14 +324,21 @@ func blockCentre(pos protocol.BlockPos) mgl32.Vec3 {
+ // be breakable. Measured from the eye (feet + 1.62) in 3D, because the old
+ // feet-dy>4 trigger sent the bot towering — and mining dirt for the tower —
+ // for upper logs that were comfortably within reach all along.
+-const breakReach = 4.2
++const (
++	breakReach          = 4.6
++	scaffoldHeightFloor = 4.2
++)
+ 
+-// withinBreakReach reports whether the eye is close enough to the block centre
+-// to break it.
++// withinBreakReach reports whether the eye is close enough to the log (either
++// its centre or its exposed bottom face when overhead) to break it from here.
+ func withinBreakReach(botPos mgl32.Vec3, pos protocol.BlockPos) bool {
+ 	eye := botPos.Add(mgl32.Vec3{0, mineEyeHeight, 0})
+ 	center := mgl32.Vec3{float32(pos.X()) + 0.5, float32(pos.Y()) + 0.5, float32(pos.Z()) + 0.5}
+-	return eye.Sub(center).Len() <= breakReach
++	if eye.Sub(center).Len() <= breakReach {
++		return true
++	}
++	bottom := mgl32.Vec3{float32(pos.X()) + 0.5, float32(pos.Y()), float32(pos.Z()) + 0.5}
++	return eye.Y() < bottom.Y() && eye.Sub(bottom).Len() <= 4.5
+ }
+ 
+ func (tc *TreeChopper) chopLogBlock(ctx context.Context, pos protocol.BlockPos, rhythm *animation.Chain) bool {
+@@ -335,31 +349,22 @@ func (tc *TreeChopper) chopLogBlock(ctx context.Context, pos protocol.BlockPos,
+ 		if !tc.repositionForLog(ctx, pos) {
+ 			return false
+ 		}
+-		// The reposition detours (stock mining, tower equips) leave a shovel, a
+-		// hoe or a scaffold block in the hand; the old code chopped the rest of
+-		// the trunk with whatever was held. The early-return inside makes this
+-		// a no-op when the axe is already up.
+ 		tc.equipBestAxe()
+ 	}
+ 
+-	// Plan the break the way the miner does: an exposed face the bot can
+-	// actually see, with the face matching the aim. The old code claimed face 1
+-	// (top) for every log while aiming at a side, and never checked sight —
+-	// so it mined through the trunk with no line of sight.
+ 	world := botMineWorld{bot: bot, model: bot.GetLocalWorldModel()}
+ 
+ 	// Clearance comes BEFORE the plan, not after it.
+-	//
+-	// A log with something solid in all six of its faces has no approach at all,
+-	// and this ordering used to lose exactly that case: clearObstructions only ran
+-	// once a step had already been planned, so a log walled in by the very block
+-	// that needed clearing went straight to `return false`, got deferred, and
+-	// after two passes the tree was abandoned with its lower half still standing.
+-	// Knock the block out of the way, then swing at the log — which is the order
+-	// a player works in.
+ 	tc.clearObstructions(ctx, pos)
+ 
+ 	step, visible := PlanMineStep(world, bot.GetCoords(), pos)
++	if !visible {
++		// Stepping closer to the cleared trunk column opens the vertical
++		// sightline straight up through the broken lower logs without towering.
++		tc.returnToReach(ctx, pos)
++		tc.clearObstructions(ctx, pos)
++		step, visible = PlanMineStep(world, bot.GetCoords(), pos)
++	}
+ 	if !visible {
+ 		tc.logger.Debug("log not visible from current spot, deferring", "pos", pos)
+ 		return false
+@@ -386,41 +391,38 @@ func (tc *TreeChopper) chopLogBlock(ctx context.Context, pos protocol.BlockPos,
+ // logs get a walk back.
+ func (tc *TreeChopper) repositionForLog(ctx context.Context, pos protocol.BlockPos) bool {
+ 	bot := tc.rg.bot
++
++	// Always step closer to the trunk base on the ground first. A bot standing
++	// 2.5-3.5 blocks to the side can reach logs 4-6 simply by stepping up to
++	// the trunk without placing any scaffold blocks.
++	tc.returnToReach(ctx, pos)
+ 	botPos := bot.GetCoords()
++	if withinBreakReach(botPos, pos) {
++		return true
++	}
++
+ 	eyeY := botPos.Y() + mineEyeHeight
+ 	centerY := float32(pos.Y()) + 0.5
+ 
+-	if centerY-eyeY > breakReach-2.0 {
+-		// The log is too high to reach from here. Tower just enough that the
+-		// eye lands within reach of the centre (leaving a little horizontal
+-		// budget), so upper trunk logs stay reachable without re-towering
+-		// every single block.
+-		targetFeet := centerY - (breakReach - 2.0) - mineEyeHeight
+-		tc.logger.Debug("towering up to log", "log_y", pos.Y(), "tower_to_y", targetFeet)
+-		tc.rg.scaffold.TowerUpTo(ctx, targetFeet)
+-	} else {
+-		tc.returnToReach(ctx, pos)
+-		return true
+-	}
+-	// The tower was refused, skipped, or not high enough and the log is still
+-	// out of reach: walking to it now sends the pathfinder climbing the tree
+-	// via its own leaves — the live run logged "A* gave up short" six times
+-	// for one trunk this way. Leave the log to the round/skip logic instead.
+-	if !withinBreakReach(tc.rg.bot.GetCoords(), pos) {
+-		tc.logger.Debug("log still out of reach after reposition, deferring", "pos", pos)
++	// Only scaffold when the log is genuinely high above eye level (7th log or
++	// higher, i.e. >= 6 blocks above feet). Normal 4-6 block trees are never
++	// scaffolded.
++	if centerY-eyeY <= scaffoldHeightFloor {
+ 		return false
+ 	}
+-	// After towering the bot may be several blocks out horizontally; walk
+-	// back before swinging or the break is rejected for range.
+-	tc.returnToReach(ctx, pos)
+-	return true
++
++	targetFeet := centerY - (breakReach - 1.5) - mineEyeHeight
++	tc.logger.Debug("towering up to high log", "log_y", pos.Y(), "tower_to_y", targetFeet)
++	tc.rg.scaffold.TowerUpTo(ctx, targetFeet)
++	return withinBreakReach(bot.GetCoords(), pos)
+ }
+ 
+-// chopReachLimit is how far the bot may stand from a log and still break it.
+-const chopReachLimit = 4.0
++// chopReachLimit is the horizontal distance within which the bot is already
++// standing right next to/under the trunk column.
++const chopReachLimit = 1.6
+ 
+-// returnToReach walks back to a log after an interruption (towering, mining
+-// scaffold stock) left the bot out of breaking range.
++// returnToReach walks closer to the trunk column at GROUND level (never
++// targeting pos.Y()-1 in mid-air, which would cause A* to scaffold upward).
+ func (tc *TreeChopper) returnToReach(ctx context.Context, pos protocol.BlockPos) {
+ 	bot := tc.rg.bot
+ 	botPos := bot.GetCoords()
+@@ -430,12 +432,27 @@ func (tc *TreeChopper) returnToReach(ctx context.Context, pos protocol.BlockPos)
+ 		return
+ 	}
+ 
+-	tc.logger.Debug("Out of reach after towering, walking back to log", "pos", pos)
+-	if tc.rg.bot.NavigateToBlock(pos.X(), pos.Y()-1, pos.Z(), 2.0) {
++	groundY := tc.groundLevelBelowLog(pos, int32(math.Floor(float64(botPos.Y()))))
++	tc.logger.Debug("Stepping closer to trunk base at ground level", "log_pos", pos, "ground_y", groundY)
++	if tc.rg.bot.NavigateToBlock(pos.X(), groundY, pos.Z(), 1.5) {
+ 		tc.haltWalk()
+ 	}
+ }
+ 
++func (tc *TreeChopper) groundLevelBelowLog(pos protocol.BlockPos, fallbackY int32) int32 {
++	world := tc.rg.bot.GetLocalWorldModel()
++	for y := pos.Y() - 1; y >= fallbackY-2 && y >= pos.Y()-10; y-- {
++		name, ok := tc.rg.bot.GetBlockName(pos.X(), y, pos.Z())
++		if !ok || isLogBlockName(name) {
++			continue
++		}
++		if world != nil && world.IsSolid(pos.X(), y, pos.Z()) {
++			return y + 1
++		}
++	}
++	return fallbackY
++}
++
+ // startBreakBlock begins the server-auth break of the planned step, using the
+ // face the plan chose (the old code always claimed face 1/top regardless of
+ // which side the bot was actually aiming at).
+@@ -552,6 +569,14 @@ func (tc *TreeChopper) clearObstructions(ctx context.Context, logPos protocol.Bl
+ 			logPos.Z() + face.offset.Z(),
+ 		}
+ 		cleared = tc.breakObstruction(ctx, pos) || cleared
++		// Also clear low canopy leaves one block below the log that block the
++		// upward diagonal sightline from the ground.
++		lowPos := protocol.BlockPos{
++			logPos.X() + face.offset.X(),
++			logPos.Y() - 1,
++			logPos.Z() + face.offset.Z(),
++		}
++		cleared = tc.breakObstruction(ctx, lowPos) || cleared
+ 	}
+ 	return cleared
+ }
+diff --git a/internal/bot/gathering/chopper.go b/internal/bot/gathering/chopper.go
+index 5d25793..a4a01e5 100644
+--- a/internal/bot/gathering/chopper.go
++++ b/internal/bot/gathering/chopper.go
+@@ -360,14 +360,10 @@ func (tc *TreeChopper) ChopTreeAt(ctx context.Context, startPos protocol.BlockPo
+ 	// bot's pathfinder corrects an earlier mis-step (e.g. ledge it just fell
+ 	// off). Tolerance bumped to 3.5 so standing one block away counts as
+ 	// "reached" — the chopTree BFS will handle the rest.
+-	for attempt := 0; attempt < 3; attempt++ {
+-		if tc.rg.bot.NavigateToBlock(startPos.X(), startPos.Y(), startPos.Z(), 3.5) {
+-			// Tolerance is a 3D sphere, so "reached" used to include standing a
+-			// full two blocks BELOW the base (dy 2 leaves horizontal ≤ 2.87 inside
+-			// a 3.5 sphere) — the chop then ran from below and pillared for a
+-			// step a walk would have climbed. The normal chopping stance has the
+-			// feet within one block of the base level.
+-			if feet := tc.rg.bot.GetCoords().Y(); math.Abs(float64(feet-float32(startPos.Y()))) <= 1.0 {
++		tolerances := []float32{2.2, 2.8, 3.5}
++	for attempt, tol := range tolerances {
++		if tc.rg.bot.NavigateToBlock(startPos.X(), startPos.Y(), startPos.Z(), tol) {
++			if feet := tc.rg.bot.GetCoords().Y(); math.Abs(float64(feet-float32(startPos.Y()))) <= 1.2 {
+ 				reached = true
+ 				break
+ 			}
+diff --git a/internal/bot/gathering/scaffold.go b/internal/bot/gathering/scaffold.go
+index 23666e6..25ca1cc 100644
+--- a/internal/bot/gathering/scaffold.go
++++ b/internal/bot/gathering/scaffold.go
+@@ -224,32 +224,39 @@ func (s *Scaffolder) TowerUpTo(ctx context.Context, targetY float32) {
+ // read the result back from the world instead of asserting it.
+ func (s *Scaffolder) placeOneBlock(ctx context.Context, bot Bot, curPos mgl32.Vec3, item protocol.ItemStack) (bool, string) {
+ 	ref, cell := scaffold.TowerColumn(curPos)
++	world := bot.GetLocalWorldModel()
+ 
+ 	// Open the ceiling before anything else. Under a canopy the cell above the
+ 	// head holds leaves, and a jump into leaves never gets the body off the
+-	// floor, so the tower failed on every attempt. Breaking them is what a player
+-	// does instead of hunting for more dirt.
++	// floor, so the tower failed on every attempt.
+ 	headroom := scaffold.TowerHeadroom(curPos)
+ 	if _, occupied := scaffold.Occupied(bot, headroom); occupied {
+ 		s.logger.Info("scaffold: clearing the blocks above the head", "pos", headroom)
+ 		if ok, reason := scaffold.ClearCell(ctx, bot, headroom, true, scaffold.TierHand); !ok {
+ 			return false, "could not clear the headroom: " + reason
+ 		}
++		if world != nil {
++			world.SetSolid(headroom.X(), headroom.Y(), headroom.Z(), false)
++		}
+ 	}
+ 
+-	// Clear whatever is in the way first, while the body is still down and the
+-	// cell is reachable.
+-	// TierHand on purpose: a tower has already committed to this column and has
+-	// nowhere to detour to, so refusing a block it is standing under would leave
+-	// it in the column rather than out of it. The pathfinder passes the bot's
+-	// real tier, because there it does have somewhere else to go.
+ 	if ok, reason := scaffold.ClearCell(ctx, bot, cell, true, scaffold.TierHand); !ok {
+ 		return false, "could not clear the cell: " + reason
+ 	}
++	if world != nil {
++		world.SetSolid(cell.X(), cell.Y(), cell.Z(), false)
++	}
+ 
+ 	// PlaceVerified jumps when the body is in the cell's way and sends the
+-	// placement the moment the body clears it.
+-	return scaffold.PlaceVerified(ctx, bot, ref, item)
++	// placement the moment the body clears it. Record the confirmed block in
++	// LocalWorldModel immediately so physics sees solid support under the feet
++	// (preventing Geyser rubberband/ungrounded deadlock) and DescendFromTower
++	// knows to break it on the way down.
++	placed, reason := scaffold.PlaceVerified(ctx, bot, ref, item)
++	if placed && world != nil {
++		world.SetSolid(cell.X(), cell.Y(), cell.Z(), true)
++	}
++	return placed, reason
+ }
+ 
+ // ensureScaffoldStock mines a few blocks to tower with. It stops as soon as
+@@ -306,23 +313,20 @@ func (s *Scaffolder) DescendFromTower(ctx context.Context, targetY float32) {
+ 		}
+ 
+ 		world := bot.GetLocalWorldModel()
+-		if !world.IsSolid(refPos.X(), refPos.Y(), refPos.Z()) {
++		_, occupied := scaffold.Occupied(bot, refPos)
++		if (world == nil || !world.IsSolid(refPos.X(), refPos.Y(), refPos.Z())) && !occupied {
+ 			break
+ 		}
+ 
+-		// Under server-auth block breaking the host honours PredictDestroy only
+-		// after the full vanilla break time elapsed; the fixed 400ms predates that
+-		// mode and leaves scaffold blocks standing.
++		blockName, _ := bot.GetBlockName(refPos.X(), refPos.Y(), refPos.Z())
++		if blockName == "" {
++			blockName = "dirt"
++		}
+ 		breakTime := 400 * time.Millisecond
+ 		if serverAuthBreaking(bot) {
+-			breakTime = sabdBreakDuration(true, "dirt", "")
++			breakTime = sabdBreakDuration(true, blockName, "")
+ 		}
+ 
+-		// The break is now confirmed against the world rather than assumed. The
+-		// old sequence sent PredictDestroy, told the local model the block was
+-		// gone, and slept — so on a host that rejected the early destroy the bot
+-		// stepped off a block that was still there, and the next descent started
+-		// from a lie. BreakAndWait watches the block actually leave.
+ 		cleared, reason := scaffold.BreakAndWait(ctx, bot, refPos, breakTime)
+ 		if !cleared {
+ 			s.logger.Warn("scaffold: could not clear the block to descend onto",
+@@ -330,26 +334,10 @@ func (s *Scaffolder) DescendFromTower(ctx context.Context, targetY float32) {
+ 			return
+ 		}
+ 
+-		// Only now is it honest to tell the world model the block is gone: the
+-		// server has been seen to do it.
+-		world.SetSolid(refPos.X(), refPos.Y(), refPos.Z(), false)
+-
+-		// Step off. The break alone does not move the body: the block under the
+-		// feet is gone and the bot is still standing at the height of the tower,
+-		// with every drop it just made lying on the ground below it. That is what
+-		// the sweep ran into — the looter looks for drops within a few blocks,
+-		// and a body six blocks up a tree cannot see the ground under it.
+-		//
+-		// The body has to actually come down before the sweep looks, otherwise
+-		// the drops are on the ground and the bot is in the canopy. Breaking
+-		// the block and waiting does not move it: the loop used to break the
+-		// whole column out from under itself and the body arrived at the bottom
+-		// in one fall, if at all.
+-		bot.NavigateTo(mgl32.Vec3{
+-			float32(refPos.X()) + 0.5,
+-			float32(refPos.Y()) + 1,
+-			float32(refPos.Z()) + 0.5,
+-		})
++		if world != nil {
++			world.SetSolid(refPos.X(), refPos.Y(), refPos.Z(), false)
++		}
++		haltWalkOnly(bot)
+ 
+ 		if !sleepContext(ctx, 350*time.Millisecond) {
+ 			return
+diff --git a/internal/bot/inventory_actions.go b/internal/bot/inventory_actions.go
+index 02c81a7..a5c505e 100644
+--- a/internal/bot/inventory_actions.go
++++ b/internal/bot/inventory_actions.go
+@@ -200,7 +200,7 @@ func (b *Bot) InjectAIEvent(msg string) {
+ 		return
+ 	}
+ 
+-	// Query Nvidia Client asynchronously with the system message
++	// Query LLM client asynchronously with the system message.
+ 	go func() {
+ 		hp, hunger, botCoords := b.GetStatusDetails()
+ 		heldItem := b.GetHeldItem()
+@@ -208,16 +208,25 @@ func (b *Bot) InjectAIEvent(msg string) {
+ 
+ 		b.Mu.Lock()
+ 		mainPlayers := b.AiCfg.GetMainPlayers()
++		lastPartner := b.LastChatPartner
+ 		botName := b.Name
+ 		b.Mu.Unlock()
+ 
+-		if len(mainPlayers) == 0 {
++		targetPlayer := lastPartner
++		if targetPlayer == "" && len(mainPlayers) > 0 {
++			targetPlayer = mainPlayers[0]
++		}
++		if targetPlayer == "" {
++			if nearName, _, _, ok := b.NearestTrackedPlayer(b.GetCoords(), 32); ok {
++				targetPlayer = nearName
++			}
++		}
++		if targetPlayer == "" {
+ 			return
+ 		}
+-		mainPlayer := mainPlayers[0]
+ 
+ 		playerCoordsStr := ""
+-		if pCoords, ok := b.GetPlayerCoords(mainPlayer); ok {
++		if pCoords, ok := b.GetPlayerCoords(targetPlayer); ok {
+ 			playerCoordsStr = fmt.Sprintf("X:%.0f Y:%.0f Z:%.0f", pCoords.X(), pCoords.Y(), pCoords.Z())
+ 		}
+ 
+@@ -230,20 +239,21 @@ func (b *Bot) InjectAIEvent(msg string) {
+ 			invSummary,
+ 		)
+ 
+-		reply, err := b.AiClient.Ask(mainPlayer, systemPrompt, msg)
++		reply, err := b.AiClient.Ask(targetPlayer, systemPrompt, msg)
+ 		if err != nil {
+ 			b.Logger.Error("Failed to ask Nvidia LLM for injected event", "error", err.Error())
+ 			return
+ 		}
+ 
+ 		parsed := ai.Parse(reply)
+-		if parsed.CleanReply != "" {
+-			b.SendSafeChat(parsed.CleanReply)
++		clean := ai.StripUserPrefix(parsed.CleanReply, targetPlayer)
++		if clean != "" && !ai.IsNarrationLeak(clean) && !ai.IsSelfCorrection(clean) && !ai.IsScriptCorrupted(clean) {
++			b.SendReply(targetPlayer, clean)
+ 		}
+ 
+ 		if ExecuteActionFunc != nil {
+ 			for _, act := range parsed.Actions {
+-				ExecuteActionFunc(b, act.Label, act.Param, mainPlayer)
++				ExecuteActionFunc(b, act.Label, act.Param, targetPlayer)
+ 			}
+ 		}
+ 	}()
+diff --git a/internal/bot/movement/packet.go b/internal/bot/movement/packet.go
+index 227b22d..4918f30 100644
+--- a/internal/bot/movement/packet.go
++++ b/internal/bot/movement/packet.go
+@@ -130,6 +130,8 @@ func (tc *TickContext) applyEmote() (emoteJump, emoteSneak bool) {
+ 		emoteJump = true
+ 	case "sneak":
+ 		emoteSneak = true
++	case "twerk":
++		emoteSneak = (tc.B.EmoteTicks/3)%2 == 0
+ 	}
+ 
+ 	if tc.B.EmoteTicks == 0 {
+diff --git a/internal/bot/status_reporter.go b/internal/bot/status_reporter.go
+index f3368e3..c5ac055 100644
+--- a/internal/bot/status_reporter.go
++++ b/internal/bot/status_reporter.go
+@@ -213,13 +213,14 @@ func reportActionStatusAsync(b *Bot, user string, status event.ActionStatus) {
+ 	systemPrompt += "\n\n[STATUS REPLY RULES]\n" +
+ 		"You are a Minecraft player who just did the thing below. You are writing chat to a friend who can probably SEE you doing it.\n" +
+ 		"- First question: is this even worth saying? If the player watched it happen (walked there, typed the command, equipped the thing) the human answer is <silent/> — say NOTHING. Silence after visible actions is what people do.\n" +
+-		"- If it IS worth saying: react first like a gamer (\"wkwk\", \"gila\", \"udah\", \"done\"), one short fragment. NEVER open with a report phrase like \"udah aku ketik\", \"sudah selesai\", \"aku sudah\" — that is a status log, not a person.\n" +
++		"- If it IS worth saying: react first like a gamer (\"wkwk\", \"gila\", \"udah\", \"done\"), one short fragment (2-8 words). NEVER open with a report phrase like \"udah aku ketik\", \"sudah selesai\", \"aku sudah\" — that is a status log, not a person.\n" +
++		"- NEVER start with \"<PlayerName>, \" and NEVER use em-dashes (—).\n" +
+ 		"- Vary the shape: not every line gets a reaction word plus a particle. One-word lines (\"done\", \"aman\") are fine. Match the player's punctuation — most of the time that means no commas, no periods.\n" +
+ 		"- Reply in natural Indonesian matching the player's tone; never translate internal action labels into speech.\n" +
+ 		"- Report concrete outcomes only when the player is waiting on them (a count they asked for, a thing you crafted for them). Never turn waypoints into found items.\n" +
+ 		"- DO NOT use action tags (<action>, <plan>, <followup>, etc.).\n" +
+ 		"- DO NOT use raw item IDs like 'oak_planks'; use friendly names like 'Oak Planks'.\n" +
+-		"- Under 15 words. If the action failed, say what went wrong in one casual line — that IS worth saying.\n" +
++		"- Under 12 words. If the action failed, say what went wrong in one casual line — that IS worth saying.\n" +
+ 		"- Answer ONLY the latest ACTION RESULT nonce below; ignore older status prompts in this conversation."
+ 
+ 	prompt := BuildStatusPrompt(status)
+@@ -230,7 +231,7 @@ func reportActionStatusAsync(b *Bot, user string, status event.ActionStatus) {
+ 		return
+ 	}
+ 	parsed := ai.Parse(reply)
+-	message := parsed.CleanReply
++	message := ai.StripUserPrefix(parsed.CleanReply, user)
+ 
+ 	// The server already decided whether this action worked, and that verdict is
+ 	// server-derived — it comes from the handler that watched the actual world
+diff --git a/tests/ai/parser_test.go b/tests/ai/parser_test.go
+index 04d8e8e..83ae3a5 100644
+--- a/tests/ai/parser_test.go
++++ b/tests/ai/parser_test.go
+@@ -285,3 +285,58 @@ func TestParse_SkipsEmptyActionLabelAndCapsFollowup(t *testing.T) {
+ 		t.Fatalf("expected ParsePlanSteps to ignore <think> blocks, got %+v", steps)
+ 	}
+ }
++
++func TestParse_StripsEmDashAndRoboticPrefix(t *testing.T) {
++	t.Parallel()
++	r := ai.Parse("Synterix, kok malah mukul? Aku kan lagi kerja—jangan diulang ya.")
++	if strings.Contains(r.CleanReply, "—") || strings.Contains(r.CleanReply, "–") {
++		t.Errorf("CleanReply still contains em-dash: %q", r.CleanReply)
++	}
++	stripped := ai.StripUserPrefix(r.CleanReply, ".Synterix")
++	if strings.HasPrefix(strings.ToLower(stripped), "synterix,") {
++		t.Errorf("StripUserPrefix failed to remove leading player vocative: %q", stripped)
++	}
++}
++
++func TestParse_CaseInsensitiveAndFallbackActionTags(t *testing.T) {
++	t.Parallel()
++	r1 := ai.Parse("otw <ACTION>come:Synterix</ACTION>")
++	if len(r1.Actions) != 1 || r1.Actions[0].Label != "come" || r1.Actions[0].Param != "Synterix" {
++		t.Fatalf("case-insensitive <ACTION> failed: %+v", r1)
++	}
++	if r1.CleanReply != "otw" {
++		t.Errorf("CleanReply = %q, want 'otw'", r1.CleanReply)
++	}
++
++	r2 := ai.Parse("siap [action:gather:oak_log,4]")
++	if len(r2.Actions) != 1 || r2.Actions[0].Label != "gather" || r2.Actions[0].Param != "oak_log,4" {
++		t.Fatalf("bracket [action:...] fallback failed: %+v", r2)
++	}
++	if r2.CleanReply != "siap" {
++		t.Errorf("CleanReply = %q, want 'siap'", r2.CleanReply)
++	}
++}
++
++func TestIsSyntheticPrompt(t *testing.T) {
++	t.Parallel()
++	for _, msg := range []string{
++		"[SYSTEM EVENT: Owner hit you]",
++		"[PROACTIVE TICK]",
++		"[AGI TICK 12:00] Kamu lagi main",
++		"[STATE CHANGE] stopped following",
++		"ACTION RESULT #123: gather succeeded",
++	} {
++		if !ai.IsSyntheticPrompt(msg) {
++			t.Errorf("IsSyntheticPrompt(%q) = false, want true", msg)
++		}
++	}
++	for _, msg := range []string{
++		"halo",
++		"cariin aku 6 oak log",
++		"jangan mukul",
++	} {
++		if ai.IsSyntheticPrompt(msg) {
++			t.Errorf("IsSyntheticPrompt(%q) = true, want false", msg)
++		}
++	}
++}
+diff --git a/tests/bot/chat/refusal_is_not_consent_test.go b/tests/bot/chat/refusal_is_not_consent_test.go
+index 6b30e51..26b637f 100644
+--- a/tests/bot/chat/refusal_is_not_consent_test.go
++++ b/tests/bot/chat/refusal_is_not_consent_test.go
+@@ -190,3 +190,36 @@ func TestInferActionIntent_InteractVerbs(t *testing.T) {
+ 		})
+ 	}
+ }
++
++func TestInferActionIntent_ExpandedCasualCommands(t *testing.T) {
++	t.Parallel()
++
++	for _, reply := range []string{"gas", "otw", "sabi", "yoi", "kuy"} {
++		if !chat.IsAffirmativeReplyForTest(reply) {
++			t.Errorf("casual gamer agreement %q was not recognised by isAffirmativeReply", reply)
++		}
++	}
++
++	cases := []struct {
++		msg       string
++		reply     string
++		wantLabel string
++		wantParam string
++	}{
++		{"tebang 4 kayu", "gas", "gather", "oak_log,4"},
++		{"taruh crafting table", "oke", "place", "crafting_table"},
++		{"pakai armor", "siap", "armor", ""},
++		{"buang yang dipegang", "oke", "drop", ""},
++		{"joget dulu", "gas", "dance", "6"},
++		{"twerk dong", "wkwk oke", "twerk", "5"},
++	}
++	for _, tc := range cases {
++		steps := chat.InferActionIntentForTest(tc.msg, tc.reply)
++		if len(steps) != 1 {
++			t.Fatalf("%q produced %v, want 1 step", tc.msg, steps)
++		}
++		if steps[0].Label != tc.wantLabel || steps[0].Param != tc.wantParam {
++			t.Errorf("%q -> %s:%s, want %s:%s", tc.msg, steps[0].Label, steps[0].Param, tc.wantLabel, tc.wantParam)
++		}
++	}
++}
+diff --git a/tests/bot/combat/pvp_test.go b/tests/bot/combat/pvp_test.go
+index 6677e18..dd1f048 100644
+--- a/tests/bot/combat/pvp_test.go
++++ b/tests/bot/combat/pvp_test.go
+@@ -367,3 +367,21 @@ func TestChooseWeaponReachesForTheAxeAgainstArmour(t *testing.T) {
+ 		t.Fatalf("mob fight: kind = %v, want sword — swing count is only armour evidence against players", got)
+ 	}
+ }
++
++// TestDamageWithNoPlayerSwingDoesNotBlameNearbyAlly ensures environmental/fall
++// damage taken while standing next to an ally never fires a scolding AI event.
++func TestDamageWithNoPlayerSwingDoesNotBlameNearbyAlly(t *testing.T) {
++	t.Parallel()
++	r, cm, td := newRetaliatingBot(map[string]mgl32.Vec3{"Synterix": {2.0, 64, 0}})
++	td.SetAllyFilter(func(name string) bool { return name == "Synterix" })
++
++	// No swing and no SetLastHurtBy: environmental damage near an ally.
++	td.OnDamaged(mgl32.Vec3{0, 64, 0})
++
++	if cm.InCombat() {
++		t.Fatal("engaged ally over environmental damage")
++	}
++	if got := r.lastEvent(); got != "" {
++		t.Fatalf("blamed nearby ally for non-player damage with event: %q", got)
++	}
++}
+diff --git a/tests/bot/gathering/scaffold_test.go b/tests/bot/gathering/scaffold_test.go
+index 42783b4..7691d88 100644
+--- a/tests/bot/gathering/scaffold_test.go
++++ b/tests/bot/gathering/scaffold_test.go
+@@ -2,6 +2,9 @@ package gathering_test
+ 
+ import (
+ 	"math"
++	"os"
++	"path/filepath"
++	"strings"
+ 	"testing"
+ 	"time"
+ 
+@@ -79,3 +82,26 @@ func TestTheScaffoldPlacementHasTimeToLand(t *testing.T) {
+ 		t.Error("the settle is shorter than a swing pause; the two are pacing the same gesture")
+ 	}
+ }
++
++func TestPlaceOneBlockUpdatesLocalWorldModelAndReturnToReachUsesGroundLevel(t *testing.T) {
++	t.Parallel()
++
++	scaffoldSrc, err := os.ReadFile(filepath.Join("..", "..", "..", "internal", "bot", "gathering", "scaffold.go"))
++	if err != nil {
++		t.Fatalf("read scaffold.go: %v", err)
++	}
++	if !strings.Contains(string(scaffoldSrc), "world.SetSolid(cell.X(), cell.Y(), cell.Z(), true)") {
++		t.Error("placeOneBlock does not mark the placed cell solid in LocalWorldModel; bot gets ungrounded/stuck on Geyser and DescendFromTower skips breaking it")
++	}
++
++	chopSrc, err := os.ReadFile(filepath.Join("..", "..", "..", "internal", "bot", "gathering", "chop_action.go"))
++	if err != nil {
++		t.Fatalf("read chop_action.go: %v", err)
++	}
++	if strings.Contains(string(chopSrc), "NavigateToBlock(pos.X(), pos.Y()-1, pos.Z()") {
++		t.Error("returnToReach still navigates to pos.Y()-1 in mid-air, causing A* to scaffold on the 4th log")
++	}
++	if !strings.Contains(string(chopSrc), "scaffoldHeightFloor") {
++		t.Error("repositionForLog does not gate towering behind scaffoldHeightFloor")
++	}
++}

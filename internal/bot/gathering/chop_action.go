@@ -129,14 +129,19 @@ func (tc *TreeChopper) maybeScaffoldToLogs(ctx context.Context, left []protocol.
 		return false
 	}
 	lowest := left[0]
-	highest := left[0]
 	for _, pos := range left {
 		if pos.Y() < lowest.Y() {
 			lowest = pos
 		}
-		if pos.Y() > highest.Y() {
-			highest = pos
+	}
+	// Logs up to 6 blocks high (basePos.Y() through basePos.Y()+5) are reachable
+	// from the ground by stepping into or right next to the cleared trunk base;
+	// never build a scaffold pillar for a normal-height tree.
+	if lowest.Y()-basePos.Y() <= 5 {
+		if tc.rg.bot.NavigateToBlock(basePos.X(), basePos.Y(), basePos.Z(), 1.4) {
+			tc.haltWalk()
 		}
+		return withinBreakReach(tc.rg.bot.GetCoords(), lowest)
 	}
 	situation := fmt.Sprintf(
 		"The tree at X:%d Y:%d Z:%d still has %d logs above your reach (lowest unreachable at Y:%d, you stand at Y:%d). "+
@@ -156,9 +161,11 @@ func (tc *TreeChopper) maybeScaffoldToLogs(ctx context.Context, left []protocol.
 		tc.logger.Info("Scaffold chosen but no blocks to build with; skipping the top")
 		return false
 	}
-	// Standing at the lowest unreachable log's level puts the whole upper
-	// trunk inside swing reach; TowerUpTo pillars from right here.
-	tc.rg.scaffold.TowerUpTo(ctx, float32(lowest.Y()))
+	targetFeet := float32(lowest.Y()) - (breakReach - 1.5) - mineEyeHeight
+	if targetFeet < float32(basePos.Y())+1 {
+		targetFeet = float32(basePos.Y()) + 1
+	}
+	tc.rg.scaffold.TowerUpTo(ctx, targetFeet)
 	return true
 }
 
@@ -317,14 +324,21 @@ func blockCentre(pos protocol.BlockPos) mgl32.Vec3 {
 // be breakable. Measured from the eye (feet + 1.62) in 3D, because the old
 // feet-dy>4 trigger sent the bot towering — and mining dirt for the tower —
 // for upper logs that were comfortably within reach all along.
-const breakReach = 4.2
+const (
+	breakReach          = 4.6
+	scaffoldHeightFloor = 4.2
+)
 
-// withinBreakReach reports whether the eye is close enough to the block centre
-// to break it.
+// withinBreakReach reports whether the eye is close enough to the log (either
+// its centre or its exposed bottom face when overhead) to break it from here.
 func withinBreakReach(botPos mgl32.Vec3, pos protocol.BlockPos) bool {
 	eye := botPos.Add(mgl32.Vec3{0, mineEyeHeight, 0})
 	center := mgl32.Vec3{float32(pos.X()) + 0.5, float32(pos.Y()) + 0.5, float32(pos.Z()) + 0.5}
-	return eye.Sub(center).Len() <= breakReach
+	if eye.Sub(center).Len() <= breakReach {
+		return true
+	}
+	bottom := mgl32.Vec3{float32(pos.X()) + 0.5, float32(pos.Y()), float32(pos.Z()) + 0.5}
+	return eye.Y() < bottom.Y() && eye.Sub(bottom).Len() <= 4.5
 }
 
 func (tc *TreeChopper) chopLogBlock(ctx context.Context, pos protocol.BlockPos, rhythm *animation.Chain) bool {
@@ -335,31 +349,22 @@ func (tc *TreeChopper) chopLogBlock(ctx context.Context, pos protocol.BlockPos, 
 		if !tc.repositionForLog(ctx, pos) {
 			return false
 		}
-		// The reposition detours (stock mining, tower equips) leave a shovel, a
-		// hoe or a scaffold block in the hand; the old code chopped the rest of
-		// the trunk with whatever was held. The early-return inside makes this
-		// a no-op when the axe is already up.
 		tc.equipBestAxe()
 	}
 
-	// Plan the break the way the miner does: an exposed face the bot can
-	// actually see, with the face matching the aim. The old code claimed face 1
-	// (top) for every log while aiming at a side, and never checked sight —
-	// so it mined through the trunk with no line of sight.
 	world := botMineWorld{bot: bot, model: bot.GetLocalWorldModel()}
 
 	// Clearance comes BEFORE the plan, not after it.
-	//
-	// A log with something solid in all six of its faces has no approach at all,
-	// and this ordering used to lose exactly that case: clearObstructions only ran
-	// once a step had already been planned, so a log walled in by the very block
-	// that needed clearing went straight to `return false`, got deferred, and
-	// after two passes the tree was abandoned with its lower half still standing.
-	// Knock the block out of the way, then swing at the log — which is the order
-	// a player works in.
 	tc.clearObstructions(ctx, pos)
 
 	step, visible := PlanMineStep(world, bot.GetCoords(), pos)
+	if !visible {
+		// Stepping closer to the cleared trunk column opens the vertical
+		// sightline straight up through the broken lower logs without towering.
+		tc.returnToReach(ctx, pos)
+		tc.clearObstructions(ctx, pos)
+		step, visible = PlanMineStep(world, bot.GetCoords(), pos)
+	}
 	if !visible {
 		tc.logger.Debug("log not visible from current spot, deferring", "pos", pos)
 		return false
@@ -386,41 +391,38 @@ func (tc *TreeChopper) chopLogBlock(ctx context.Context, pos protocol.BlockPos, 
 // logs get a walk back.
 func (tc *TreeChopper) repositionForLog(ctx context.Context, pos protocol.BlockPos) bool {
 	bot := tc.rg.bot
+
+	// Always step closer to the trunk base on the ground first. A bot standing
+	// 2.5-3.5 blocks to the side can reach logs 4-6 simply by stepping up to
+	// the trunk without placing any scaffold blocks.
+	tc.returnToReach(ctx, pos)
 	botPos := bot.GetCoords()
+	if withinBreakReach(botPos, pos) {
+		return true
+	}
+
 	eyeY := botPos.Y() + mineEyeHeight
 	centerY := float32(pos.Y()) + 0.5
 
-	if centerY-eyeY > breakReach-2.0 {
-		// The log is too high to reach from here. Tower just enough that the
-		// eye lands within reach of the centre (leaving a little horizontal
-		// budget), so upper trunk logs stay reachable without re-towering
-		// every single block.
-		targetFeet := centerY - (breakReach - 2.0) - mineEyeHeight
-		tc.logger.Debug("towering up to log", "log_y", pos.Y(), "tower_to_y", targetFeet)
-		tc.rg.scaffold.TowerUpTo(ctx, targetFeet)
-	} else {
-		tc.returnToReach(ctx, pos)
-		return true
-	}
-	// The tower was refused, skipped, or not high enough and the log is still
-	// out of reach: walking to it now sends the pathfinder climbing the tree
-	// via its own leaves — the live run logged "A* gave up short" six times
-	// for one trunk this way. Leave the log to the round/skip logic instead.
-	if !withinBreakReach(tc.rg.bot.GetCoords(), pos) {
-		tc.logger.Debug("log still out of reach after reposition, deferring", "pos", pos)
+	// Only scaffold when the log is genuinely high above eye level (7th log or
+	// higher, i.e. >= 6 blocks above feet). Normal 4-6 block trees are never
+	// scaffolded.
+	if centerY-eyeY <= scaffoldHeightFloor {
 		return false
 	}
-	// After towering the bot may be several blocks out horizontally; walk
-	// back before swinging or the break is rejected for range.
-	tc.returnToReach(ctx, pos)
-	return true
+
+	targetFeet := centerY - (breakReach - 1.5) - mineEyeHeight
+	tc.logger.Debug("towering up to high log", "log_y", pos.Y(), "tower_to_y", targetFeet)
+	tc.rg.scaffold.TowerUpTo(ctx, targetFeet)
+	return withinBreakReach(bot.GetCoords(), pos)
 }
 
-// chopReachLimit is how far the bot may stand from a log and still break it.
-const chopReachLimit = 4.0
+// chopReachLimit is the horizontal distance within which the bot is already
+// standing right next to/under the trunk column.
+const chopReachLimit = 1.6
 
-// returnToReach walks back to a log after an interruption (towering, mining
-// scaffold stock) left the bot out of breaking range.
+// returnToReach walks closer to the trunk column at GROUND level (never
+// targeting pos.Y()-1 in mid-air, which would cause A* to scaffold upward).
 func (tc *TreeChopper) returnToReach(ctx context.Context, pos protocol.BlockPos) {
 	bot := tc.rg.bot
 	botPos := bot.GetCoords()
@@ -430,10 +432,25 @@ func (tc *TreeChopper) returnToReach(ctx context.Context, pos protocol.BlockPos)
 		return
 	}
 
-	tc.logger.Debug("Out of reach after towering, walking back to log", "pos", pos)
-	if tc.rg.bot.NavigateToBlock(pos.X(), pos.Y()-1, pos.Z(), 2.0) {
+	groundY := tc.groundLevelBelowLog(pos, int32(math.Floor(float64(botPos.Y()))))
+	tc.logger.Debug("Stepping closer to trunk base at ground level", "log_pos", pos, "ground_y", groundY)
+	if tc.rg.bot.NavigateToBlock(pos.X(), groundY, pos.Z(), 1.5) {
 		tc.haltWalk()
 	}
+}
+
+func (tc *TreeChopper) groundLevelBelowLog(pos protocol.BlockPos, fallbackY int32) int32 {
+	world := tc.rg.bot.GetLocalWorldModel()
+	for y := pos.Y() - 1; y >= fallbackY-2 && y >= pos.Y()-10; y-- {
+		name, ok := tc.rg.bot.GetBlockName(pos.X(), y, pos.Z())
+		if !ok || isLogBlockName(name) {
+			continue
+		}
+		if world != nil && world.IsSolid(pos.X(), y, pos.Z()) {
+			return y + 1
+		}
+	}
+	return fallbackY
 }
 
 // startBreakBlock begins the server-auth break of the planned step, using the
@@ -552,6 +569,14 @@ func (tc *TreeChopper) clearObstructions(ctx context.Context, logPos protocol.Bl
 			logPos.Z() + face.offset.Z(),
 		}
 		cleared = tc.breakObstruction(ctx, pos) || cleared
+		// Also clear low canopy leaves one block below the log that block the
+		// upward diagonal sightline from the ground.
+		lowPos := protocol.BlockPos{
+			logPos.X() + face.offset.X(),
+			logPos.Y() - 1,
+			logPos.Z() + face.offset.Z(),
+		}
+		cleared = tc.breakObstruction(ctx, lowPos) || cleared
 	}
 	return cleared
 }

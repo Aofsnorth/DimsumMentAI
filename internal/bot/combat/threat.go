@@ -156,13 +156,6 @@ func (td *ThreatDetector) evaluateThreats(botPos mgl32.Vec3, entities []*entity.
 
 // isHostileEntity decides whether an actor is one of the mobs the detector
 // reacts to.
-//
-// The lookup normalises before comparing. The actor's Type is always
-// namespaced — "minecraft:zombie" — and an unnamed mob's Name is a copy of
-// that same Type (handleAddActor falls back to it), so the raw strings never
-// matched the bare keys in hostileMobs and the whole threat path was dead
-// code for every mob without a nametag: no reflex engage, no alerts, which is
-// the "mob jahat diemin terus" the guard feature had to fight through.
 func isHostileEntity(ent *entity.Info) bool {
 	return hostileMobs[entity.NormalizeName(ent.Name)] || hostileMobs[entity.NormalizeName(ent.Type)]
 }
@@ -180,7 +173,7 @@ func (td *ThreatDetector) handleThreat(closestHostile *entity.Info, closestDist 
 		threatsStr := td.formatThreats(botPos, newThreats)
 		td.logger.Info("ThreatDetector: alerting player/AI of threats", "threats", threatsStr)
 
-		systemMsg := fmt.Sprintf("[SYSTEM EVENT: Hostile mobs detected nearby: %s. Decide: fight them or warn the player. Use \\attack\\ if you want to fight.]", threatsStr)
+		systemMsg := fmt.Sprintf("[SYSTEM EVENT: Hostile mobs detected nearby: %s. Decide: fight them or warn the player briefly in casual chat. Use <action>attack</action> if you want to fight.]", threatsStr)
 		td.bot.InjectAIEvent(systemMsg)
 	}
 }
@@ -201,20 +194,12 @@ const (
 )
 
 // nearestTrackedPlayerReader is the optional view of the bot that can look up
-// tracked players directly. Players are not actors (handleAddPlayer never
-// touches b.Actors), so the reflex needs this read and cannot fall back to
-// GetEntities — a bot without it just never retaliates, which is the safe
-// default.
+// tracked players directly.
 type nearestTrackedPlayerReader interface {
 	NearestTrackedPlayer(origin mgl32.Vec3, maxDist float32) (name string, id uint64, pos mgl32.Vec3, ok bool)
 }
 
 // NotePlayerSwing records an arm swing observed from another player.
-//
-// A swing is the only packet-level evidence that a human meant to hit
-// something, and it is what separates "a player hit me" from "I fell over
-// while a player was standing next to me". The runtime ID is kept so the hit
-// can be attributed to that specific player rather than to whoever is closest.
 func (td *ThreatDetector) NotePlayerSwing(runtimeID uint64) {
 	if runtimeID == 0 {
 		return
@@ -226,8 +211,7 @@ func (td *ThreatDetector) NotePlayerSwing(runtimeID uint64) {
 }
 
 // NotePlayerDamage records the server's SetLastHurtBy verdict that the damage
-// just taken came from a player. It is a corroborating signal, not a naming
-// one: the packet carries an entity type, never a username.
+// just taken came from a player.
 func (td *ThreatDetector) NotePlayerDamage() {
 	td.mu.Lock()
 	td.lastHurtByPlayerAt = time.Now()
@@ -266,18 +250,10 @@ func (td *ThreatDetector) hitsFromThisAttacker(id uint64) bool {
 
 // OnDamaged is the self-defence reflex for player hits.
 //
-// It answers proportionately, not maximally. One punch earns a reaction, not a
-// duel: the bot turns, says something, and keeps its hands to itself. A short
-// burst of hits earns a defensive answer — hit back from where it stands, with
-// what it already holds, a few swings at most. Only somebody who keeps coming
-// earns the ordinary duel doctrine.
-//
-// Two things must hold before anything is thrown at all. The damage has to be
-// attributable to the player: the nearest player being nearby is not evidence,
-// because falls, mobs and poison all arrive as the same health drop, and reading
-// closeness as guilt is how the bot attacked whoever happened to be standing
-// next to it. And the player must not be on the never-fight list — hitting the
-// person the bot answers to is never a self-defence reflex, it is a bug.
+// Two things must hold before anything is thrown or spoken at all. First, the
+// damage must actually be attributable to a player (via an observed swing or
+// SetLastHurtBy) so fall/cactus/mob damage taken near an ally never falsely
+// blames them. Second, allies are never fought back.
 func (td *ThreatDetector) OnDamaged(botPos mgl32.Vec3) {
 	reader, ok := td.bot.(nearestTrackedPlayerReader)
 	if !ok {
@@ -288,48 +264,44 @@ func (td *ThreatDetector) OnDamaged(botPos mgl32.Vec3) {
 		return
 	}
 
-	// Turn to face whoever did it. Looking at somebody who just hit you is the
-	// visible half of the reaction, and it is the only thing a warning-level
-	// answer does with the body.
-	td.bot.LookAt(attackerPos.Add(mgl32.Vec3{0, 1.2, 0}))
-
-	if td.IsAlly(attacker) {
-		td.logger.Info("ThreatDetector: hit by an ally, never fighting back", "player", attacker)
-		td.hits.Reset()
-		td.bot.InjectAIEvent("[SYSTEM EVENT: " + attacker + " — the player you answer to — just hit you. You are NOT fighting back and must not start. React naturally in chat with ONE short line (mungkin becanda, mungkin protes ringan), no action tags.]")
-		return
-	}
-
 	if !td.hitsFromThisAttacker(id) {
 		td.logger.Info("ThreatDetector: damage had no player behind it, not retaliating",
 			"nearest_player", attacker)
 		return
 	}
 
+	// Turn to face whoever actually hit us.
+	td.bot.LookAt(attackerPos.Add(mgl32.Vec3{0, 1.2, 0}))
+
+	if td.IsAlly(attacker) {
+		td.logger.Info("ThreatDetector: hit by an ally, never fighting back", "player", attacker)
+		td.hits.Reset()
+		td.bot.InjectAIEvent("[SYSTEM EVENT: Your friend just poked/hit you. You are NOT fighting back. React with 2-5 ultra-casual gamer words (e.g. 'eh ngapain wkwk', 'woi sakit', 'lah iseng bgt'). Do NOT start with their username, do NOT use '—', do NOT lecture or say 'jangan diulang ya', and emit no action tags.]")
+		return
+	}
+
 	level, hits, fresh := td.hits.Record(attacker, time.Now())
 	if fresh {
-		// One line per scuffle, before the per-level lines, so the ladder reads
-		// in order afterwards without a line for every swing.
 		td.logger.Info("ThreatDetector: scuffle started", "player", attacker)
 	}
 	switch level {
 	case RetaliationWarn:
 		td.logger.Info("ThreatDetector: first hit, warning only",
 			"player", attacker, "hits", hits)
-		td.bot.InjectAIEvent("[SYSTEM EVENT: " + attacker + " just hit you once. You are NOT fighting back. React naturally in chat with ONE short line — kaget, protes, atau warning ringan — and keep doing whatever you were doing. No action tags.]")
+		td.bot.InjectAIEvent("[SYSTEM EVENT: " + attacker + " just hit you once. You are NOT fighting back. React with 2-5 ultra-casual gamer words (e.g. 'eh ngapain wkwk', 'woi santai', 'lah kok mukul') and keep doing whatever you were doing. Do NOT start with their username, do NOT use '—', do NOT say 'jangan diulang ya', no action tags.]")
 
 	case RetaliationDefend:
 		td.logger.Info("ThreatDetector: repeated hits, hitting back defensively",
 			"player", attacker, "hits", hits)
 		if td.combat.EngageDefender(attacker) {
-			td.bot.InjectAIEvent("[SYSTEM EVENT: " + attacker + " keeps hitting you. You are hitting back defensively — standing your ground, not chasing. Say ONE short line about it in chat, no action tags.]")
+			td.bot.InjectAIEvent("[SYSTEM EVENT: " + attacker + " keeps hitting you so you're hitting back defensively. Say ONE short casual gamer line (2-5 words, no '—', no action tags).]")
 		}
 
 	case RetaliationDuel:
 		td.logger.Info("ThreatDetector: sustained attack, engaging properly",
 			"player", attacker, "hits", hits)
 		td.combat.EngagePlayer(attacker)
-		td.bot.InjectAIEvent("[SYSTEM EVENT: " + attacker + " has hit you " + strconv.Itoa(hits) + " times and is not stopping. You are fighting back for real now. Tell the player naturally in chat, briefly.]")
+		td.bot.InjectAIEvent("[SYSTEM EVENT: " + attacker + " hit you " + strconv.Itoa(hits) + " times and isn't stopping, so you're fighting back for real now. Say ONE short casual gamer line (no '—', no action tags).]")
 
 	default:
 		return
@@ -337,12 +309,10 @@ func (td *ThreatDetector) OnDamaged(botPos mgl32.Vec3) {
 }
 
 // guardEngageRadius is how far from the protected player (or the bot) a
-// hostile may sit and still be engaged on sight in guard mode. Beyond it the
-// behaviour falls back to the stock alert, which is the off-mode behaviour.
+// hostile may sit and still be engaged on sight in guard mode.
 const guardEngageRadius = 12.0
 
-// SetGuardMode turns the in-game guardian behaviour on or off. The protector is
-// the player who asked, and the hostile picked is the one closest to them.
+// SetGuardMode turns the in-game guardian behaviour on or off.
 func (td *ThreatDetector) SetGuardMode(enabled bool, protector string) {
 	td.mu.Lock()
 	defer td.mu.Unlock()
@@ -357,16 +327,7 @@ func (td *ThreatDetector) GuardMode() (bool, string) {
 	return td.guardMode, td.guardProtector
 }
 
-// guardScan is the guard-mode half of the scan. It engages the hostile with the
-// smallest distance to either the protected player or the bot, whichever is
-// nearer, inside guardEngageRadius — so a zombie drifting toward the player is
-// attacked while it is still their problem, not only when it reaches the bot.
-//
-// It reports whether it engaged, and the caller then skips the stock alert
-// path: a fight that already started needs no "decide whether to fight" event.
-// When the protector is not currently tracked (logged off, out of range) the
-// anchor degrades to the bot itself, which is exactly the off-mode reflex
-// widened to the guard radius.
+// guardScan is the guard-mode half of the scan.
 func (td *ThreatDetector) guardScan(visible []*entity.Info, botPos mgl32.Vec3) bool {
 	enabled, protector := td.GuardMode()
 	if !enabled {

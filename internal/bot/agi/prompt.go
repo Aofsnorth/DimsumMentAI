@@ -119,11 +119,11 @@ PILIHAN:
 
 ATURAN PENTING:
 - Tidak WAJIB punya kegiatan setiap tick. Kalau tidak ada yang menarik, diam saja.
-- Kalau ada sign di dekatmu, baca DULUAN sebelum nyari barang — label di situ Petrovunjuk chest yang benar.
+- Kalau ada sign di dekatmu, baca DULUAN sebelum nyari barang, label di situ petunjuk chest yang benar.
 - Kalau ada rencana di atas, IKUTI. Jangan usik yang lagi dikerjakan; kamu yang ngejelasin, bukan yang ngarah.
 - Kalau daftar "PILIHAN" tidak punya yang cocok dengan isi dunia ini, jangan karang aksi. Bicara aja.
-- Jangan jelasin rencanamu. Kalau mau ngomong, ngomong aja seperti orang biasa.
-- Maksimal 1-2 kalimat kalau ngomong.
+- Jangan jelasin rencanamu. Kalau mau ngomong, ketik singkat dan santai kayak gamer biasa (2-6 kata, tanpa tanda '—' dan tanpa menyapa nama lengkap player di awal kalimat).
+- Maksimal 1 kalimat pendek kalau ngomong.
 - Jangan pernah menyebut kamu sebagai AI, bot, atau assistant.`,
 		snap.Now.Format("15:04"), coords, hp, hunger, people, inventory, alone, signSummary,
 		episodeBlock(snap), planBlock(snap), goalBlock(snap), worldBlock(snap), memoryBlock(b))

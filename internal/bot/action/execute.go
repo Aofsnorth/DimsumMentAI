@@ -51,30 +51,26 @@ var emoteDefaults = map[string]emoteConfig{
 	"throwparty":    {name: "spin", duration: 6 * time.Second},
 	"explode":       {name: "spin", duration: 6 * time.Second},
 	"jumpspincombo": {name: "spin", duration: 6 * time.Second},
-	"twerk":         {name: "sneak", duration: 5 * time.Second},
-	"dab":           {name: "wave", fixed: true, ticks: 30},
-	"wave":          {name: "wave", fixed: true, ticks: 30},
+	"twerk":         {name: "twerk", duration: 5 * time.Second},
+	"crouch":        {name: "sneak", duration: 3 * time.Second},
+	"sneak":         {name: "sneak", duration: 3 * time.Second},
+	"wiggle":        {name: "wiggle", duration: 3 * time.Second},
+	"dab":           {name: "nod", fixed: true, ticks: 30},
+	"wave":          {name: "nod", fixed: true, ticks: 30},
 	"headbang":      {name: "nod", duration: 3 * time.Second},
 	"nod":           {name: "nod", duration: 3 * time.Second},
 	"shake":         {name: "shake", duration: 3 * time.Second},
 }
 
 // emoteHandler returns a handler that triggers the emote described by label.
-//
-// An emote is a dispatched animation with no confirmation to wait for — the
-// bot either asked for it or it is not going to happen — so the step reports
-// once the request has been sent rather than staying silent.
 func emoteHandler(label string) ActionHandler {
 	cfg := emoteDefaults[label]
 	return func(b *bot.Bot, param, user string) {
-		if cfg.lookAt != (mgl32.Vec3{}) {
-			b.LookAt(b.GetCoords().Add(cfg.lookAt))
-		}
 		ticks := cfg.ticks
 		if !cfg.fixed {
 			ticks = DurationTicks(param, cfg.duration)
 		}
-		b.TriggerEmoteFor(cfg.name, ticks)
+		runEmoteAnimation(b, label, cfg.name, param, ticks, cfg.lookAt)
 		ReportStatus(b, user, event.ActionStatus{Action: label, Item: cfg.name, Success: true})
 	}
 }
@@ -673,8 +669,45 @@ var ActionHandlers = map[string]ActionHandler{
 	// Emote
 	"emote": func(b *bot.Bot, param, user string) {
 		parts := strings.Split(param, ",")
-		b.TriggerEmote(parts[0])
-		ReportStatus(b, user, event.ActionStatus{Action: "emote", Item: parts[0], Success: true})
+		emoteName := strings.ToLower(strings.TrimSpace(parts[0]))
+		switch emoteName {
+		case "yes", "angguk":
+			emoteName = "nod"
+		case "no", "geleng":
+			emoteName = "shake"
+		case "crouch", "jongkok":
+			emoteName = "sneak"
+		case "lompat", "loncat":
+			emoteName = "jump"
+		case "muter", "putar":
+			emoteName = "spin"
+		}
+		count := 1
+		if len(parts) > 1 {
+			_, _ = fmt.Sscanf(strings.TrimSpace(parts[1]), "%d", &count)
+			if count < 1 {
+				count = 1
+			}
+			if count > 20 {
+				count = 20
+			}
+		}
+		b.HaltWalk()
+		switch emoteName {
+		case "wave", "dab":
+			runEmoteAnimation(b, emoteName, "nod", "", 30*count, mgl32.Vec3{})
+		case "dance":
+			runEmoteAnimation(b, "dance", "spin", "", 40*count, mgl32.Vec3{})
+		case "jump":
+			b.RequestJump()
+			b.TriggerEmoteFor("jump", 16)
+			if count > 1 {
+				runRepeatedJumps(b, count-1, 600*time.Millisecond)
+			}
+		default:
+			b.TriggerEmoteFor(emoteName, 40*count)
+		}
+		ReportStatus(b, user, event.ActionStatus{Action: "emote", Item: emoteName, Success: true})
 	},
 
 	// Combat / items
@@ -832,10 +865,21 @@ var ActionHandlers = map[string]ActionHandler{
 
 	// Jump
 	"jump": func(b *bot.Bot, param, user string) {
+		b.HaltWalk()
+		count := ParseCount(param, 1)
+		if count > 20 {
+			count = 20
+		}
 		b.RequestJump()
 		b.TriggerEmoteFor("jump", 20)
+		if count > 1 {
+			runRepeatedJumps(b, count-1, 600*time.Millisecond)
+		}
 		ReportStatus(b, user, event.ActionStatus{Action: "jump", Success: true})
 	},
+	"crouch": emoteHandler("crouch"),
+	"sneak":  emoteHandler("sneak"),
+	"wiggle": emoteHandler("wiggle"),
 
 	// Emote patterns
 	"jumpforever":   emoteHandler("jumpforever"),

@@ -200,7 +200,7 @@ func (b *Bot) InjectAIEvent(msg string) {
 		return
 	}
 
-	// Query Nvidia Client asynchronously with the system message
+	// Query LLM client asynchronously with the system message.
 	go func() {
 		hp, hunger, botCoords := b.GetStatusDetails()
 		heldItem := b.GetHeldItem()
@@ -208,16 +208,25 @@ func (b *Bot) InjectAIEvent(msg string) {
 
 		b.Mu.Lock()
 		mainPlayers := b.AiCfg.GetMainPlayers()
+		lastPartner := b.LastChatPartner
 		botName := b.Name
 		b.Mu.Unlock()
 
-		if len(mainPlayers) == 0 {
+		targetPlayer := lastPartner
+		if targetPlayer == "" && len(mainPlayers) > 0 {
+			targetPlayer = mainPlayers[0]
+		}
+		if targetPlayer == "" {
+			if nearName, _, _, ok := b.NearestTrackedPlayer(b.GetCoords(), 32); ok {
+				targetPlayer = nearName
+			}
+		}
+		if targetPlayer == "" {
 			return
 		}
-		mainPlayer := mainPlayers[0]
 
 		playerCoordsStr := ""
-		if pCoords, ok := b.GetPlayerCoords(mainPlayer); ok {
+		if pCoords, ok := b.GetPlayerCoords(targetPlayer); ok {
 			playerCoordsStr = fmt.Sprintf("X:%.0f Y:%.0f Z:%.0f", pCoords.X(), pCoords.Y(), pCoords.Z())
 		}
 
@@ -230,20 +239,21 @@ func (b *Bot) InjectAIEvent(msg string) {
 			invSummary,
 		)
 
-		reply, err := b.AiClient.Ask(mainPlayer, systemPrompt, msg)
+		reply, err := b.AiClient.Ask(targetPlayer, systemPrompt, msg)
 		if err != nil {
 			b.Logger.Error("Failed to ask Nvidia LLM for injected event", "error", err.Error())
 			return
 		}
 
 		parsed := ai.Parse(reply)
-		if parsed.CleanReply != "" {
-			b.SendSafeChat(parsed.CleanReply)
+		clean := ai.StripUserPrefix(parsed.CleanReply, targetPlayer)
+		if clean != "" && !ai.IsNarrationLeak(clean) && !ai.IsSelfCorrection(clean) && !ai.IsScriptCorrupted(clean) {
+			b.SendReply(targetPlayer, clean)
 		}
 
 		if ExecuteActionFunc != nil {
 			for _, act := range parsed.Actions {
-				ExecuteActionFunc(b, act.Label, act.Param, mainPlayer)
+				ExecuteActionFunc(b, act.Label, act.Param, targetPlayer)
 			}
 		}
 	}()

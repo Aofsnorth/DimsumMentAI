@@ -18,72 +18,74 @@ type ParsedReply struct {
 	FollowupSec int      // delay in seconds before a follow-up message, from <followup>N</followup>
 }
 
-var actionRegex = regexp.MustCompile(`(?s)<action>(.*?)</action>`)
+var actionRegex = regexp.MustCompile(`(?is)<action(?:\s+[^>]*)?>(.*?)</action>`)
 
-// unclosedActionRegex matches an opening <action> tag (and any text after it
-// that contains no further '<') that never received its closing </action>.
-// Happens when the LLM gets truncated by MaxTokens mid-tag, leaving fragments
-// like `<action>drop:crafting_table</` in the reply.
-var unclosedActionRegex = regexp.MustCompile(`(?s)<action>.*$`)
+// selfClosingActionRegex and bracketActionRegex catch malformed action tags
+// occasionally emitted by models (<action label="come"/> or [action:come]).
+var selfClosingActionRegex = regexp.MustCompile(`(?is)<action\s+(?:label|name|type)=["']?([^"'/>\s]+)["']?\s*/>`)
+var bracketActionRegex = regexp.MustCompile(`(?i)\[action:\s*([^\]]+?)\s*\]`)
+
+// unclosedActionRegex matches an opening <action> tag that never received its
+// closing </action> due to MaxTokens truncation.
+var unclosedActionRegex = regexp.MustCompile(`(?is)<action(?:\s+[^>]*)?>.*$`)
 
 // planRegex matches a <plan>...</plan> block containing <step> tags.
-var planRegex = regexp.MustCompile(`(?s)<plan>(.*?)</plan>`)
-var planStepRegex = regexp.MustCompile(`(?s)<step>(.*?)</step>`)
+var planRegex = regexp.MustCompile(`(?is)<plan>(.*?)</plan>`)
+var unclosedPlanRegex = regexp.MustCompile(`(?is)<plan>.*$`)
+var planStepRegex = regexp.MustCompile(`(?is)<step>(.*?)</step>`)
 
 // replanRegex matches a <replan>...</replan> block (same inner format as
 // <plan>). Used by the planner's agentic loop when the LLM adjusts remaining
 // steps mid-execution.
-var replanRegex = regexp.MustCompile(`(?s)<replan>(.*?)</replan>`)
+var replanRegex = regexp.MustCompile(`(?is)<replan>(.*?)</replan>`)
+var unclosedReplanRegex = regexp.MustCompile(`(?is)<replan>.*$`)
 
 // followupRegex matches a <followup>N</followup> tag where N is the delay in
-// seconds before the bot should send a follow-up message. This enables the
-// LLM to split a response into an immediate acknowledgment and a delayed
-// follow-up (e.g. "Oke aku cek dulu" → 2s → "Aku punya kayu 4, batu 12...").
-var followupRegex = regexp.MustCompile(`<followup>\s*(\d+)\s*</followup>`)
+// seconds before the bot should send a follow-up message.
+var followupRegex = regexp.MustCompile(`(?i)<followup>\s*(\d+)\s*</followup>`)
+var anyFollowupTagRegex = regexp.MustCompile(`(?is)</?followup[^>]*>`)
 
 // thinkRegex matches reasoning blocks emitted by chain-of-thought models such
-// as Minimax M2, DeepSeek-R1, etc. These must be stripped before the reply is
-// shown in chat (or fed to action extraction) — otherwise the bot dumps its
-// inner monologue to other players.
-var thinkRegex = regexp.MustCompile("(?s)<think>.*?</think>")
+// as Minimax M2, DeepSeek-R1, etc.
+var thinkRegex = regexp.MustCompile(`(?is)<think>.*?</think>`)
 
 // unclosedThinkRegex strips a leading <think>... that was cut by MaxTokens
 // before the closing </think> could be emitted. Also strips a leading
-// </think> when the model emitted only the closing tag (rare but happens).
-var unclosedThinkRegex = regexp.MustCompile(`(?s)^\s*<think>.*$`)
-var leadingThinkCloseRegex = regexp.MustCompile(`(?s)^.*?</think>\s*`)
+// </think> when the model emitted only the closing tag.
+var unclosedThinkRegex = regexp.MustCompile(`(?is)^\s*<think>.*$`)
+var leadingThinkCloseRegex = regexp.MustCompile(`(?is)^.*?</think>\s*`)
+
+// emDashCleaner replaces typographic em-dashes and en-dashes (classic LLM
+// punctuation tells that real Minecraft players never type) with natural commas.
+var emDashReplacer = strings.NewReplacer(
+	" — ", ", ",
+	" – ", ", ",
+	"—", ", ",
+	"–", ", ",
+)
 
 // Parse extracts clean text, actions, and plan steps from the AI's reply.
 func Parse(reply string) ParsedReply {
 	var planSteps []string
 
-	// Strip chain-of-thought reasoning blocks first. Some models (Minimax M2,
-	// DeepSeek-R1) prepend their internal reasoning between <think>...</think>
-	// which would otherwise leak into chat or confuse the action extractor.
+	// Strip chain-of-thought reasoning blocks first.
 	reply = thinkRegex.ReplaceAllString(reply, "")
-	// If the closing </think> survived but the opening tag was lost, drop
-	// everything up to it. Conversely if the opening survived but closing was
-	// truncated by MaxTokens, drop the whole tail.
 	reply = leadingThinkCloseRegex.ReplaceAllString(reply, "")
 	reply = unclosedThinkRegex.ReplaceAllString(reply, "")
 	reply = strings.TrimSpace(reply)
 
-	// A reply carrying the <silent/> marker means "say nothing". Normalizing it
-	// HERE, once, is what keeps the marker out of chat: every reader of
-	// CleanReply already treats an empty reply as silence, but the live status
-	// narrator shipped the literal string "<silent/>" to a player because this
-	// was the one place nobody had taught the marker to. A silent answer also
-	// carries no work — its action tags are the model thinking out loud, not a
-	// task.
+	// A reply carrying the <silent/> marker means "say nothing".
 	if strings.Contains(strings.ToLower(reply), "<silent") {
 		return ParsedReply{}
 	}
 
-	// Extract <plan> steps BEFORE stripping tags, so we can detect a plan
-	// even when the LLM also emits <action> tags.
-	planMatch := planRegex.FindStringSubmatch(reply)
-	if len(planMatch) >= 2 {
+	// Extract <plan> or <replan> steps BEFORE stripping tags.
+	if planMatch := planRegex.FindStringSubmatch(reply); len(planMatch) >= 2 {
 		planSteps = extractSteps(planMatch[1])
+	} else if replanMatch := replanRegex.FindStringSubmatch(reply); len(replanMatch) >= 2 {
+		planSteps = extractSteps(replanMatch[1])
+	} else if bareSteps := extractSteps(reply); len(bareSteps) > 0 {
+		planSteps = bareSteps
 	}
 
 	// Extract <followup>N</followup> delay (0 = no followup, capped at 300s).
@@ -97,55 +99,23 @@ func Parse(reply string) ParsedReply {
 		}
 	}
 
-	// Find all <action>...</action> matches
-	matches := actionRegex.FindAllStringSubmatch(reply, -1)
-	actions := make([]Action, 0, len(matches))
-	for _, match := range matches {
-		if len(match) < 2 {
-			continue
-		}
-		rawAction := strings.TrimSpace(match[1])
-		if rawAction == "" {
-			continue
-		}
+	actions := extractActions(reply)
 
-		// Split into label and param by the first colon
-		parts := strings.SplitN(rawAction, ":", 2)
-		var act Action
-		if len(parts) > 0 {
-			act.Label = strings.TrimSpace(parts[0])
-		}
-		if len(parts) > 1 {
-			act.Param = strings.TrimSpace(parts[1])
-		}
-		if act.Label == "" {
-			continue
-		}
-		actions = append(actions, act)
-	}
-
-	// Clean up the reply text by removing all <action>...</action> tags
+	// Clean up the reply text by removing all action/plan/followup tags.
 	cleanReply := actionRegex.ReplaceAllString(reply, "")
-	// Strip any trailing unclosed <action>... fragment (LLM token-truncation).
+	cleanReply = selfClosingActionRegex.ReplaceAllString(cleanReply, "")
+	cleanReply = bracketActionRegex.ReplaceAllString(cleanReply, "")
 	cleanReply = unclosedActionRegex.ReplaceAllString(cleanReply, "")
-	// Remove <plan>...</plan> blocks from the visible reply — the planner
-	// handles them; the player shouldn't see raw step XML.
 	cleanReply = planRegex.ReplaceAllString(cleanReply, "")
-	// Remove <followup>...</followup> tags from visible reply.
+	cleanReply = unclosedPlanRegex.ReplaceAllString(cleanReply, "")
+	cleanReply = replanRegex.ReplaceAllString(cleanReply, "")
+	cleanReply = unclosedReplanRegex.ReplaceAllString(cleanReply, "")
+	cleanReply = planStepRegex.ReplaceAllString(cleanReply, "")
 	cleanReply = followupRegex.ReplaceAllString(cleanReply, "")
-	cleanReply = strings.TrimSpace(cleanReply)
+	cleanReply = anyFollowupTagRegex.ReplaceAllString(cleanReply, "")
+	cleanReply = sanitizeChatText(cleanReply)
 
-	// Clean up any extra whitespace or newlines
-	cleanReply = regexp.MustCompile(`\s+`).ReplaceAllString(cleanReply, " ")
-
-	// Drop completion claims made while the action they describe is still
-	// pending. Every reply a player can read comes through this function, so
-	// this is the only place a claim can be caught on its way to chat.
-	//
-	// An action tag in the same reply is a request the host has not carried
-	// out yet, which makes any "done/successfully/berhasil" in the same breath
-	// a statement about a future event. With no action pending the reply is
-	// information and past tense is correct, so the text is left alone.
+	// Drop completion claims made while the action they describe is still pending.
 	cleanReply, _ = FilterCompletionClaims(cleanReply, len(actions) > 0)
 
 	return ParsedReply{
@@ -156,23 +126,105 @@ func Parse(reply string) ParsedReply {
 	}
 }
 
+func extractActions(reply string) []Action {
+	matches := actionRegex.FindAllStringSubmatch(reply, -1)
+	if len(matches) == 0 {
+		matches = selfClosingActionRegex.FindAllStringSubmatch(reply, -1)
+	}
+	if len(matches) == 0 {
+		matches = bracketActionRegex.FindAllStringSubmatch(reply, -1)
+	}
+	actions := make([]Action, 0, len(matches))
+	for _, match := range matches {
+		if len(match) < 2 {
+			continue
+		}
+		if act, ok := parseSingleAction(match[1]); ok {
+			actions = append(actions, act)
+		}
+	}
+	return actions
+}
+
+func parseSingleAction(raw string) (Action, bool) {
+	rawAction := strings.TrimSpace(raw)
+	if rawAction == "" {
+		return Action{}, false
+	}
+	parts := strings.SplitN(rawAction, ":", 2)
+	var act Action
+	if len(parts) > 0 {
+		act.Label = strings.TrimSpace(parts[0])
+	}
+	if len(parts) > 1 {
+		act.Param = strings.TrimSpace(parts[1])
+	}
+	if act.Label == "" {
+		return Action{}, false
+	}
+	return act, true
+}
+
+// sanitizeChatText removes typographic em-dashes/en-dashes unless the reply is
+// a self-correction draft (which downstream filters detect and replace), and
+// collapses whitespace.
+func sanitizeChatText(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return ""
+	}
+	if !IsSelfCorrection(s) {
+		s = emDashCleanerApply(s)
+	}
+	s = regexp.MustCompile(`\s+`).ReplaceAllString(s, " ")
+	return strings.TrimSpace(s)
+}
+
+func emDashCleanerApply(s string) string {
+	s = emDashReplacer.Replace(s)
+	s = strings.ReplaceAll(s, ",,", ",")
+	s = strings.ReplaceAll(s, ", ,", ",")
+	return s
+}
+
+// StripUserPrefix removes a stiff leading "<PlayerName>, " vocative prefix
+// (e.g. "Synterix, kok malah mukul?" -> "kok malah mukul?") when the LLM
+// addresses the player by their full username at the start of a chat line.
+func StripUserPrefix(reply, user string) string {
+	trimmed := strings.TrimSpace(reply)
+	if trimmed == "" || user == "" {
+		return trimmed
+	}
+	candidates := []string{user}
+	if withoutDot := strings.TrimPrefix(user, "."); withoutDot != "" && withoutDot != user {
+		candidates = append(candidates, withoutDot)
+	}
+	lower := strings.ToLower(trimmed)
+	for _, name := range candidates {
+		prefix := strings.ToLower(name) + ","
+		if strings.HasPrefix(lower, prefix) {
+			rest := strings.TrimSpace(trimmed[len(prefix):])
+			if rest != "" {
+				return rest
+			}
+		}
+	}
+	return trimmed
+}
+
 // ParsePlanSteps extracts <step> contents from either a <plan> or <replan>
 // block in the reply. Returns nil if no plan/replan block is present.
-// Used by the planner to detect replan decisions during the agentic loop.
 func ParsePlanSteps(reply string) []string {
 	reply = thinkRegex.ReplaceAllString(reply, "")
 	reply = leadingThinkCloseRegex.ReplaceAllString(reply, "")
 	reply = unclosedThinkRegex.ReplaceAllString(reply, "")
 	reply = strings.TrimSpace(reply)
-	// Try <replan> first (used during re-evaluation).
 	if m := replanRegex.FindStringSubmatch(reply); len(m) >= 2 {
 		return extractSteps(m[1])
 	}
-	// Then try <plan>.
 	if m := planRegex.FindStringSubmatch(reply); len(m) >= 2 {
 		return extractSteps(m[1])
 	}
-	// Fallback: bare <step> tags without a wrapping block.
 	if steps := extractSteps(reply); len(steps) > 0 {
 		return steps
 	}

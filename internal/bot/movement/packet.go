@@ -130,6 +130,8 @@ func (tc *TickContext) applyEmote() (emoteJump, emoteSneak bool) {
 		emoteJump = true
 	case "sneak":
 		emoteSneak = true
+	case "twerk":
+		emoteSneak = (tc.B.EmoteTicks/3)%2 == 0
 	}
 
 	if tc.B.EmoteTicks == 0 {

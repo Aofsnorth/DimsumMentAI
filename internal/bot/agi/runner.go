@@ -1605,7 +1605,7 @@ func (r *Runner) ConversationContext() string {
 	}
 	var sb strings.Builder
 	for _, message := range history {
-		if strings.Contains(message.Content, "ACTION RESULT #") {
+		if strings.Contains(message.Content, "ACTION RESULT #") || ai.IsSyntheticPrompt(message.Content) {
 			continue
 		}
 		fmt.Fprintf(&sb, "%s: %s\n", message.Role, truncate(message.Content, 400))

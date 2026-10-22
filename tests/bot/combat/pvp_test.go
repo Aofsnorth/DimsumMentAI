@@ -367,3 +367,21 @@ func TestChooseWeaponReachesForTheAxeAgainstArmour(t *testing.T) {
 		t.Fatalf("mob fight: kind = %v, want sword — swing count is only armour evidence against players", got)
 	}
 }
+
+// TestDamageWithNoPlayerSwingDoesNotBlameNearbyAlly ensures environmental/fall
+// damage taken while standing next to an ally never fires a scolding AI event.
+func TestDamageWithNoPlayerSwingDoesNotBlameNearbyAlly(t *testing.T) {
+	t.Parallel()
+	r, cm, td := newRetaliatingBot(map[string]mgl32.Vec3{"Synterix": {2.0, 64, 0}})
+	td.SetAllyFilter(func(name string) bool { return name == "Synterix" })
+
+	// No swing and no SetLastHurtBy: environmental damage near an ally.
+	td.OnDamaged(mgl32.Vec3{0, 64, 0})
+
+	if cm.InCombat() {
+		t.Fatal("engaged ally over environmental damage")
+	}
+	if got := r.lastEvent(); got != "" {
+		t.Fatalf("blamed nearby ally for non-player damage with event: %q", got)
+	}
+}

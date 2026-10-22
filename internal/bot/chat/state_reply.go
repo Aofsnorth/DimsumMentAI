@@ -26,6 +26,7 @@ message. Nothing written here runs — no tags, no tasks.
 - Report ONLY the change named below. Do not mention any other state, task, item or mob.
 - DO NOT emit <action>, <plan> or <followup> tags. Nothing written here is executed.
 - DO NOT ask a follow-up question and DO NOT offer to start new work.
+- NEVER start with "<PlayerName>, " and NEVER use em-dashes (—).
 - DO NOT repeat the player's own words back verbatim.
 - If the change genuinely needs no words, answer exactly <silent/>.
 `
@@ -82,7 +83,7 @@ func stateReplyText(b *bot.Bot, user, playerMsg, change string) string {
 	// Parse rather than sending the raw string: the model may still emit an
 	// action tag, and this path deliberately executes nothing. Parse strips the
 	// tags, so the tag cannot become a task and cannot reach the player as text.
-	msg := ai.Parse(reply).CleanReply
+	msg := ai.StripUserPrefix(ai.Parse(reply).CleanReply, user)
 	if msg == "" {
 		return ""
 	}

@@ -360,14 +360,10 @@ func (tc *TreeChopper) ChopTreeAt(ctx context.Context, startPos protocol.BlockPo
 	// bot's pathfinder corrects an earlier mis-step (e.g. ledge it just fell
 	// off). Tolerance bumped to 3.5 so standing one block away counts as
 	// "reached" — the chopTree BFS will handle the rest.
-	for attempt := 0; attempt < 3; attempt++ {
-		if tc.rg.bot.NavigateToBlock(startPos.X(), startPos.Y(), startPos.Z(), 3.5) {
-			// Tolerance is a 3D sphere, so "reached" used to include standing a
-			// full two blocks BELOW the base (dy 2 leaves horizontal ≤ 2.87 inside
-			// a 3.5 sphere) — the chop then ran from below and pillared for a
-			// step a walk would have climbed. The normal chopping stance has the
-			// feet within one block of the base level.
-			if feet := tc.rg.bot.GetCoords().Y(); math.Abs(float64(feet-float32(startPos.Y()))) <= 1.0 {
+		tolerances := []float32{2.2, 2.8, 3.5}
+	for attempt, tol := range tolerances {
+		if tc.rg.bot.NavigateToBlock(startPos.X(), startPos.Y(), startPos.Z(), tol) {
+			if feet := tc.rg.bot.GetCoords().Y(); math.Abs(float64(feet-float32(startPos.Y()))) <= 1.2 {
 				reached = true
 				break
 			}

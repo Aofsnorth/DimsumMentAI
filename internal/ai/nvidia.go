@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 )
 
@@ -125,7 +126,6 @@ func NewLLMClient(provider, model, baseURL string) *NvidiaClient {
 	}
 }
 
-// SetPersona overrides the default persona prompt
 // SetPersona overrides the default persona prompt and binds it to a name.
 //
 // botName is required because the persona templates carry a name placeholder:
@@ -171,6 +171,7 @@ func (nc *NvidiaClient) BuildSystemPrompt(botName, botCoords, playerCoords, held
 			"\n- Your in-game username is \"" + botName + "\". When someone writes \"" + botName + "\" or \"@" + botName + "\", they are talking TO you — that name refers to YOU, not another player." +
 			"\n- Each incoming message is prefixed with the speaker's name in angle brackets, e.g. \"<PlayerName> their message\". The person you are replying to is that <PlayerName>." +
 			"\n- When you address someone, use the SPEAKER's name (the <PlayerName>), never your own username \"" + botName + "\"." +
+			"\n- Do NOT start your sentences with \"<PlayerName>, \" (e.g. NEVER write \"Synterix, kok malah mukul?\"). Real gamers in chat just talk directly without addressing the other player's full username at the start of a line." +
 			"\n- NEVER tag, mention, or greet your own username \"" + botName + "\" in a reply. Doing so is always wrong."
 	}
 
@@ -208,6 +209,27 @@ func (nc *NvidiaClient) BuildSystemPrompt(botName, botCoords, playerCoords, held
 	return prompt
 }
 
+// IsSyntheticPrompt reports whether a prompt is an internal system/tick/status
+// trigger rather than real player speech. Synthetic prompts must not be prefixed
+// as "<user> ..." or stored in conversation history, where unanswered turns
+// accumulate and merge via FixMessages into the next real chat turn.
+func IsSyntheticPrompt(message string) bool {
+	trimmed := strings.TrimSpace(message)
+	for _, prefix := range []string{
+		"[SYSTEM",
+		"[PROACTIVE TICK]",
+		"[AGI TICK",
+		"[STATE CHANGE]",
+		"[SIGN",
+		"ACTION RESULT #",
+	} {
+		if strings.HasPrefix(trimmed, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
 // Ask queries the LLM API with the player's message and returns the response.
 func (nc *NvidiaClient) Ask(user, systemPrompt, message string) (string, error) {
 	messages := nc.prepareMessages(user, systemPrompt, message)
@@ -224,14 +246,27 @@ func (nc *NvidiaClient) Ask(user, systemPrompt, message string) (string, error) 
 // prepareMessages builds the message sequence for a chat request, including
 // recent conversation history and the new user message.
 func (nc *NvidiaClient) prepareMessages(user, systemPrompt, message string) []Message {
-	hist := nc.History.GetHistory(user)
+	var hist []Message
+	if nc.History != nil {
+		for _, m := range nc.History.GetHistory(user) {
+			if strings.Contains(m.Content, "ACTION RESULT #") || IsSyntheticPrompt(m.Content) {
+				continue
+			}
+			hist = append(hist, m)
+		}
+	}
 	if len(hist) > 10 {
 		hist = hist[len(hist)-10:]
 	}
 	rawMessages := make([]Message, 0, len(hist)+2)
 	rawMessages = append(rawMessages, Message{Role: "system", Content: systemPrompt})
 	rawMessages = append(rawMessages, hist...)
-	rawMessages = append(rawMessages, Message{Role: "user", Content: fmt.Sprintf("<%s> %s", user, message)})
+
+	userContent := message
+	if !IsSyntheticPrompt(message) && user != "" {
+		userContent = fmt.Sprintf("<%s> %s", user, message)
+	}
+	rawMessages = append(rawMessages, Message{Role: "user", Content: userContent})
 
 	// Auto-compact so the request never exceeds 25% of the model's context
 	// window; oldest history is dropped first to keep the bot from stalling.
@@ -239,8 +274,16 @@ func (nc *NvidiaClient) prepareMessages(user, systemPrompt, message string) []Me
 }
 
 // storeHistory stores the chat turn in the conversation history.
+// Synthetic/system prompts and silent turns are never stored so they cannot
+// pollute or merge into real player chat turns.
 func (nc *NvidiaClient) storeHistory(user, message, reply string) {
+	if nc.History == nil || IsSyntheticPrompt(message) {
+		return
+	}
 	parsed := Parse(reply)
+	if parsed.CleanReply == "" {
+		return
+	}
 	nc.History.AddMessage(user, "user", fmt.Sprintf("<%s> %s", user, message))
 	nc.History.AddMessage(user, "assistant", parsed.CleanReply)
 }

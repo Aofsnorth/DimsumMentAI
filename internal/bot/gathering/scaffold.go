@@ -224,32 +224,39 @@ func (s *Scaffolder) TowerUpTo(ctx context.Context, targetY float32) {
 // read the result back from the world instead of asserting it.
 func (s *Scaffolder) placeOneBlock(ctx context.Context, bot Bot, curPos mgl32.Vec3, item protocol.ItemStack) (bool, string) {
 	ref, cell := scaffold.TowerColumn(curPos)
+	world := bot.GetLocalWorldModel()
 
 	// Open the ceiling before anything else. Under a canopy the cell above the
 	// head holds leaves, and a jump into leaves never gets the body off the
-	// floor, so the tower failed on every attempt. Breaking them is what a player
-	// does instead of hunting for more dirt.
+	// floor, so the tower failed on every attempt.
 	headroom := scaffold.TowerHeadroom(curPos)
 	if _, occupied := scaffold.Occupied(bot, headroom); occupied {
 		s.logger.Info("scaffold: clearing the blocks above the head", "pos", headroom)
 		if ok, reason := scaffold.ClearCell(ctx, bot, headroom, true, scaffold.TierHand); !ok {
 			return false, "could not clear the headroom: " + reason
 		}
+		if world != nil {
+			world.SetSolid(headroom.X(), headroom.Y(), headroom.Z(), false)
+		}
 	}
 
-	// Clear whatever is in the way first, while the body is still down and the
-	// cell is reachable.
-	// TierHand on purpose: a tower has already committed to this column and has
-	// nowhere to detour to, so refusing a block it is standing under would leave
-	// it in the column rather than out of it. The pathfinder passes the bot's
-	// real tier, because there it does have somewhere else to go.
 	if ok, reason := scaffold.ClearCell(ctx, bot, cell, true, scaffold.TierHand); !ok {
 		return false, "could not clear the cell: " + reason
 	}
+	if world != nil {
+		world.SetSolid(cell.X(), cell.Y(), cell.Z(), false)
+	}
 
 	// PlaceVerified jumps when the body is in the cell's way and sends the
-	// placement the moment the body clears it.
-	return scaffold.PlaceVerified(ctx, bot, ref, item)
+	// placement the moment the body clears it. Record the confirmed block in
+	// LocalWorldModel immediately so physics sees solid support under the feet
+	// (preventing Geyser rubberband/ungrounded deadlock) and DescendFromTower
+	// knows to break it on the way down.
+	placed, reason := scaffold.PlaceVerified(ctx, bot, ref, item)
+	if placed && world != nil {
+		world.SetSolid(cell.X(), cell.Y(), cell.Z(), true)
+	}
+	return placed, reason
 }
 
 // ensureScaffoldStock mines a few blocks to tower with. It stops as soon as
@@ -306,23 +313,20 @@ func (s *Scaffolder) DescendFromTower(ctx context.Context, targetY float32) {
 		}
 
 		world := bot.GetLocalWorldModel()
-		if !world.IsSolid(refPos.X(), refPos.Y(), refPos.Z()) {
+		_, occupied := scaffold.Occupied(bot, refPos)
+		if (world == nil || !world.IsSolid(refPos.X(), refPos.Y(), refPos.Z())) && !occupied {
 			break
 		}
 
-		// Under server-auth block breaking the host honours PredictDestroy only
-		// after the full vanilla break time elapsed; the fixed 400ms predates that
-		// mode and leaves scaffold blocks standing.
+		blockName, _ := bot.GetBlockName(refPos.X(), refPos.Y(), refPos.Z())
+		if blockName == "" {
+			blockName = "dirt"
+		}
 		breakTime := 400 * time.Millisecond
 		if serverAuthBreaking(bot) {
-			breakTime = sabdBreakDuration(true, "dirt", "")
+			breakTime = sabdBreakDuration(true, blockName, "")
 		}
 
-		// The break is now confirmed against the world rather than assumed. The
-		// old sequence sent PredictDestroy, told the local model the block was
-		// gone, and slept — so on a host that rejected the early destroy the bot
-		// stepped off a block that was still there, and the next descent started
-		// from a lie. BreakAndWait watches the block actually leave.
 		cleared, reason := scaffold.BreakAndWait(ctx, bot, refPos, breakTime)
 		if !cleared {
 			s.logger.Warn("scaffold: could not clear the block to descend onto",
@@ -330,26 +334,10 @@ func (s *Scaffolder) DescendFromTower(ctx context.Context, targetY float32) {
 			return
 		}
 
-		// Only now is it honest to tell the world model the block is gone: the
-		// server has been seen to do it.
-		world.SetSolid(refPos.X(), refPos.Y(), refPos.Z(), false)
-
-		// Step off. The break alone does not move the body: the block under the
-		// feet is gone and the bot is still standing at the height of the tower,
-		// with every drop it just made lying on the ground below it. That is what
-		// the sweep ran into — the looter looks for drops within a few blocks,
-		// and a body six blocks up a tree cannot see the ground under it.
-		//
-		// The body has to actually come down before the sweep looks, otherwise
-		// the drops are on the ground and the bot is in the canopy. Breaking
-		// the block and waiting does not move it: the loop used to break the
-		// whole column out from under itself and the body arrived at the bottom
-		// in one fall, if at all.
-		bot.NavigateTo(mgl32.Vec3{
-			float32(refPos.X()) + 0.5,
-			float32(refPos.Y()) + 1,
-			float32(refPos.Z()) + 0.5,
-		})
+		if world != nil {
+			world.SetSolid(refPos.X(), refPos.Y(), refPos.Z(), false)
+		}
+		haltWalkOnly(bot)
 
 		if !sleepContext(ctx, 350*time.Millisecond) {
 			return
